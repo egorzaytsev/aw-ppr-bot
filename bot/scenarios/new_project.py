@@ -17,6 +17,8 @@ FULL_TRACK_THRESHOLD = 30_000  # € по прайсу
 TRACK_FULL = "Full"
 TRACK_SIMPLIFIED = "Simplified (<30k)"
 OWN_DESIGN = "Собственная проработка"
+SOLO_ARCHITECT = "Частный архитектор"
+SOLO = "__solo__"
 WHOLE_OBJECT = "Весь объект"
 STAGE_ARCHITECT_SELECTION = "Architect selection"
 LOC_MOSCOW, LOC_SPB, LOC_OTHER = "moscow", "spb", "other"
@@ -140,12 +142,26 @@ PHASE_1 = (
     ),
     Question(
         key="Specifier",
-        label="Архбюро / ГАП",
-        prompt="Архитектурное бюро и ГАП (главный архитектор проекта).",
-        hint="Если проект ведёте сами — кнопка ниже",
-        choices=((OWN_DESIGN, OWN_DESIGN),),
+        label="Архбюро",
+        prompt="Архитектурное бюро — название.",
+        hint="Если архитектор работает сам, без бюро — «Частный архитектор». Если проект ведёте вы — «Собственная проработка».",
+        choices=((SOLO_ARCHITECT, SOLO), (OWN_DESIGN, OWN_DESIGN)),
         # На выборе архитектора бюро ещё нет — не спрашиваем
         ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION,
+    ),
+    Question(
+        key="Lead Architect",
+        label="ГАП",
+        prompt="ГАП — имя главного архитектора проекта.",
+        # Частный архитектор: имя — единственное, что о нём известно, поэтому обязательно
+        prompt_fn=lambda a: "Имя архитектора." if a.get("Specifier") == SOLO
+        else "ГАП — имя главного архитектора проекта.",
+        optional_fn=lambda a: a.get("Specifier") != SOLO,
+        skip_label="Пока не знаю",
+        missing_label="пока не известен",
+        # При собственной проработке ГАП — сам дилер, не спрашиваем
+        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION
+        and a.get("Specifier") not in (None, OWN_DESIGN),
     ),
     Question(
         key="PL Volume",
@@ -375,6 +391,14 @@ def location(a: dict) -> dict:
     return {k: a[k] for k in ("Country", "City") if k in a}
 
 
+def specifier(a: dict) -> dict:
+    """Частный архитектор: в Specifier — его имя, с пометкой (в Companies заводится компания его имени)."""
+    if a.get("Specifier") != SOLO:
+        return {}
+    # None — убрать служебное «__solo__», пока имя ещё не названо
+    return {"Specifier Type": SOLO_ARCHITECT, "Specifier": a.get("Lead Architect")}
+
+
 def project_name(a: dict) -> str:
     """Черновое имя «Клиент — Объект — Уточнение» в словах дилера.
 
@@ -449,6 +473,7 @@ def derive(a: dict) -> dict:
         out["PL Volume"] = pl
         out["EXW Potential"] = exw(pl)
     out.update(location(a))
+    out.update(specifier(a))
     log = project_log(a)
     if log:
         out["Project Log"] = "\n".join(log)

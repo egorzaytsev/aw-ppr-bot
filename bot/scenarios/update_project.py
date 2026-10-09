@@ -10,7 +10,9 @@ from dataclasses import replace
 
 from ..airtable_ids import Projects, RequestType
 from .base import DETAIL, Question, Scenario
-from .new_project import QUESTIONS, STAGE_ARCHITECT_SELECTION, current_pl, exw, location, project_log
+from .new_project import (
+    QUESTIONS, STAGE_ARCHITECT_SELECTION, current_pl, exw, location, project_log, specifier,
+)
 
 CONFIRMED_BY_EGOR = "Принято, Егор подтвердит."
 NEWS_DONE = "Принято, разберу и свяжу с проектом."
@@ -193,6 +195,7 @@ def gaps_for(project_fields: dict, ppr_status: str) -> tuple[list[str], dict]:
             need(k)
     if _empty(f.get(Projects.SPECIFIER)) and stage != STAGE_ARCHITECT_SELECTION:
         need("Specifier")
+        need("Lead Architect")  # ГАП в Projects отдельного поля нет — спрашиваем вместе с бюро
 
     # Следующая фаза
     if ppr_status == "registered":
@@ -210,7 +213,7 @@ def gaps_for(project_fields: dict, ppr_status: str) -> tuple[list[str], dict]:
         "EXW Potential": ("PL Volume",),
         "Expected Order Date": ("Order Month",),
         "Object Address": ("Object Address",),
-        "Specifier": ("Specifier",) if stage != STAGE_ARCHITECT_SELECTION else (),
+        "Specifier": ("Specifier", "Lead Architect") if stage != STAGE_ARCHITECT_SELECTION else (),
         "Contact Level": ("Contact Level",),
         "AW Alternatives": ("AW Alternatives",),
         "Parallel Registrations": ("Parallel Registrations",),
@@ -239,6 +242,7 @@ def _fill_derive(a: dict) -> dict:
     out: dict = {"Dealer Project Name": _target_name(a)}
     if "Object Location" in a:
         out.update(location(a))
+    out.update(specifier(a))
     pl = current_pl(a)
     if pl is not None:
         out["PL Volume"] = pl

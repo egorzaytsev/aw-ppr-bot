@@ -26,6 +26,8 @@ def test_parse_month():
 
 
 # Индексы: фаза 1 — 0 клиент, 1 объект, 2 часть, 3 где объект, 4 страна, 5 город, 6 адрес,
+# (после сдвига) 7 площадь, 8 стадия, 9 бюро, 10 ГАП, 11 объём, 12 альтернативы; фаза 2 — 13…27;
+# фаза 3 — 28…35. Старые строки ниже — до вопроса о ГАПе:
 # 7 площадь, 8 стадия, 9 бюро, 10 объём, 11 альтернативы; фаза 2 — 12…26 (материалы 20…25);
 # фаза 3 — 27…34 (документы третьей стороны 29…32)
 CH = engine.CB_CHOICE
@@ -58,7 +60,7 @@ def _run_phase1(exw="120к", stage=3, skip_optional=False, other_place=False):
     r = engine.handle_callback(r.state, CH + str(stage))          # стадия
     if stage != 0:
         assert r.state.step == 9
-        r = engine.handle_callback(r.state, CH + "0")             # собственная проработка
+        r = engine.handle_callback(r.state, CH + "1")             # собственная проработка (ГАП не спрашиваем)
     r = engine.handle_text(r.state, exw)
     r = engine.handle_callback(r.state, CH + "1")                 # да, по тендеру
     return r
@@ -75,7 +77,7 @@ def _run_phase2(r):
     assert r.state.awaiting == "gate"
     assert "ещё десять вопросов" in r.screens[0].text
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
-    assert r.state.phase == 2 and r.state.step == 12
+    assert r.state.phase == 2 and r.state.step == 13
     assert "Предрегистрация · 1/10" in r.screens[0].text
     r = engine.handle_text(r.state, "Мы, в мае 2026 на презентации")
     r = engine.handle_text(r.state, "ПАО Сбербанк, АХО")
@@ -93,24 +95,24 @@ def _run_phase2(r):
     r = engine.handle_callback(r.state, CH + "0")                 # подтверждаю
     r = engine.handle_text(r.state, "март 2027")
     # Материалы по шагам
-    assert r.state.step == 20
+    assert r.state.step == 21
     assert "Предрегистрация · 9/10 · Материалы: Визуализации (1/6)" in r.screens[0].text
     r = engine.handle_callback(r.state, engine.CB_DONE)           # без файлов «Готово» не работает
-    assert r.state.step == 20
+    assert r.state.step == 21
     r = engine.handle_file(r.state, FILE)
     r = engine.handle_text(r.state, "https://drive.google.com/x")
     assert len(r.state.answers["Visualizations"]) == 2
     r = engine.handle_callback(r.state, engine.CB_DONE)
-    assert r.state.step == 21
+    assert r.state.step == 22
     r = engine.handle_callback(r.state, CH + "0")                 # планировок нет
     r = engine.handle_text(r.state, "нет")                        # списка серий нет — текстом
     r = engine.handle_callback(r.state, CH + "0")                 # документов бюро нет
-    assert r.state.step == 24
+    assert r.state.step == 25
     r = engine.handle_file(r.state, dict(FILE, file_id="F3", name="spec.xlsx"))
     r = engine.handle_callback(r.state, engine.CB_DONE)
-    assert r.state.step == 25                                     # вопроса про квотацию нет
+    assert r.state.step == 26                                     # вопроса про квотацию нет
     r = engine.handle_callback(r.state, CH + "0")                 # квотации нет
-    assert r.state.step == 26
+    assert r.state.step == 27
     r = engine.handle_text(r.state, "14.10, 11:00, Мск")
     return r
 
@@ -204,7 +206,7 @@ def test_prereg_then_registration_full_flow():
     assert "Подаётся как: <b>предрегистрация</b>" in r.screens[0].text
     assert engine.stage_of(r.state)[0] == "New — Pre-registration"
     r = engine.handle_callback(r.state, engine.CB_NEXT_PHASE)     # передумал — регистрация
-    assert r.state.phase == 3 and r.state.step == 27
+    assert r.state.phase == 3 and r.state.step == 28
     r = engine.handle_text(r.state, "Q-2026-1187")
     r = engine.handle_text(r.state, "Иванов И., ПАО Сбербанк, директор АХО")
     assert "Регистрация · 3/5 · Документы третьей стороны: Ведомость (1/4)" in r.screens[0].text
@@ -213,7 +215,7 @@ def test_prereg_then_registration_full_flow():
     r = engine.handle_callback(r.state, CH + "0")                 # тендерного задания нет
     r = engine.handle_callback(r.state, CH + "0")                 # запроса на закупку нет
     r = engine.handle_callback(r.state, CH + "0")                 # прочего нет
-    assert r.state.step == 33
+    assert r.state.step == 34
     r = engine.handle_text(r.state, "июнь 2027")
     r = engine.handle_text(r.state, "16.10, 15:00, Мск")
     assert r.state.awaiting == "confirm"
@@ -241,7 +243,7 @@ def test_confirmed_volume_change_logged():
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
     st.answers.update({"AW Introduced By": "x", "Decision Maker Company": "y"})
-    st.step = 18
+    st.step = 19
     r = engine.handle_text(st, "150к")
     p = engine.build_payload(r.state)
     assert p["PL Volume"] == 150000 and p["EXW Potential"] == 67500
@@ -252,7 +254,7 @@ def test_typed_answer_on_detail_choice():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 15
+    st.step = 16
     r = engine.handle_text(st, "Офис Солюшнз")                    # сразу текстом, без кнопки «Да»
     assert r.state.answers["Competing Dealers"] == "Офис Солюшнз"
 
@@ -269,7 +271,9 @@ def test_stage_change_to_other_asks_specifier():
     r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "8")
     r = engine.handle_callback(r.state, CH + "2")                 # Проектирование
     assert r.state.step == 9 and r.state.awaiting == "answer"
-    r = engine.handle_text(r.state, "UNK Project, ГАП Иванов")
+    r = engine.handle_text(r.state, "UNK Project")
+    assert engine._current_q(r.state).key == "Lead Architect"   # за бюро — ГАП
+    r = engine.handle_text(r.state, "Иванов")
     assert r.state.awaiting == "confirm"
 
 
@@ -285,7 +289,7 @@ def test_stage_change_to_architect_drops_specifier():
 def test_text_matches_choice_label():
     r = _notification_summary()
     r = engine.handle_callback(r.state, engine.CB_EDIT)
-    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "11")
+    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "12")
     r = engine.handle_text(r.state, "нет, только AW")
     assert r.state.answers["AW Alternatives"] == "No — AW only"
     assert r.state.awaiting == "confirm"
@@ -300,9 +304,9 @@ def test_required_question_has_no_skip():
 def test_bad_answer_repeats_question():
     r = engine.start(NEW_PROJECT.code)
     st = r.state
-    st.step = 10  # объём AW
+    st.step = 11  # объём AW
     r = engine.handle_text(st, "не знаю")
-    assert r.state.step == 10
+    assert r.state.step == 11
     assert r.screens[0].text.startswith("⚠️")
 
 
@@ -319,7 +323,7 @@ def test_month_picker_year_then_month():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 19  # месяц размещения заказа
+    st.step = 20  # месяц размещения заказа
     screen = engine.question_screen(st)
     y = date.today().year + 1
     assert f"{engine.CB_YEAR}{y}" in str(screen.buttons)
@@ -330,7 +334,7 @@ def test_month_picker_year_then_month():
     r = engine.handle_callback(r.state, f"{engine.CB_YEAR}{y}")
     r = engine.handle_callback(r.state, engine.CB_MONTH + "3")
     assert r.state.answers["Order Month"] == f"{y}-03-01"
-    assert r.state.step == 20
+    assert r.state.step == 21
     p = engine.build_payload(r.state)
     assert f"Месяц размещения заказа: 03.{y}" in p["Project Log"]
 
@@ -339,7 +343,7 @@ def test_month_typed_while_grid_open():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 19
+    st.step = 20
     r = engine.handle_callback(st, f"{engine.CB_YEAR}2027")
     r = engine.handle_text(r.state, "Q2 2027")
     assert r.state.answers["Order Month"] == "2027-04-01"
@@ -349,12 +353,12 @@ def test_materials_all_no_requires_one():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 20
+    st.step = 21
     for _ in range(6):
         r = engine.handle_callback(st, CH + "0")
         st = r.state
     assert "нужен хотя бы один файл или ссылка" in r.screens[0].text
-    assert r.state.step == 20
+    assert r.state.step == 21
 
 
 def test_spec_no_files_skips_quotation_question():
@@ -362,9 +366,9 @@ def test_spec_no_files_skips_quotation_question():
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
     st.answers["Visualizations"] = [{"kind": "link", "url": "https://x"}]
-    st.step = 24
+    st.step = 25
     r = engine.handle_callback(st, CH + "0")                      # своей спецификации нет
-    assert r.state.step == 25
+    assert r.state.step == 26
 
 
 def test_slot_helpers_timezones():
@@ -389,7 +393,7 @@ def test_slot_picker_day_then_window():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 26  # звонок 15 минут
+    st.step = 27  # звонок 15 минут
     screen = engine.question_screen(st)
     day = slots.next_workdays()[1]
     assert f"{engine.CB_DAY}{day.isoformat()}" in str(screen.buttons)
@@ -407,7 +411,7 @@ def test_slot_free_text_accepted():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 26
+    st.step = 27
     r = engine.handle_text(st, "Любой день после 20.10, утро")
     assert r.state.answers["Call Slot 15"] == "Любой день после 20.10, утро"
 
@@ -417,7 +421,7 @@ def test_slot_text_after_day_chosen():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 26
+    st.step = 27
     r = engine.handle_callback(st, f"{engine.CB_DAY}{slots.next_workdays()[0].isoformat()}")
     r = engine.handle_text(r.state, "лучше в пятницу после обеда")
     assert r.state.answers["Call Slot 15"] == "лучше в пятницу после обеда"
@@ -428,9 +432,9 @@ def test_stale_qualifier_state_heals():
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
     st.answers["Dealer Specification"] = [{"kind": "link", "url": "https://x"}]
-    st.step, st.awaiting = 24, "qualifier"  # вопрос про квотацию убрали
+    st.step, st.awaiting = 26, "qualifier"  # вопрос про квотацию убрали
     r = engine.handle_callback(st, engine.CB_QUALIFIER + "0")
-    assert r.state.awaiting == "answer" and r.state.step == 25
+    assert r.state.awaiting == "answer" and r.state.step == 26
     assert r.screens and r.screens[-1].text
 
 
@@ -438,12 +442,12 @@ def test_third_party_docs_all_no_requires_one():
     r = _run_phase2(_run_phase1())
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 29
+    st.step = 30
     for _ in range(4):
         r = engine.handle_callback(st, CH + "0")
         st = r.state
     assert "Документы третьей стороны: нужен хотя бы один файл или ссылка" in r.screens[0].text
-    assert r.state.step == 29
+    assert r.state.step == 30
 
 
 def test_other_place_asks_country_and_city():
@@ -606,3 +610,45 @@ def test_project_list_sorting_and_labels():
     assert _button_label(items[2]) in ("Pre 12 · Предрегистрация · 12 дн.", "Pre 12 · Предрегистрация · 11 дн.",
                                        "Pre 12 · Предрегистрация · 13 дн.")
     assert _button_label(items[0]) == "Notif B · Уведомление"
+
+
+def _to_specifier():
+    r = _run_phase1()
+    r = engine.handle_callback(r.state, engine.CB_GATE_NO)
+    r = engine.handle_callback(r.state, engine.CB_EDIT)
+    return engine.handle_callback(r.state, engine.CB_EDIT_STEP + "9")
+
+
+def test_bureau_then_architect_unknown():
+    r = _to_specifier()
+    r = engine.handle_text(r.state, "UNK Project")
+    assert engine._current_q(r.state).key == "Lead Architect"
+    labels = [b[0] for row in r.screens[0].buttons for b in row]
+    assert labels == ["Пока не знаю"]
+    r = engine.handle_callback(r.state, engine.CB_SKIP)
+    assert r.state.awaiting == "confirm"
+    text = r.screens[0].text
+    assert "ГАП: пока не известен" in text and "Пропущено: ГАП." in text
+    p = engine.build_payload(r.state)
+    assert p["Specifier"] == "UNK Project" and "Lead Architect" not in p
+
+
+def test_solo_architect_name_required():
+    r = _to_specifier()
+    r = engine.handle_callback(r.state, CH + "0")                 # Частный архитектор
+    q = engine._current_q(r.state)
+    assert q.key == "Lead Architect" and q.prompt == "Имя архитектора." and not q.optional
+    assert "Пока не знаю" not in str(r.screens[0].buttons)
+    r = engine.handle_callback(r.state, engine.CB_SKIP)           # пропустить нельзя
+    assert engine._current_q(r.state).key == "Lead Architect"
+    r = engine.handle_text(r.state, "Иван Петров")
+    p = engine.build_payload(r.state)
+    assert p["Specifier"] == "Иван Петров" and p["Specifier Type"] == "Частный архитектор"
+    assert p["Lead Architect"] == "Иван Петров"
+
+
+def test_own_design_skips_architect():
+    r = _to_specifier()
+    r = engine.handle_callback(r.state, CH + "1")                 # Собственная проработка
+    assert r.state.awaiting == "confirm" and "ГАП" not in r.screens[0].text
+    assert engine.build_payload(r.state)["Specifier"] == "Собственная проработка"

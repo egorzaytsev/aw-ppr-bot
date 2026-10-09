@@ -39,8 +39,11 @@ class Question:
     group_min_one: bool = False
     # choice: только кнопки. text/number: кнопки-заготовки рядом со свободным ответом.
     choices: tuple[Choice, ...] = ()
-    # Можно пропустить кнопкой «Пропустить»
+    # Можно пропустить кнопкой «Пропустить» (подпись — skip_label)
     optional: bool = False
+    skip_label: str = "Пропустить"
+    # Обязательность и текст вопроса, зависящие от прошлых ответов
+    optional_fn: Optional[Callable[[dict], bool]] = None
     # Задавать ли вопрос при текущих ответах; None — всегда
     ask_if: Optional[Callable[[dict], bool]] = None
     # Ответы, которые сбрасываются, если этот ответ изменился (страна → город)
@@ -68,10 +71,15 @@ class Question:
     resolve: Optional[Callable[[Value, dict], Value]] = None
 
     def bind(self, answers: dict) -> "Question":
-        """Вопрос с вариантами под текущие ответы."""
-        if self.choices_fn is None:
-            return self
-        return replace(self, choices=tuple(self.choices_fn(answers)))
+        """Вопрос с вариантами, обязательностью и текстом под текущие ответы."""
+        changes: dict = {}
+        if self.choices_fn is not None:
+            changes["choices"] = tuple(self.choices_fn(answers))
+        if self.optional_fn is not None:
+            changes["optional"] = bool(self.optional_fn(answers))
+        if self.prompt_fn is not None:
+            changes["prompt"] = self.prompt_fn(answers)
+        return replace(self, **changes) if changes else self
 
     def text(self, answers: dict) -> str:
         return self.prompt_fn(answers) if self.prompt_fn else self.prompt

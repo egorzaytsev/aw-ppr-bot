@@ -110,7 +110,7 @@ def missing(state: DialogState, required_only: bool = False, phase: int | None =
     qs = _qs(state)
     return [
         i for i in applicable(state, phase)
-        if not _is_filled(qs[i], state.answers) and not (required_only and qs[i].optional)
+        if not _is_filled(qs[i], state.answers) and not (required_only and qs[i].bind(state.answers).optional)
     ]
 
 
@@ -209,7 +209,7 @@ def question_screen(state: DialogState) -> Screen:
     if q.kind == "files" and isinstance(state.answers.get(q.key), list) and state.answers[q.key]:
         buttons.append([("Готово", CB_DONE)])
     if q.optional:
-        buttons.append([("Пропустить", CB_SKIP)])
+        buttons.append([(q.skip_label, CB_SKIP)])
     return Screen("\n".join(lines), buttons)
 
 
@@ -389,6 +389,12 @@ def _advance(state: DialogState) -> Result:
         nxt = [i for i in missing(state) if i > state.step]
         return _ask(state, nxt[0]) if nxt else _end_of_questions(state)
     if state.editing:
+        # Исправленный ответ открыл зависимый вопрос сразу за ним (бюро → ГАП) — задаём его
+        nxt = state.step + 1
+        qs = _qs(state)
+        if (nxt < len(qs) and qs[nxt].ask_if is not None and nxt in applicable(state)
+                and not _is_filled(qs[nxt], state.answers)):
+            return _ask(state, nxt)
         # После исправления могла открыться обязательная ветка (сменили стадию)
         req = missing(state, required_only=True)
         return _ask(state, req[0]) if req else _to_summary(state)
@@ -649,7 +655,7 @@ def build_payload(state: DialogState) -> dict:
     payload.update(sc.derive(state.answers))
     for key in sc.payload_skip:
         payload.pop(key, None)
-    return payload
+    return {k: v for k, v in payload.items() if v is not None}
 
 
 def collected_files(state: DialogState) -> list[tuple[str, dict]]:
