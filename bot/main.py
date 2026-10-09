@@ -622,6 +622,11 @@ async def process_decisions(app: Application) -> None:
                 for k, v in pl.project_updates.items()
             }
             await asyncio.to_thread(repo.update_project, target[0], updates)
+            # Текст дилеру — по фактическому состоянию проекта после записи (место в очереди, Registered)
+            fresh = await asyncio.to_thread(repo.project_fields, target[0])
+            recheck = decision_plan(reg, fresh)
+            if recheck.dealer_text and not recheck.blocked:
+                pl.dealer_text = recheck.dealer_text
         # Отмечаем до рассылки — чтобы сбой отправки не повторил изменения
         await asyncio.to_thread(repo.update_registration, rec["id"], pl.registration_updates)
         log.info("Решение по %s: %s", rec["id"], pl.registration_updates.get(Registrations.BOT_PROCESSED))

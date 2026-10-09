@@ -89,3 +89,11 @@ def test_decline_and_need_info_need_note():
 def test_news_accept_no_status_change():
     pl = plan(reg(rtype="Update — Lost"), dict(FULL))
     assert not pl.project_updates and "информацию приняли" in pl.dealer_text
+
+
+def test_position_from_actual_order_when_already_listed():
+    # Егор заранее поставил дилера первым — пишем фактическое место, не «последний»
+    project = {**FULL, P.PRE_REGISTERED: [DEALER, OTHER1, OTHER2]}
+    pl = plan(reg(rtype="New — Pre-registration"), project)
+    assert P.PRE_REGISTERED not in pl.project_updates and not pl.broadcast_companies
+    assert "Вы 1-й из 3 в предрегистрации." in pl.dealer_text
