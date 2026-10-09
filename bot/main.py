@@ -20,7 +20,8 @@ from telegram.ext import (
 )
 
 from . import engine
-from .airtable_ids import Projects
+from .airtable_ids import Projects, Registrations
+from .decisions import plan as decision_plan
 from .airtable_repo import (
     PPR_NOTIFIED, PPR_PRE_REGISTERED, PPR_REGISTERED, AirtableRepo, DealerProject, Person,
 )
@@ -593,6 +594,63 @@ async def log_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+# ---------- решения Егора по заявкам ----------
+
+DECISIONS_INTERVAL = 60  # секунд между проверками Inbox
+
+
+async def _send_html(ctx_bot, chat_id, text: str) -> None:
+    try:
+        await ctx_bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+    except Exception:
+        log.exception("Не удалось отправить сообщение в чат %s", chat_id)
+
+
+async def process_decisions(app: Application) -> None:
+    repo: AirtableRepo = app.bot_data["repo"]
+    admin = app.bot_data.get("admin_chat_id")
+    for rec in await asyncio.to_thread(repo.decisions_to_process):
+        reg = rec["fields"]
+        target = reg.get(Registrations.TARGET_PROJECT) or []
+        project = await asyncio.to_thread(repo.project_fields, target[0]) if target else None
+        pl = decision_plan(reg, project)
+        if not pl.registration_updates:
+            continue
+        if pl.project_updates:
+            updates = {
+                k: (datetime.now(VALENCIA).date().isoformat() if v == "__today__" else v)
+                for k, v in pl.project_updates.items()
+            }
+            await asyncio.to_thread(repo.update_project, target[0], updates)
+        # Отмечаем до рассылки — чтобы сбой отправки не повторил изменения
+        await asyncio.to_thread(repo.update_registration, rec["id"], pl.registration_updates)
+        log.info("Решение по %s: %s", rec["id"], pl.registration_updates.get(Registrations.BOT_PROCESSED))
+
+        dealer_chats = await asyncio.to_thread(repo.chat_ids_for_people, reg.get(Registrations.SUBMITTED_BY) or [])
+        if pl.dealer_text:
+            for chat in dealer_chats:
+                await _send_html(app.bot, chat, pl.dealer_text)
+        if pl.broadcast_companies and pl.broadcast_text:
+            for chat in await asyncio.to_thread(repo.chat_ids_for_companies, pl.broadcast_companies):
+                if chat not in dealer_chats:
+                    await _send_html(app.bot, chat, pl.broadcast_text)
+        if admin:
+            if pl.admin_text:
+                await _send_html(app.bot, admin, pl.admin_text)
+            elif pl.dealer_text and not pl.blocked:
+                sent = "отправлен" if dealer_chats else "не отправлен — у автора нет Telegram"
+                await _send_html(app.bot, admin, f"✓ Решение применено, ответ дилеру {sent}:\n\n{pl.dealer_text}")
+
+
+async def _decisions_loop(app: Application) -> None:
+    while True:
+        try:
+            await process_decisions(app)
+        except Exception:
+            log.exception("Ошибка обработки решений")
+        await asyncio.sleep(DECISIONS_INTERVAL)
+
+
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("Необработанная ошибка", exc_info=ctx.error)
     if isinstance(update, Update) and update.effective_chat:
@@ -614,10 +672,19 @@ def build_app() -> Application:
 
     transcriber = Transcriber(settings.groq_api_key, settings.groq_model)
 
+    async def post_init(app: Application) -> None:
+        app.bot_data["decisions_task"] = asyncio.create_task(_decisions_loop(app))
+
     async def post_shutdown(app: Application) -> None:
+        task = app.bot_data.get("decisions_task")
+        if task:
+            task.cancel()
         await transcriber.aclose()
 
-    app = ApplicationBuilder().token(settings.telegram_token).post_shutdown(post_shutdown).build()
+    app = (
+        ApplicationBuilder().token(settings.telegram_token)
+        .post_init(post_init).post_shutdown(post_shutdown).build()
+    )
     app.bot_data["repo"] = AirtableRepo(settings.airtable_token, settings.airtable_base_id)
     app.bot_data["transcriber"] = transcriber
     app.bot_data["admin_chat_id"] = settings.admin_chat_id

@@ -212,3 +212,37 @@ class AirtableRepo:
         ]
         out.sort(key=lambda p: p.submitted_at or "", reverse=True)
         return out
+
+    # ---------- решения Егора ----------
+
+    def decisions_to_process(self) -> list[dict]:
+        """Заявки с Decision, которые бот ещё не довёл до конца (done:<Decision>)."""
+        formula = (
+            f"AND({{{Registrations.DECISION}}}!='', "
+            f"{{{Registrations.BOT_PROCESSED}}}!=CONCATENATE('done:', {{{Registrations.DECISION}}}))"
+        )
+        return self._registrations.all(formula=formula, use_field_ids=True)
+
+    def project_fields(self, project_id: str) -> dict:
+        return self._projects.get(project_id, use_field_ids=True)["fields"]
+
+    def update_project(self, project_id: str, fields: dict) -> None:
+        self._projects.update(project_id, fields)
+
+    def update_registration(self, reg_id: str, fields: dict) -> None:
+        self._registrations.update(reg_id, fields)
+
+    def chat_ids_for_people(self, person_ids: list[str]) -> list[str]:
+        if not person_ids:
+            return []
+        recs = self._people.all(formula=_ids_formula(person_ids), fields=[People.TELEGRAM_CHAT_ID],
+                                use_field_ids=True)
+        return [r["fields"][People.TELEGRAM_CHAT_ID] for r in recs if r["fields"].get(People.TELEGRAM_CHAT_ID)]
+
+    def chat_ids_for_companies(self, company_ids: list[str]) -> list[str]:
+        """Telegram всех людей компаний (менеджеры дилера)."""
+        if not company_ids:
+            return []
+        recs = self._companies.all(formula=_ids_formula(company_ids), fields=[Companies.PEOPLE], use_field_ids=True)
+        people = sorted({pid for r in recs for pid in r["fields"].get(Companies.PEOPLE, [])})
+        return self.chat_ids_for_people(people)

@@ -21,6 +21,7 @@ class Companies:
     AS_PRE_REGISTERED = "fldc3vmxjQnXoboi6"  # ← Projects.Pre-registered
     AS_REGISTERED = "flds1nP0HoRHISZeu"      # ← Projects.Registered
     REGISTRATIONS = "fldkMDN9qrMlcKQzi"      # ← Registrations.Dealer
+    PEOPLE = "fld9kyOncMPx5R5GC"
 
 
 class Projects:
@@ -45,6 +46,10 @@ class Projects:
     PARALLEL_REGISTRATIONS = "fld8Nw4DWPyEDkcUs"
     DOSSIER_FILES = "fldlZAQm173wqC7hh"
     QUOTATION = "fld2eKHFMhU73fxS5"
+    NOTIFIED = "fldiKRdTlngI6AXK8"
+    PRE_REGISTERED = "fldSXoNH5rwWCYaWT"
+    REGISTERED = "fld75C5ApwGwVCT5N"
+    STATUS_CONFIRMED = "fldtmomY3vt087h7I"
 
 
 class Registrations:
@@ -59,10 +64,24 @@ class Registrations:
     PAYLOAD = "fldpXPIZoGwG2qlXn"
     ATTACHMENTS = "fldGXPvBaN3QNVq0p"
     SUBMITTED_AT = "fldXxfsMD29jkpqOa"
+    DECISION = "fldVa9VFrZtahGCwi"
+    DECISION_NOTE = "fldL7Ncl5Ess8jsqQ"
+    BOT_PROCESSED = "fld46XTTXBfX30llt"
 
 
 class RegStatus:
     PENDING = "PENDING"
+    NOTIFICATION = "Notification"
+    PRE_REGISTRATION = "Pre-registration"
+    REGISTRATION = "Registration"
+    DECLINED = "Declined"
+
+
+class Decision:
+    ACCEPT = "Accept"
+    ACCEPT_MERGE = "Accept — merge into Target Project"
+    DECLINE = "Decline"
+    NEED_INFO = "Need more info"
 
 
 class RequestType:
