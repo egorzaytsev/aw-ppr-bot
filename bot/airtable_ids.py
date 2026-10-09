@@ -1,0 +1,77 @@
+"""ID таблиц и полей базы EEU Ecosystem CRM (appD8N8DAgcTAqfL1).
+
+Работаем только по ID: переименование поля в интерфейсе бота не ломает.
+"""
+
+
+class People:
+    TABLE = "tbl4RPfMHqwknbwgm"
+    NAME = "fld8on62aAuq1mN05"
+    COMPANY = "fld6rHvQxGWlJpKGK"
+    TELEGRAM_USERNAME = "fld7VJ6fzvST6vTL2"
+    TELEGRAM_CHAT_ID = "fldkrdC4GxwySZaOb"
+    BOT_STATE = "fldTgLLWJ8c7uYFlI"
+    REMINDER_SLOT = "fldspBKdbk8Ed9Ji5"
+
+
+class Companies:
+    TABLE = "tblUnWupN3QzpaWnj"
+    # Обратные стороны ролевых полей Projects
+    AS_NOTIFIED = "fldRgtKpFgKW5HDZX"        # ← Projects.Notified
+    AS_PRE_REGISTERED = "fldc3vmxjQnXoboi6"  # ← Projects.Pre-registered
+    AS_REGISTERED = "flds1nP0HoRHISZeu"      # ← Projects.Registered
+    REGISTRATIONS = "fldkMDN9qrMlcKQzi"      # ← Registrations.Dealer
+
+
+class Projects:
+    TABLE = "tbl3ezrJ2Zssu4Aoz"
+    NAME = "fldxdxuL2j3aBKGBZ"
+    STATUS = "flddwm09GKIgI34Xk"
+    EXW_POTENTIAL = "fldOZRM2pbEqNncM3"
+    STATUS_EXPIRY = "fldVVCjFCegofCFj8"
+    PPR_TRACK = "flds53e1gwOkJXqoc"
+    PPR_MISSING = "fldsISktQoNsFzSxD"
+    END_CLIENT = "fldQVuLzwDnPZ9xs0"
+    OBJECT_NAME = "fldTqHXUNdauIkzUF"
+    OBJECT_PART = "fldN8piCNAdvidzhJ"
+    COUNTRY = "fld72PcE4DP8QyR7k"
+    CITY = "fldhezZhV3OJXRSy1"
+    OBJECT_ADDRESS = "fldFTPeQ2EbgaYw4b"
+    PROJECT_STAGE = "fldgigF1Vu9dad1iW"
+    SPECIFIER = "fldEqF7n7a6QZhOrs"
+    AW_ALTERNATIVES = "fldTqroFvjJD0V86s"
+    EXPECTED_ORDER_DATE = "fldgxrK1xFo4V2tpN"
+    CONTACT_LEVEL = "fldQzxIA7iQx9M50m"
+    PARALLEL_REGISTRATIONS = "fld8Nw4DWPyEDkcUs"
+    DOSSIER_FILES = "fldlZAQm173wqC7hh"
+    QUOTATION = "fld2eKHFMhU73fxS5"
+
+
+class Registrations:
+    TABLE = "tbl4lKbYhOkVIYNHQ"
+    NAME = "fldjPMiApjXLsf4tL"
+    REG_STATUS = "fldALr7pPzYZsDRYy"
+    DEALER_PROJECT_NAME = "fldV9fwrEBmmyrax3"
+    SUBMITTED_BY = "fldnFrZK0BZ5SMDhm"
+    DEALER = "fldlqAun7KrwyiQVL"
+    REQUEST_TYPE = "fldyEdT3wt8jn5O4k"
+    TARGET_PROJECT = "fldJg1uc4mfJ9Gquf"
+    PAYLOAD = "fldpXPIZoGwG2qlXn"
+    ATTACHMENTS = "fldGXPvBaN3QNVq0p"
+    SUBMITTED_AT = "fldXxfsMD29jkpqOa"
+
+
+class RegStatus:
+    PENDING = "PENDING"
+
+
+class RequestType:
+    NEW_NOTIFICATION = "New — Notification"
+    NEW_PRE_REGISTRATION = "New — Pre-registration"
+    # В поле Request Type этого варианта пока нет — Егор добавляет вручную
+    NEW_REGISTRATION = "New — Registration"
+    UPGRADE_PRE_REGISTRATION = "Upgrade — Pre-registration"
+    UPGRADE_REGISTRATION = "Upgrade — Registration"
+    UPDATE_INFO = "Update — info only"
+    UPDATE_WON = "Update — Won"
+    UPDATE_LOST = "Update — Lost"
