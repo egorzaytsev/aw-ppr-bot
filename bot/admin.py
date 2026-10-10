@@ -99,11 +99,16 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
-def _search_words(reg: dict) -> list[str]:
+def _payload(reg: dict) -> dict:
     try:
-        payload = json.loads(reg.get(Registrations.PAYLOAD) or "{}")
+        data = json.loads(reg.get(Registrations.PAYLOAD) or "{}")
     except ValueError:
-        payload = {}
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _search_words(reg: dict) -> list[str]:
+    payload = _payload(reg)
     text = " ".join(str(payload.get(k) or "") for k in ("Object Name", "End Client", "Object Address"))
     text += " " + (reg.get(Registrations.DEALER_PROJECT_NAME) or "")
     return sorted(set(re.findall(r"[\w-]{4,}", text.lower())), key=len, reverse=True)
@@ -123,7 +128,10 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         return
     repo = ctx.bot_data["repo"]
     action, _, rest = data[len(CB_ADMIN):].partition(":")
-    reg_id, _, project_id = rest.partition(":")
+    parts = rest.split(":")
+    reg_id = parts[0] if parts else ""
+    project_id = parts[1] if len(parts) > 1 else ""
+    reply_id = parts[2] if len(parts) > 2 else ""
     pending = _pending(ctx)
 
     if action == ACTION_CANCEL:
@@ -136,13 +144,23 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     except Exception:
         await chat.send_message("Заявка не найдена.")
         return
+    # Кнопка под ответом дилера — решение по исходной заявке, ответ закрывается вместе с ней
+    original = _payload(reg).get("In Reply To")
+    if original and action in (ACTION_ACCEPT, ACTION_DECLINE, ACTION_INFO):
+        reply_id, reg_id = reg_id, original
+        try:
+            reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+        except Exception:
+            await chat.send_message("Исходная заявка не найдена.")
+            return
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
-    if reg.get(Registrations.DECISION) and action != ACTION_PICK:
-        await chat.send_message(f"По «{name}» решение уже стоит: {escape(reg[Registrations.DECISION])}.")
+    decided = reg.get(Registrations.DECISION)
+    if decided and decided != Decision.NEED_INFO and action not in (ACTION_PICK,):
+        await chat.send_message(f"По «{name}» решение уже стоит: {escape(decided)}.")
         return
 
     if action in (ACTION_DECLINE, ACTION_INFO):
-        pending[chat.id] = (action, reg_id)
+        pending[chat.id] = (action, reg_id, reply_id)
         what = "отказа" if action == ACTION_DECLINE else "запроса"
         await chat.send_message(
             f"«{name}»: напишите текст {what} — он уйдёт дилеру как есть.",
@@ -151,15 +169,21 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         return
 
     if action == ACTION_ACCEPT:
-        if reg.get(Registrations.TARGET_PROJECT):
+        target = reg.get(Registrations.TARGET_PROJECT) or []
+        if target:
             await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE)
+            if reply_id:
+                await asyncio.to_thread(repo.close_reply, reply_id, target[0])
             await chat.send_message(f"«{name}»: принято, применяю…")
             await _apply_now(ctx)
             return
         candidates = await asyncio.to_thread(repo.find_project_candidates, _search_words(reg))
-        rows = [[InlineKeyboardButton(f"В проект: {pname[:40]}", callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{pid}")]
+        tail = f":{reply_id}" if reply_id else ""
+        rows = [[InlineKeyboardButton(f"В проект: {pname[:40]}",
+                                      callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{pid}{tail}")]
                 for pid, pname in candidates]
-        rows.append([InlineKeyboardButton("Создать новый проект", callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}")])
+        rows.append([InlineKeyboardButton("Создать новый проект",
+                                          callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-{tail}")])
         rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")])
         hint = "Похожие проекты в базе:" if candidates else "Похожих проектов по словам из заявки не нашёл."
         await chat.send_message(f"«{name}»: в какой проект?\n{hint}", reply_markup=InlineKeyboardMarkup(rows))
@@ -167,12 +191,14 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action == ACTION_PICK and project_id:
         await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, None, project_id)
+        if reply_id:
+            await asyncio.to_thread(repo.close_reply, reply_id, project_id)
         await chat.send_message(f"«{name}»: принято в существующий проект, применяю…")
         await _apply_now(ctx)
         return
 
     if action == ACTION_NEW:
-        pending[chat.id] = (ACTION_NEW, reg_id)
+        pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
         await chat.send_message(
             f"«{name}»: название нового проекта латиницей, как оно будет в Projects.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
@@ -187,7 +213,7 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     item = pending.pop(update.effective_chat.id, None)
     if not item:
         return False
-    action, reg_id = item
+    action, reg_id, reply_id = item
     repo = ctx.bot_data["repo"]
     chat = update.effective_chat
     text = text.strip()
@@ -198,10 +224,19 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     if action == ACTION_NEW:
         project_id = await asyncio.to_thread(repo.create_project, text)
         await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT, None, project_id)
+        if reply_id:
+            await asyncio.to_thread(repo.close_reply, reply_id, project_id)
         await chat.send_message(f"Проект «{escape(text)}» создан, принимаю заявку…", parse_mode=ParseMode.HTML)
     else:
         decision = Decision.DECLINE if action == ACTION_DECLINE else Decision.NEED_INFO
+        if decision == Decision.NEED_INFO:
+            # Повторный запрос: очищаем отметку, чтобы бот отправил новый текст
+            await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.BOT_PROCESSED: ""})
         await asyncio.to_thread(repo.set_decision, reg_id, decision, text)
+        if reply_id:
+            reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+            target = reg.get(Registrations.TARGET_PROJECT) or []
+            await asyncio.to_thread(repo.close_reply, reply_id, target[0] if target else None)
         await chat.send_message("Отправляю дилеру…")
     await _apply_now(ctx)
     return True

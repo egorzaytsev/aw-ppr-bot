@@ -205,19 +205,25 @@ def plan(reg: dict, project: dict | None) -> Plan:
             "и поставьте его в Target Project — бот продолжит сам.",
         )
     project_name = project.get(Projects.NAME) or dealer_name
+    # Дилеру — объект его словами; имя в базе (латиницей) — в скобках, если отличается
+    obj = f"«{escape(dealer_name)}»"
+    if project_name.strip().lower() != dealer_name.strip().lower():
+        obj += f" (в базе — {escape(project_name)})"
+    # Ответ на запрос принимается вместе с исходной заявкой — дилеру второй раз не пишем
+    is_reply = bool(payload_of(reg).get("In Reply To"))
 
     # Выигрыш и проигрыш одного дилера — не повод менять проект: только ответ
     if request_type in (RequestType.UPDATE_WON, RequestType.UPDATE_LOST):
         return Plan(
             registration_updates=done,
-            dealer_text=f"По объекту «{escape(project_name)}» информацию приняли.{_note(reg)}",
+            dealer_text=f"По объекту {obj} информацию приняли.{_note(reg)}",
         )
     moved, provided = transfers(reg, project)
     if request_type == RequestType.UPDATE_INFO:
         return Plan(
             project_updates=moved,
             registration_updates=done,
-            dealer_text=f"По объекту «{escape(project_name)}» информацию приняли.{_note(reg)}",
+            dealer_text=None if is_reply else f"Новость по объекту {obj} приняли и внесли в проект.{_note(reg)}",
             transferred=_names(moved),
         )
 
@@ -277,18 +283,18 @@ def plan(reg: dict, project: dict | None) -> Plan:
 
     # Ответ дилеру — без имён других партнёров
     if status == PPR_NOTIFIED:
-        text = f"Уведомление по объекту «{escape(project_name)}» принято."
+        text = f"Уведомление о плейсменте по объекту {obj} принято."
         if others_registered:
             text += "\nНа проекте есть зарегистрированный партнёр."
         elif others_pre:
             text += "\nНа проекте есть предрегистрация другого партнёра."
     elif status == PPR_PRE:
-        text = (f"Предрегистрация по объекту «{escape(project_name)}» подтверждена.\n"
+        text = (f"Предрегистрация плейсмента по объекту {obj} подтверждена.\n"
                 f"Вы {pre.index(dealer) + 1}-й из {len(pre)} в предрегистрации.")
         if others_registered:
             text += "\nНа проекте есть зарегистрированный партнёр."
     else:
-        text = f"Регистрация по объекту «{escape(project_name)}» подтверждена."
+        text = f"Регистрация плейсмента по объекту {obj} подтверждена."
 
     reg_updates = dict(done)
     if reg_status != status:

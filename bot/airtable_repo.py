@@ -253,8 +253,9 @@ class AirtableRepo:
     # ---------- решения из Telegram (админ) ----------
 
     def pending_without_decision(self, limit: int = 10) -> list[dict]:
+        """На проверке: без решения или с запросом доп. информации (ждут окончательного решения)."""
         formula = (f"AND({{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)}, "
-                   f"{{{Registrations.DECISION}}}='')")
+                   f"OR({{{Registrations.DECISION}}}='', {{{Registrations.DECISION}}}={_quote('Need more info')}))")
         return self._registrations.all(formula=formula, use_field_ids=True, max_records=limit,
                                        sort=["-" + Registrations.SUBMITTED_AT])
 
@@ -266,6 +267,16 @@ class AirtableRepo:
         if target_project_id:
             fields[Registrations.TARGET_PROJECT] = [target_project_id]
         self._registrations.update(reg_id, fields)
+
+    def close_reply(self, reg_id: str, target_project_id: str | None) -> None:
+        """Ответ дилера на запрос — закрыть вместе с исходной заявкой.
+
+        Есть проект — принимаем в него (бот перенесёт данные, дилеру не пишет); нет — снимаем с проверки.
+        """
+        if target_project_id:
+            self.set_decision(reg_id, "Accept — merge into Target Project", None, target_project_id)
+        else:
+            self._registrations.update(reg_id, {Registrations.REG_STATUS: "Cancelled"})
 
     def create_project(self, name: str) -> str:
         rec = self._projects.create({Projects.NAME: name, Projects.STATUS: "Active"})

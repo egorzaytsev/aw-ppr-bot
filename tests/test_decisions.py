@@ -20,7 +20,8 @@ def reg(decision="Accept", rtype="New — Notification", note=None, status="PEND
 def test_notification_reports_registered_without_names():
     pl = plan(reg(), {**FULL, P.REGISTERED: [OTHER1], P.PRE_REGISTERED: [OTHER2]})
     assert pl.project_updates == {P.NOTIFIED: [DEALER]}
-    assert "Уведомление по объекту «Petrovitch Office» принято." in pl.dealer_text
+    assert ("Уведомление о плейсменте по объекту «Петрович — офис» (в базе — Petrovitch Office) принято."
+            in pl.dealer_text)
     assert "есть зарегистрированный партнёр" in pl.dealer_text and "recOTHER" not in pl.dealer_text
     assert pl.registration_updates[R.REG_STATUS] == "Notification"
     assert pl.registration_updates[R.BOT_PROCESSED] == "done:Accept"
@@ -62,7 +63,7 @@ def test_registration_needs_quotation_and_single_slot():
     pl = plan(reg(rtype="Upgrade — Registration"), with_q)
     assert pl.project_updates[P.REGISTERED] == [DEALER]
     assert pl.project_updates[P.PRE_REGISTERED] == [OTHER1]
-    assert "Регистрация по объекту «Petrovitch Office» подтверждена." in pl.dealer_text
+    assert "Регистрация плейсмента по объекту «Петрович — офис» (в базе — Petrovitch Office) подтверждена." in pl.dealer_text
     taken = plan(reg(rtype="Upgrade — Registration"), {**with_q, P.REGISTERED: [OTHER2]})
     assert taken.blocked and "уже есть Registered" in taken.admin_text
 
@@ -155,3 +156,10 @@ def test_info_update_moves_fields_without_status():
 def test_won_lost_do_not_touch_project():
     r = _with_payload(reg(rtype="Update — Won"), {"Contact Level": "Declared"})
     assert plan(r, {P.NAME: "X"}).project_updates == {}
+
+
+
+def test_accepted_reply_is_silent_for_dealer():
+    r = _with_payload(reg(rtype="Update — info only"), {"Dealer News": "Именно так", "In Reply To": "recORIG"})
+    pl = plan(r, {P.NAME: "PAO Simvol"})
+    assert pl.dealer_text is None and pl.registration_updates[R.BOT_PROCESSED] == "done:Accept"
