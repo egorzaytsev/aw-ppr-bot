@@ -20,7 +20,7 @@ def reg(decision="Accept", rtype="New — Notification", note=None, status="PEND
 def test_notification_reports_registered_without_names():
     pl = plan(reg(), {**FULL, P.REGISTERED: [OTHER1], P.PRE_REGISTERED: [OTHER2]})
     assert pl.project_updates == {P.NOTIFIED: [DEALER]}
-    assert ("Уведомление о плейсменте по объекту «Петрович — офис» (в базе — Petrovitch Office) принято."
+    assert ("По запросу «Петрович — офис» (в базе — Petrovitch Office) установлен статус: <b>уведомление</b>."
             in pl.dealer_text)
     assert "есть зарегистрированный партнёр" in pl.dealer_text and "recOTHER" not in pl.dealer_text
     assert pl.registration_updates[R.REG_STATUS] == "Notification"
@@ -63,7 +63,7 @@ def test_registration_needs_quotation_and_single_slot():
     pl = plan(reg(rtype="Upgrade — Registration"), with_q)
     assert pl.project_updates[P.REGISTERED] == [DEALER]
     assert pl.project_updates[P.PRE_REGISTERED] == [OTHER1]
-    assert "Регистрация плейсмента по объекту «Петрович — офис» (в базе — Petrovitch Office) подтверждена." in pl.dealer_text
+    assert "установлен статус: <b>регистрация</b>." in pl.dealer_text
     taken = plan(reg(rtype="Upgrade — Registration"), {**with_q, P.REGISTERED: [OTHER2]})
     assert taken.blocked and "уже есть Registered" in taken.admin_text
 
@@ -82,7 +82,7 @@ def test_decline_and_need_info_need_note():
     assert plan(reg("Decline"), None).blocked
     pl = plan(reg("Decline", note="Объект уже зарегистрирован"), None)
     assert pl.registration_updates[R.REG_STATUS] == "Declined"
-    assert "решение отрицательное" in pl.dealer_text and "Объект уже зарегистрирован" in pl.dealer_text
+    assert "По запросу «Петрович — офис»: отказ." in pl.dealer_text and "Объект уже зарегистрирован" in pl.dealer_text
     pl = plan(reg("Need more info", note="Пришлите планировки"), None)
     assert "нужна дополнительная информация" in pl.dealer_text and R.REG_STATUS not in pl.registration_updates
 

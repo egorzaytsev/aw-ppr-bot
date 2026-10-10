@@ -187,11 +187,11 @@ def plan(reg: dict, project: dict | None) -> Plan:
         if decision == Decision.DECLINE:
             return Plan(
                 registration_updates={**done, Registrations.REG_STATUS: RegStatus.DECLINED},
-                dealer_text=f"По заявке «{escape(dealer_name)}» решение отрицательное.{_note(reg)}",
+                dealer_text=f"По запросу «{escape(dealer_name)}»: отказ.{_note(reg)}",
             )
         return Plan(
             registration_updates=done,
-            dealer_text=f"По заявке «{escape(dealer_name)}» нужна дополнительная информация.{_note(reg)}",
+            dealer_text=f"По запросу «{escape(dealer_name)}» нужна дополнительная информация.{_note(reg)}",
             reply_button=True,
         )
 
@@ -216,14 +216,14 @@ def plan(reg: dict, project: dict | None) -> Plan:
     if request_type in (RequestType.UPDATE_WON, RequestType.UPDATE_LOST):
         return Plan(
             registration_updates=done,
-            dealer_text=f"По объекту {obj} информацию приняли.{_note(reg)}",
+            dealer_text=f"По запросу {obj} информацию приняли.{_note(reg)}",
         )
     moved, provided = transfers(reg, project)
     if request_type == RequestType.UPDATE_INFO:
         return Plan(
             project_updates=moved,
             registration_updates=done,
-            dealer_text=None if is_reply else f"Новость по объекту {obj} приняли и внесли в проект.{_note(reg)}",
+            dealer_text=None if is_reply else f"По запросу {obj} информацию приняли и внесли в проект.{_note(reg)}",
             transferred=_names(moved),
         )
 
@@ -283,18 +283,18 @@ def plan(reg: dict, project: dict | None) -> Plan:
 
     # Ответ дилеру — без имён других партнёров
     if status == PPR_NOTIFIED:
-        text = f"Уведомление о плейсменте по объекту {obj} принято."
+        text = f"По запросу {obj} установлен статус: <b>уведомление</b>."
         if others_registered:
             text += "\nНа проекте есть зарегистрированный партнёр."
         elif others_pre:
             text += "\nНа проекте есть предрегистрация другого партнёра."
     elif status == PPR_PRE:
-        text = (f"Предрегистрация плейсмента по объекту {obj} подтверждена.\n"
+        text = (f"По запросу {obj} установлен статус: <b>предрегистрация</b>.\n"
                 f"Вы {pre.index(dealer) + 1}-й из {len(pre)} в предрегистрации.")
         if others_registered:
             text += "\nНа проекте есть зарегистрированный партнёр."
     else:
-        text = f"Регистрация плейсмента по объекту {obj} подтверждена."
+        text = f"По запросу {obj} установлен статус: <b>регистрация</b>."
 
     reg_updates = dict(done)
     if reg_status != status:
