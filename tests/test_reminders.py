@@ -31,6 +31,11 @@ def test_stale_news_and_gaps_titles():
         del f[k]
     it = reminders.project_item(proj("notified", None, f), TODAY, date(2026, 9, 15))
     assert it.reasons["gaps"] == "Адрес, Уровень контакта, Материалы"
+    f2 = dict(f)
+    del f2[P.SPECIFIER]
+    del f2[P.EXPECTED_ORDER_DATE]
+    it2 = reminders.project_item(proj("notified", None, f2), TODAY, date(2026, 10, 1))
+    assert it2.reasons["gaps"].== "Адрес, Архбюро, ГАП и ещё 3"
     assert it.reasons["stale"] == "последняя 15.09"
 
 

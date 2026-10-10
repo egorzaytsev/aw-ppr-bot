@@ -731,6 +731,46 @@ async def _process_decisions(app: Application) -> None:
 REMINDERS_INTERVAL = 600  # секунд между проверками
 
 
+async def _build_digest(repo: AirtableRepo, companies: list[str], today: date):
+    """(текст, кнопки, пункты) напоминания для компаний человека; None — напоминать нечего."""
+    projects = _sorted(await asyncio.to_thread(repo.dealer_projects, companies))
+    if not projects:
+        return None
+    news = await asyncio.to_thread(repo.last_news_by_project, companies)
+    items = [
+        it for p in projects
+        if (it := reminders.project_item(p, today, date.fromisoformat(news[p.record_id]) if p.record_id in news else None))
+    ]
+    if not items:
+        return None
+    buttons = [[(f"Открыть: {it.name[:40]}", f"{CB_PICK}{MODE_MY}:{it.project_id}")] for it in items[:PAGE_SIZE]]
+    return reminders.digest_text(items), buttons, items
+
+
+async def cmd_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Админ: /reminder — своё напоминание сейчас; /reminder username — что получил бы человек."""
+    if not admin.is_admin(update, ctx):
+        return
+    repo = _repo(ctx)
+    if ctx.args:
+        person = await asyncio.to_thread(repo.find_by_username, ctx.args[0])
+        if not person:
+            await update.effective_chat.send_message(f"🛠 Не нашёл @{escape(ctx.args[0].lstrip('@'))} в People.")
+            return
+        header = f"🛠 Так выглядело бы напоминание для {escape(person.name)} (ему не отправлено):\n\n"
+    else:
+        person = await _identify(update, ctx)
+        header = ""
+    if not person:
+        return
+    digest = await _build_digest(repo, person.company_ids, datetime.now(VALENCIA).date())
+    if not digest:
+        await update.effective_chat.send_message("🛠 Напоминать нечего: по проектам всё в порядке.")
+        return
+    text, buttons, _ = digest
+    await update.effective_chat.send_message(header + text, parse_mode=ParseMode.HTML, reply_markup=_markup(buttons))
+
+
 async def process_reminders(app: Application) -> None:
     repo: AirtableRepo = app.bot_data["repo"]
     checked: dict = app.bot_data.setdefault("reminders_checked", {})  # кого уже проверили сегодня
@@ -743,20 +783,12 @@ async def process_reminders(app: Application) -> None:
         checked[rec["id"]] = today
         if not reminders.due(f.get(People.LAST_REMINDER), today):
             continue
-        companies = f.get(People.COMPANY) or []
-        projects = _sorted(await asyncio.to_thread(repo.dealer_projects, companies))
-        if not projects:
+        digest = await _build_digest(repo, f.get(People.COMPANY) or [], today)
+        if not digest:
             continue
-        news = await asyncio.to_thread(repo.last_news_by_project, companies)
-        items = [
-            it for p in projects
-            if (it := reminders.project_item(p, today, date.fromisoformat(news[p.record_id]) if p.record_id in news else None))
-        ]
-        if not items:
-            continue
-        buttons = [[(f"Открыть: {it.name[:40]}", f"{CB_PICK}{MODE_MY}:{it.project_id}")] for it in items[:PAGE_SIZE]]
+        text, buttons, items = digest
         try:
-            await app.bot.send_message(f[People.TELEGRAM_CHAT_ID], reminders.digest_text(items),
+            await app.bot.send_message(f[People.TELEGRAM_CHAT_ID], text,
                                        parse_mode=ParseMode.HTML, reply_markup=_markup(buttons))
         except Exception:
             log.exception("Не удалось отправить напоминание %s", rec["id"])
@@ -833,6 +865,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("cancel", cmd_cancel, filters=private))
     app.add_handler(CommandHandler("time", cmd_time, filters=private))
     app.add_handler(CommandHandler("inbox", admin.cmd_inbox, filters=private))
+    app.add_handler(CommandHandler("reminder", cmd_reminder, filters=private))
     app.add_handler(MessageHandler(private & (filters.VOICE | filters.AUDIO), on_voice))
     app.add_handler(MessageHandler(private & (filters.Document.ALL | filters.PHOTO), on_file))
     app.add_handler(MessageHandler(private & filters.TEXT & ~filters.COMMAND, on_text))

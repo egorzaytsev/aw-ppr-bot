@@ -18,7 +18,7 @@ from .scenarios.update_project import MATERIAL_KEYS, gaps_for
 EXPIRY_DAYS = 14
 STALE_DAYS = 21
 REMIND_EVERY_DAYS = 7
-MAX_GAPS = 4
+MAX_GAPS = 3
 
 # Страна человека (People.Country) → часовой пояс; по умолчанию — Москва
 PERSON_TZ = {
