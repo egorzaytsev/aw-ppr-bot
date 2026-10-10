@@ -52,6 +52,7 @@ class Projects:
     DOSSIER_FILES = "fldlZAQm173wqC7hh"
     QUOTATION = "fld2eKHFMhU73fxS5"
     DEALER = "fldpdzk9bY1jFMPeJ"
+    PROJECT_LOG = "fldC3PJr8sT9iZ8Rg"
     NOTIFIED = "fldiKRdTlngI6AXK8"
     PRE_REGISTERED = "fldSXoNH5rwWCYaWT"
     REGISTERED = "fld75C5ApwGwVCT5N"
@@ -74,6 +75,9 @@ class Registrations:
     DECISION_NOTE = "fldL7Ncl5Ess8jsqQ"
     BOT_PROCESSED = "fld46XTTXBfX30llt"
     ANALYSIS = "fldZk7APhOh9p3rsx"
+    QUOTE_TERMS = "fld2FPH6Neqps34Ca"
+    QUOTE_NO = "fldrzhovqmXoGiEFp"
+    QUOTE_VALID = "fldn9Rvq4Y5WufPwJ"
 
 
 class RegStatus:
@@ -101,3 +105,4 @@ class RequestType:
     UPDATE_INFO = "Update — info only"
     UPDATE_WON = "Update — Won"
     UPDATE_LOST = "Update — Lost"
+    QUOTE_SIMPLIFIED = "Quotation — Simplified"

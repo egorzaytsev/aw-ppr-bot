@@ -22,3 +22,19 @@ def test_reply_card_shows_answer():
     assert "«Зеленый в крапинку»" in card and "👤 Lola Sapaeva" in card
     card2 = request_card(reg, "recY", "Lola Sapaeva", dealer="STATIO")
     assert "👤 <b>STATIO</b> · Lola Sapaeva" in card2
+
+
+def test_admin_summary_is_short_and_clear():
+    from bot.decisions import Plan
+    from bot.main import _admin_summary
+    reg = {R.DECISION: "Accept", R.DEALER_PROJECT_NAME: "ООО «Айкон Тайерс» — VIP этаж"}
+    pl = Plan(status_label="уведомление", transferred=["Object Name"], project_name="IkonTyres VIP")
+    text = _admin_summary(reg, pl, "IkonTyres VIP", True, "STATIO", True,
+                          ["ООО «Айкон Тайерс» (клиент, новая)", "HUBARCH (бюро)"], None)
+    assert text.splitlines() == [
+        "🛠 <b>✅ Принято · IkonTyres VIP</b>",
+        "• STATIO: статус <b>уведомление</b>",
+        "• Проект создан",
+        "• Компании: ООО «Айкон Тайерс» (клиент, новая), HUBARCH (бюро)",
+        "• Дилеру отправлено",
+    ]

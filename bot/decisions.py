@@ -63,6 +63,7 @@ _PAYLOAD_TO_PROJECT = (
     ("Contact Level", Projects.CONTACT_LEVEL),
     ("Parallel Registrations", Projects.PARALLEL_REGISTRATIONS),
     ("Quotation / Proforma №", Projects.QUOTATION),
+    ("PPR Track", Projects.PPR_TRACK),
 )
 # Ключи Payload с материалами — это Dossier Files
 DOSSIER_KEYS = (
@@ -184,6 +185,13 @@ class Plan:
     reply_button: bool = False
     # Связи с Companies, которые применяющий код найдёт/создаст (см. company_links)
     links: list[dict] = field(default_factory=list)
+    # Строки заявки для Project Log (дописываются с датой и дилером)
+    log_lines: list[str] = field(default_factory=list)
+    # Для сводки админу
+    status_label: str | None = None
+    project_name: str | None = None
+    # Запрос квотации по упрощённой схеме — условия считает применяющий код
+    quote: bool = False
 
 
 def _note(reg: dict) -> str:
@@ -240,6 +248,18 @@ def plan(reg: dict, project: dict | None) -> Plan:
     # Ответ на запрос принимается вместе с исходной заявкой — дилеру второй раз не пишем
     is_reply = bool(payload_of(reg).get("In Reply To"))
 
+    log_lines = [ln for ln in str(payload_of(reg).get("Project Log") or "").splitlines() if ln.strip()]
+
+    # Запрос квотации по упрощённой схеме: статус не меняется, спецификация — в досье
+    if request_type == RequestType.QUOTE_SIMPLIFIED:
+        moved, _ = transfers(reg, project)
+        return Plan(
+            project_updates=moved,
+            registration_updates=done,
+            dealer_text=f"По запросу {obj} спецификацию передали на квотацию.{_note(reg)}",
+            log_lines=log_lines, project_name=project_name, quote=True,
+        )
+
     # Выигрыш и проигрыш одного дилера — не повод менять проект: только ответ
     if request_type in (RequestType.UPDATE_WON, RequestType.UPDATE_LOST):
         return Plan(
@@ -253,6 +273,8 @@ def plan(reg: dict, project: dict | None) -> Plan:
         return Plan(
             project_updates=moved,
             links=links,
+            log_lines=log_lines,
+            project_name=project_name,
             registration_updates=done,
             dealer_text=None if is_reply else f"По запросу {obj} информацию приняли и внесли в проект.{_note(reg)}",
             transferred=_names(moved),
@@ -334,6 +356,9 @@ def plan(reg: dict, project: dict | None) -> Plan:
         project_updates=updates,
         registration_updates=reg_updates,
         links=links,
+        log_lines=log_lines,
+        status_label={PPR_NOTIFIED: "уведомление", PPR_PRE: "предрегистрация", PPR_REG: "регистрация"}[status],
+        project_name=project_name,
         transferred=_names(moved),
         dealer_text=text + _note(reg),
         broadcast_companies=broadcast,

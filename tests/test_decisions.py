@@ -179,3 +179,20 @@ def test_own_design_links_dealer_as_specifier_and_keeps_filled():
     r = _with_payload(reg(), {"End Client": "X", "Specifier": "Собственная проработка"})
     pl = plan(r, dict(FULL, **{P.SPECIFIER: [], P.END_CLIENT: ["recC"], P.DEALER: [DEALER]}))
     assert pl.links == [{"field": P.SPECIFIER, "company_id": DEALER}]
+
+
+def test_quote_request_accept():
+    r = _with_payload(reg(rtype="Quotation — Simplified"), {"Project Log": "Запрос квотации по упрощённой схеме"},
+                      files=[{"id": "a1", "url": "https://air/spec.pdf", "filename": "spec.pdf"}])
+    pl = plan(r, {P.NAME: "IkonTyres VIP"})
+    assert pl.quote and not pl.blocked and pl.status_label is None
+    assert "спецификацию передали на квотацию" in pl.dealer_text
+    assert pl.project_updates[P.DOSSIER_FILES] == [{"url": "https://air/spec.pdf", "filename": "spec.pdf"}]
+    assert pl.log_lines == ["Запрос квотации по упрощённой схеме"]
+
+
+def test_ppr_track_and_log_lines_transferred():
+    r = _with_payload(reg(), {"PPR Track": "Simplified (<30k)", "Project Log": "Площадь: 100 м²\nОбъём: 1 €"})
+    pl = plan(r, {P.NAME: "X"})
+    assert pl.project_updates[P.PPR_TRACK] == "Simplified (<30k)"
+    assert pl.log_lines == ["Площадь: 100 м²", "Объём: 1 €"] and pl.status_label == "уведомление"

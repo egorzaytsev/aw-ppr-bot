@@ -67,3 +67,10 @@ def test_digest_grouped_by_reason():
     assert text.count("• Petrovitch") == 2 and "• JTI Saint Petersburg — новостей ещё не было" in text
     only_stale = reminders.digest_text([reminders.Item("p", "X", {"stale": "последняя 01.09"})])
     assert "Срок подходит" not in only_stale and "Не хватает" not in only_stale
+
+
+def test_quote_validity_reminder():
+    it = reminders.project_item(proj("notified", None, track="Simplified (<30k)"), TODAY, date(2026, 10, 1),
+                                quote_valid="2026-10-20")
+    assert it.reasons == {"expiry": "квотация до 20.10.2026, осталось 8 дн."}
+    assert reminders.project_item(proj("notified", None), TODAY, date(2026, 10, 1), "2026-12-31") is None

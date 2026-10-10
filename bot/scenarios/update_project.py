@@ -98,6 +98,45 @@ INFO_REPLY = Scenario(
 )
 
 
+# ---------- Запрос квотации (упрощённая схема, до 30 000 €) ----------
+
+def _quote_derive(a: dict) -> dict:
+    out: dict = {"Dealer Project Name": _target_name(a)}
+    line = "Запрос квотации по упрощённой схеме — спецификация во вложениях"
+    if a.get("Quote Comment"):
+        line += f". Комментарий дилера: {a['Quote Comment']}"
+    out["Project Log"] = line
+    return out
+
+
+QUOTE = Scenario(
+    code="project_quote",
+    title="Запросить квотацию",
+    questions=(
+        Question(
+            key="Extra Materials",
+            label="Спецификация",
+            prompt=("Пришли спецификацию для квотации — файлом или ссылкой. "
+                    "Файлы по одному, больше 5 МБ — ссылкой. Когда закончишь — «Готово»."),
+            kind="files",
+        ),
+        Question(
+            key="Quote Comment",
+            label="Комментарий",
+            prompt="Комментарий к запросу: сроки, количество, особые условия.",
+            optional=True,
+        ),
+    ),
+    phase_titles={1: "Квотация"},
+    stage=lambda p, a, m: (RequestType.QUOTE_SIMPLIFIED, "запрос квотации"),
+    derive=_quote_derive,
+    verdict=lambda a, s, m: _plain_verdict(s),
+    project_name_key="Dealer Project Name",
+    done_text="Спецификацию получил — передал Егору на квотацию.",
+    auto_submit=True,
+)
+
+
 # ---------- Выигран ----------
 
 WON = Scenario(

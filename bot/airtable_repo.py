@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from pyairtable import Api
 
-from .airtable_ids import Companies, People, Projects, Registrations, RegStatus
+from .airtable_ids import Companies, People, Projects, Registrations, RegStatus, RequestType
 from .state import DialogState
 
 log = logging.getLogger(__name__)
@@ -424,3 +424,49 @@ class AirtableRepo:
 
     def clear_awaiting(self, reg_id: str) -> None:
         self._registrations.update(reg_id, {Registrations.BOT_PROCESSED: ""})
+
+    # ---------- квотации по упрощённой схеме ----------
+
+    def quote_requests(self, project_id: str) -> list[dict]:
+        """Принятые запросы квотации по проекту: [{"id", "dealers", "valid", "no", "at"}], старые первыми."""
+        formula = (f"AND({{{Registrations.REQUEST_TYPE}}}={_quote(RequestType.QUOTE_SIMPLIFIED)}, "
+                   f"LEFT({{{Registrations.BOT_PROCESSED}}}, 5)='done:')")
+        recs = self._registrations.all(
+            formula=formula,
+            fields=[Registrations.TARGET_PROJECT, Registrations.DEALER, Registrations.QUOTE_VALID,
+                    Registrations.QUOTE_NO, Registrations.SUBMITTED_AT],
+            use_field_ids=True,
+        )
+        out = [{
+            "id": r["id"], "dealers": r["fields"].get(Registrations.DEALER) or [],
+            "valid": r["fields"].get(Registrations.QUOTE_VALID), "no": r["fields"].get(Registrations.QUOTE_NO),
+            "at": r["fields"].get(Registrations.SUBMITTED_AT) or "",
+        } for r in recs if project_id in (r["fields"].get(Registrations.TARGET_PROJECT) or [])]
+        return sorted(out, key=lambda q: q["at"])
+
+    def dealer_quotes(self, company_ids: list[str]) -> dict:
+        """Последний принятый запрос квотации компании по каждому проекту: {project: {...}}."""
+        reg_ids = [rid for f in self._company_fields(company_ids) for rid in f.get(Companies.REGISTRATIONS, [])]
+        out: dict = {}
+        for i in range(0, len(reg_ids), 50):
+            recs = self._registrations.all(
+                formula=(f"AND({_ids_formula(reg_ids[i:i + 50])}, "
+                         f"{{{Registrations.REQUEST_TYPE}}}={_quote(RequestType.QUOTE_SIMPLIFIED)})"),
+                fields=[Registrations.TARGET_PROJECT, Registrations.QUOTE_VALID, Registrations.QUOTE_NO,
+                        Registrations.SUBMITTED_AT, Registrations.BOT_PROCESSED],
+                use_field_ids=True,
+            )
+            for r in recs:
+                f = r["fields"]
+                q = {"valid": f.get(Registrations.QUOTE_VALID), "no": f.get(Registrations.QUOTE_NO),
+                     "at": (f.get(Registrations.SUBMITTED_AT) or "")[:10],
+                     "accepted": (f.get(Registrations.BOT_PROCESSED) or "").startswith("done:")}
+                for pid in f.get(Registrations.TARGET_PROJECT) or []:
+                    if q["at"] >= out.get(pid, {}).get("at", ""):
+                        out[pid] = q
+        return out
+
+    def append_project_log(self, project_id: str, existing: str | None, header: str, lines: list[str]) -> None:
+        block = header + "\n" + "\n".join(lines)
+        text = f"{existing.rstrip()}\n\n{block}" if (existing or "").strip() else block
+        self._projects.update(project_id, {Projects.PROJECT_LOG: text})

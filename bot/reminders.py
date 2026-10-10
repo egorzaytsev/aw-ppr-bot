@@ -82,15 +82,22 @@ def _gap_titles(keys: list[str]) -> list[str]:
     return out
 
 
-def project_item(project, today: date, last_news: date | None) -> Item | None:
+def project_item(project, today: date, last_news: date | None, quote_valid: str | None = None) -> Item | None:
     """Что напомнить по одному проекту (DealerProject); None — напоминать нечего."""
     reasons: dict = {}
+    if quote_valid:
+        until = date.fromisoformat(quote_valid[:10])
+        days = (until - today).days
+        if days <= EXPIRY_DAYS:
+            left = f"осталось {days} дн." if days >= 0 else "срок истёк"
+            reasons[EXPIRY] = f"квотация до {until:%d.%m.%Y}, {left}"
     if project.ppr_status in STATUS_NAME and project.status_expiry:
         expiry = date.fromisoformat(project.status_expiry[:10])
         days = (expiry - today).days
         if days <= EXPIRY_DAYS:
             left = f"осталось {days} дн." if days >= 0 else "срок истёк"
-            reasons[EXPIRY] = f"{STATUS_NAME[project.ppr_status]} до {expiry:%d.%m.%Y}, {left}"
+            status_line = f"{STATUS_NAME[project.ppr_status]} до {expiry:%d.%m.%Y}, {left}"
+            reasons[EXPIRY] = f"{status_line}; {reasons[EXPIRY]}" if EXPIRY in reasons else status_line
     keys, _ = gaps_for(project.fields, project.ppr_status)
     if project.track == "Simplified (<30k)":
         keys = [k for k in keys if k in _PHASE1]  # Simplified: дальше уведомления не идут

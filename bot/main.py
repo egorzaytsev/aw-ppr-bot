@@ -30,7 +30,7 @@ from .airtable_repo import (
     PPR_NOTIFIED, PPR_PRE_REGISTERED, PPR_REGISTERED, AirtableRepo, DealerProject, Person,
 )
 from .config import load_settings
-from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, WON
+from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, QUOTE, WON
 from .scenarios.update_project import fill_preset
 from .slots import VALENCIA
 from .voice import Transcriber
@@ -76,7 +76,8 @@ STAGE_LABELS = {
     "Architect selection": "выбор архитектора", "Concept": "концепция", "Design": "проектирование",
     "Tender": "тендер", "Procurement": "закупка",
 }
-CARD_ACTIONS = {"fill": FILL, "news": NEWS, "won": WON, "lost": LOST}
+CARD_ACTIONS = {"fill": FILL, "news": NEWS, "won": WON, "lost": LOST, "quote": QUOTE}
+SIMPLIFIED = "Simplified (<30k)"
 REMINDER_SLOTS = ("08:00–11:00", "11:00–14:00", "14:00–17:00", "17:00–20:00")
 WELCOME_TEXT = (
     "Привет! Я — Пепе, бот программы регистрации продакт плейсмента Andreu World. Пепе — это PP, product placement.\n\n"
@@ -477,11 +478,20 @@ async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Per
     quotation = p.fields.get(Projects.QUOTATION)
     if quotation:
         lines.append(f"Квотация: {escape(str(quotation))}")
+    if p.track == SIMPLIFIED:
+        lines.append("Схема: упрощённая — объём до 30 000 € по прайсу")
+        q = (await asyncio.to_thread(_repo(ctx).dealer_quotes, person.company_ids)).get(p.record_id)
+        if q and q.get("valid"):
+            no = f"№ {escape(str(q['no']))}, " if q.get("no") else ""
+            lines.append(f"Квотация: {no}действует до {_date(q['valid'])}")
+        elif q:
+            lines.append(f"Квотация: запрошена {_date(q['at'])}" + ("" if q.get("accepted") else ", на проверке"))
     if days is not None and days <= EXPIRY_WARNING_DAYS:
         lines += ["", "Срок подходит к концу. Если по проекту есть прогресс — нажми «Сообщить новость», "
                       "чтобы запросить продление."]
     pid = p.record_id
     buttons = [
+        *([[("💶 Запросить квотацию", f"{CB_CARD}quote:{pid}")]] if p.track == SIMPLIFIED else []),
         [("Дополнить материалы", f"{CB_CARD}fill:{pid}")],
         [("Сообщить новость", f"{CB_CARD}news:{pid}")],
         [("Выигран", f"{CB_CARD}won:{pid}"), ("Проиграл", f"{CB_CARD}lost:{pid}")],
@@ -500,6 +510,9 @@ async def _start_action(
     p = await _own_project(ctx, person, project_id)
     if not p:
         await update.effective_chat.send_message("Проект не найден. Открой список заново.")
+        return
+    if action == "quote" and p.track != SIMPLIFIED:
+        await update.effective_chat.send_message("Квотация через бота — только для проектов до 30 000 € по прайсу.")
         return
     target = {"id": p.record_id, "name": p.name}
     preset = fill_preset(target, p.fields, p.ppr_status) if action == "fill" else {"_target": target}
@@ -690,9 +703,53 @@ async def process_decisions(app: Application) -> None:
         await _process_decisions(app)
 
 
+LINK_ROLE = {Projects.END_CLIENT: "клиент", Projects.SPECIFIER: "бюро", Projects.DEALER: "дилер"}
+DECISION_HEAD = {
+    "Accept": "✅ Принято", "Accept — merge into Target Project": "✅ Принято",
+    "Decline": "❌ Отказ", "Need more info": "❓ Запрошена информация",
+}
+
+
+def _admin_summary(reg: dict, pl, project_name: str, created: bool, dealer: str, sent: bool,
+                   companies: list[str], terms: str | None) -> str:
+    """Итог решения для админа: что сделано, без лишнего."""
+    decision = reg.get(Registrations.DECISION) or ""
+    head = DECISION_HEAD.get(decision, decision)
+    title = project_name if decision.startswith("Accept") else (reg.get(Registrations.DEALER_PROJECT_NAME) or "")
+    lines = [f"🛠 <b>{head} · {escape(title)}</b>"]
+    if pl.status_label:
+        lines.append(f"• {escape(dealer)}: статус <b>{pl.status_label}</b>")
+    if pl.quote:
+        lines.append("• Запрос квотации передан в работу")
+        if terms:
+            lines.append(f"• Условия: <b>{escape(terms)}</b>")
+    if decision.startswith("Accept"):
+        if created:
+            lines.append("• Проект создан")
+        elif pl.transferred or pl.log_lines:
+            lines.append("• Проект дополнен данными из заявки")
+        if companies:
+            lines.append("• Компании: " + escape(", ".join(companies)))
+    lines.append("• Дилеру отправлено" if sent else "• Дилеру не отправлено — нет Telegram")
+    return "\n".join(lines)
+
+
+async def _quote_terms(repo: AirtableRepo, project_id: str, reg_id: str, dealers: list[str]) -> tuple:
+    """Условия квотации по порядку запросов: (значение поля, пояснение для админа)."""
+    others = [q for q in await asyncio.to_thread(repo.quote_requests, project_id)
+              if q["id"] != reg_id and not set(q["dealers"]) & set(dealers)]
+    if not others:
+        return "55% — первый запрос", "55% — первый запрос по проекту"
+    first = others[0]
+    who = ", ".join([await asyncio.to_thread(repo.company_name, c) for c in first["dealers"]]) or "другой партнёр"
+    until = f", квотация до {_date(first['valid'])}" if first.get("valid") else ""
+    return "40% — не первый", f"40% — первым запросил {who}{until}"
+
+
 async def _process_decisions(app: Application) -> None:
     repo: AirtableRepo = app.bot_data["repo"]
     admin_chat = app.bot_data.get("admin_chat_id")
+    created_projects: set = app.bot_data.setdefault("created_projects", set())
     for rec in await asyncio.to_thread(repo.decisions_to_process):
         reg = rec["fields"]
         target = reg.get(Registrations.TARGET_PROJECT) or []
@@ -700,7 +757,9 @@ async def _process_decisions(app: Application) -> None:
         pl = decision_plan(reg, project)
         if not pl.registration_updates:
             continue
-        link_notes: list[str] = []
+        dealers = reg.get(Registrations.DEALER) or []
+        dealer_name = ", ".join([await asyncio.to_thread(repo.company_name, c) for c in dealers]) or "дилер"
+        company_notes: list[str] = []
         if pl.project_updates or pl.links:
             updates = {
                 k: (datetime.now(VALENCIA).date().isoformat() if v == "__today__" else v)
@@ -718,16 +777,22 @@ async def _process_decisions(app: Application) -> None:
                     updates[link["field"]] = list((project or {}).get(link["field"]) or []) + [cid]
                 else:
                     updates[link["field"]] = [cid]
-                label = {Projects.END_CLIENT: "End Client", Projects.SPECIFIER: "Specifier",
-                         Projects.DEALER: "DEALER"}[link["field"]]
                 cname = await asyncio.to_thread(repo.company_name, cid)
-                link_notes.append(f"{label} → {cname}" + (" (новая компания)" if created else ""))
+                company_notes.append(f"{cname} ({LINK_ROLE[link['field']]}{', новая' if created else ''})")
             await asyncio.to_thread(repo.update_project, target[0], updates)
             # Текст дилеру — по фактическому состоянию проекта после записи (место в очереди, Registered)
             fresh = await asyncio.to_thread(repo.project_fields, target[0])
             recheck = decision_plan(reg, fresh)
             if recheck.dealer_text and not recheck.blocked:
                 pl.dealer_text = recheck.dealer_text
+        if pl.log_lines and target:
+            header = f"{datetime.now(VALENCIA):%d.%m.%Y} · {dealer_name} (заявка бота):"
+            await asyncio.to_thread(repo.append_project_log, target[0],
+                                    (project or {}).get(Projects.PROJECT_LOG), header, pl.log_lines)
+        terms_note = None
+        if pl.quote and target:
+            value, terms_note = await _quote_terms(repo, target[0], rec["id"], dealers)
+            pl.registration_updates[Registrations.QUOTE_TERMS] = value
         # Отмечаем до рассылки — чтобы сбой отправки не повторил изменения
         await asyncio.to_thread(repo.update_registration, rec["id"], pl.registration_updates)
         log.info("Решение по %s: %s", rec["id"], pl.registration_updates.get(Registrations.BOT_PROCESSED))
@@ -745,16 +810,11 @@ async def _process_decisions(app: Application) -> None:
             if pl.admin_text:
                 await _send_html(app.bot, admin_chat, pl.admin_text)
             elif pl.dealer_text and not pl.blocked:
-                name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
-                first_line = pl.dealer_text.split("\n")[0]
-                sent = "Дилеру ушло" if dealer_chats else "Дилеру не ушло (нет Telegram)"
-                moved = f"\nПеренесено в проект: {', '.join(pl.transferred)}." if pl.transferred else ""
-                if link_notes:
-                    moved += "\nСвязи: " + escape("; ".join(link_notes)) + "."
-                await _send_html(
-                    app.bot, admin_chat,
-                    f"🛠 ✓ «{name}»: {escape(reg.get(Registrations.DECISION) or '')}.\n{sent}: {first_line}{moved}",
-                )
+                created = bool(target) and target[0] in created_projects
+                created_projects.discard(target[0] if target else None)
+                await _send_html(app.bot, admin_chat, _admin_summary(
+                    reg, pl, pl.project_name or "", created, dealer_name, bool(dealer_chats),
+                    company_notes, terms_note))
 
 
 # ---------- напоминания ----------
@@ -768,9 +828,12 @@ async def _build_digest(repo: AirtableRepo, companies: list[str], today: date, n
     if not projects:
         return None
     news = await asyncio.to_thread(repo.last_news_by_project, companies)
+    quotes = await asyncio.to_thread(repo.dealer_quotes, companies)
     items = [
         it for p in projects
-        if (it := reminders.project_item(p, today, date.fromisoformat(news[p.record_id]) if p.record_id in news else None))
+        if (it := reminders.project_item(
+            p, today, date.fromisoformat(news[p.record_id]) if p.record_id in news else None,
+            (quotes.get(p.record_id) or {}).get("valid")))
     ]
     if not items:
         return None

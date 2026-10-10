@@ -82,6 +82,7 @@ def _title(rtype: str, payload: dict) -> str:
         "Update — info only": "📰 Новость по проекту",
         "Update — Won": "🏆 Дилер сообщает: выигран",
         "Update — Lost": "✖️ Дилер сообщает: проигран",
+        "Quotation — Simplified": "💶 Запрос квотации · упрощённая схема",
     }
     if rtype in special:
         return special[rtype]
@@ -327,10 +328,10 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         return True
     if action == ACTION_NEW:
         project_id = await asyncio.to_thread(repo.create_project, text)
+        ctx.bot_data.setdefault("created_projects", set()).add(project_id)  # для итога «Проект создан»
         await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT, "", project_id)
         if reply_id:
             await asyncio.to_thread(repo.close_reply, reply_id, project_id)
-        await chat.send_message(f"🛠 Проект «{escape(text)}» создан в Projects.", parse_mode=ParseMode.HTML)
     else:
         decision = Decision.DECLINE if action == ACTION_DECLINE else Decision.NEED_INFO
         if decision == Decision.NEED_INFO:
