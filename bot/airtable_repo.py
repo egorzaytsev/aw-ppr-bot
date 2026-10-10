@@ -220,7 +220,8 @@ class AirtableRepo:
         """Заявки с Decision, которые бот ещё не довёл до конца (done:<Decision>)."""
         formula = (
             f"AND({{{Registrations.DECISION}}}!='', "
-            f"{{{Registrations.BOT_PROCESSED}}}!=CONCATENATE('done:', {{{Registrations.DECISION}}}))"
+            f"{{{Registrations.BOT_PROCESSED}}}!=CONCATENATE('done:', {{{Registrations.DECISION}}}), "
+            f"LEFT({{{Registrations.BOT_PROCESSED}}}, 6)!='await:')"  # админ ещё вводит текст
         )
         return self._registrations.all(formula=formula, use_field_ids=True)
 
@@ -394,3 +395,32 @@ class AirtableRepo:
             return self._people.get(person_id, use_field_ids=True)["fields"].get(People.NAME, "")
         except Exception:
             return ""
+
+    # ---------- ввод админа, переживающий перезапуск ----------
+
+    AWAIT_TTL = 6 * 3600  # секунд: забытый ввод не подхватываем
+
+    def set_awaiting(self, reg_id: str, action: str, reply_id: str = "") -> None:
+        mark = f"await:{action}:{reply_id or '-'}:{int(time.time())}"
+        self._registrations.update(reg_id, {Registrations.BOT_PROCESSED: mark})
+
+    def find_awaiting(self) -> tuple | None:
+        """(действие, id заявки, id ответа) — последний незавершённый ввод админа."""
+        recs = self._registrations.all(
+            formula=f"LEFT({{{Registrations.BOT_PROCESSED}}}, 6)='await:'",
+            fields=[Registrations.BOT_PROCESSED], use_field_ids=True,
+        )
+        best = None
+        for r in recs:
+            parts = r["fields"][Registrations.BOT_PROCESSED].split(":")
+            if len(parts) < 4 or not parts[3].isdigit():
+                continue
+            ts = int(parts[3])
+            if time.time() - ts > self.AWAIT_TTL:
+                continue
+            if not best or ts > best[0]:
+                best = (ts, parts[1], r["id"], "" if parts[2] == "-" else parts[2])
+        return best[1:] if best else None
+
+    def clear_awaiting(self, reg_id: str) -> None:
+        self._registrations.update(reg_id, {Registrations.BOT_PROCESSED: ""})

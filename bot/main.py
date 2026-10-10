@@ -250,9 +250,14 @@ async def _handle_answer_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, te
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
     if text in (MENU_NEW, MENU_UPDATE, MENU_MY, MENU_START):
-        admin._pending(ctx).pop(update.effective_chat.id, None)  # нажал меню — ввод для админа отменён
-    elif await admin.on_admin_text(update, ctx, text):
+        await admin.drop_pending(update, ctx)  # нажал меню — ввод для админа отменён
+    elif await admin.on_admin_text(update, ctx, text, resume=False):
         return
+    elif admin.is_admin(update, ctx):
+        # Ожидание из Airtable подхватываем, только если у админа нет своего диалога «как дилер»
+        me = await _identify(update, ctx)
+        if me and not me.state and await admin.on_admin_text(update, ctx, text, resume=True):
+            return
     if text.lower() in (MENU_START.lower(), "start"):
         await cmd_start(update, ctx)
         return

@@ -33,6 +33,18 @@ def is_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
     return bool(admin) and update.effective_chat is not None and str(update.effective_chat.id) == str(admin)
 
 
+async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Админ нажал меню — незавершённый ввод отменяется (и в Airtable)."""
+    if not is_admin(update, ctx):
+        return
+    item = _pending(ctx).pop(update.effective_chat.id, None)
+    repo = ctx.bot_data["repo"]
+    if not item:
+        item = await asyncio.to_thread(repo.find_awaiting)
+    if item and item[0] != ACTION_REMIND_USER:
+        await asyncio.to_thread(repo.clear_awaiting, item[1])
+
+
 def _pending(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
     return ctx.bot_data.setdefault("admin_pending", {})
 
@@ -206,7 +218,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     pending = _pending(ctx)
 
     if action == ACTION_CANCEL:
-        pending.pop(chat.id, None)
+        await drop_pending(update, ctx)
         await chat.send_message("🛠 Отменено.")
         return
 
@@ -242,6 +254,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action in (ACTION_DECLINE, ACTION_INFO):
         pending[chat.id] = (action, reg_id, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id)
         what = "отказа" if action == ACTION_DECLINE else "запроса"
         await chat.send_message(
             f"🛠 «{name}»: напиши текст {what} — он уйдёт дилеру как есть.",
@@ -281,23 +294,29 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action == ACTION_NEW:
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id)
         await chat.send_message(
             f"🛠 «{name}»: напиши название нового проекта латиницей, как оно будет в Projects. "
             "Передумал — просто нажми меню внизу.",
         )
 
 
-async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str, resume: bool = True) -> bool:
     """Текст админа в ответ на вопрос бота. True — обработано, дальше не передавать."""
     if not is_admin(update, ctx):
         return False
     pending = _pending(ctx)
-    item = pending.pop(update.effective_chat.id, None)
-    if not item:
-        return False
-    action, reg_id, reply_id = item
     repo = ctx.bot_data["repo"]
+    item = pending.pop(update.effective_chat.id, None)
+    if not item and resume:
+        # Бот мог перезапуститься, пока админ печатал, — берём ожидание из Airtable
+        item = await asyncio.to_thread(repo.find_awaiting)
+        if not item:
+            return False
+    action, reg_id, reply_id = item
     chat = update.effective_chat
+    if action != ACTION_REMIND_USER:
+        await asyncio.to_thread(repo.clear_awaiting, reg_id)
     text = text.strip()
     if not text:
         pending[chat.id] = item
