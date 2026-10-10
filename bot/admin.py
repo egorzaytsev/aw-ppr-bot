@@ -50,21 +50,41 @@ def decision_markup(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> InlineKeyboa
     ])
 
 
-CARD_FIELDS = (
-    ("Dealer News", "Текст"), ("End Client", "Клиент"), ("Object Name", "Объект"), ("City", "Город"),
-    ("Project Stage", "Стадия"), ("Specifier", "Бюро"), ("Lead Architect", "ГАП"),
-    ("PL Volume", "Объём по прайсу, €"), ("Lost Reason", "Причина"), ("Order / Proforma №", "Заказ / проформа"),
-)
+REQUEST_LABELS = {
+    "New — Notification": "уведомление",
+    "New — Pre-registration": "предрегистрация",
+    "New — Registration": "регистрация",
+    "Upgrade — Pre-registration": "переход на предрегистрацию",
+    "Upgrade — Registration": "переход на регистрацию",
+}
+STAGE_LABELS = {
+    "Architect selection": "выбор архитектора", "Concept": "концепция", "Design": "проектирование",
+    "Tender": "тендер", "Procurement": "закупка",
+}
 
 
 def _title(rtype: str, payload: dict) -> str:
     if payload.get("In Reply To"):
         return "💬 Ответ на твой запрос"
-    return {
+    special = {
         "Update — info only": "📰 Новость по проекту",
         "Update — Won": "🏆 Дилер сообщает: выигран",
         "Update — Lost": "✖️ Дилер сообщает: проигран",
-    }.get(rtype, "Новая заявка")
+    }
+    if rtype in special:
+        return special[rtype]
+    return f"📥 Новая заявка · {REQUEST_LABELS.get(rtype, rtype)}"
+
+
+def _v(payload: dict, key: str) -> str:
+    value = payload.get(key)
+    return "" if value in (None, "") else escape(str(value))[:300]
+
+
+def _pair(*items: tuple) -> str | None:
+    """«Город: X · Стадия: Y» — только заполненные части."""
+    parts = [f"{label}: {value}" for label, value in items if value]
+    return " · ".join(parts) or None
 
 
 def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: str | None = None,
@@ -75,19 +95,37 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
         payload = json.loads(reg.get(Registrations.PAYLOAD) or "{}")
     except ValueError:
         payload = {}
-    head = f"🛠 {_title(rtype, payload)}: <b>{escape(name)}</b>"
-    lines = [head]
-    who = " · ".join(x for x in (dealer, author) if x)
-    if who:
-        lines.append(f"Дилер: <b>{escape(who)}</b>")
-    lines.append(escape(rtype))
-    for key, label in CARD_FIELDS:
-        if payload.get(key) not in (None, ""):
-            lines.append(f"{label}: {escape(str(payload[key]))[:300]}")
+
+    lines = [f"🛠 <b>{_title(rtype, payload)}</b>"]
+    if dealer or author:
+        who = f"<b>{escape(dealer)}</b>" if dealer else ""
+        if author:
+            who = f"{who} · {escape(author)}" if who else escape(author)
+        lines.append(f"👤 {who}")
+    lines.append(f"🏗 <b>{escape(name)}</b>")
+
+    body = []
+    if payload.get("Dealer News"):
+        body.append(f"«{_v(payload, 'Dealer News')}»")
+    stage = STAGE_LABELS.get(payload.get("Project Stage"), payload.get("Project Stage"))
+    pl = payload.get("PL Volume")
+    for row in (
+        _pair(("Клиент", _v(payload, "End Client"))),
+        _pair(("Объект", _v(payload, "Object Name"))),
+        _pair(("Город", _v(payload, "City")), ("Стадия", escape(str(stage)) if stage else "")),
+        _pair(("Бюро", _v(payload, "Specifier")), ("ГАП", _v(payload, "Lead Architect"))),
+        _pair(("Объём по прайсу", f"{pl:,.0f} €".replace(",", " ") if isinstance(pl, (int, float)) else "")),
+        _pair(("Причина", _v(payload, "Lost Reason"))),
+        _pair(("Заказ / проформа", _v(payload, "Order / Proforma №"))),
+    ):
+        if row:
+            body.append(row)
     if rtype == "Update — Lost" and payload.get("Project Log"):
-        lines.append(escape(payload["Project Log"])[:300])
+        body.append(escape(payload["Project Log"])[:300])
+    if body:
+        lines += [""] + body
     if analysis:
-        lines.append(escape(analysis))
+        lines += ["", "🔎 " + escape(analysis)]
     lines.append(f"<code>{reg_id}</code>")
     return "\n".join(lines)
 
