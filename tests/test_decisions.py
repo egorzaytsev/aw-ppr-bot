@@ -97,3 +97,61 @@ def test_position_from_actual_order_when_already_listed():
     pl = plan(reg(rtype="New — Pre-registration"), project)
     assert P.PRE_REGISTERED not in pl.project_updates and not pl.broadcast_companies
     assert "Вы 1-й из 3 в предрегистрации." in pl.dealer_text
+
+
+import json
+
+
+def _with_payload(r: dict, payload: dict, files=None) -> dict:
+    r[R.PAYLOAD] = json.dumps(payload, ensure_ascii=False)
+    if files:
+        r[R.ATTACHMENTS] = files
+    return r
+
+
+def test_check_counts_dealer_answers_and_moves_them_into_empty_fields():
+    project = {P.NAME: "JTI SPb", P.EXW_POTENTIAL: 40000, P.SPECIFIER: ["recB"], P.AW_ALTERNATIVES: "No — AW only",
+               P.OBJECT_ADDRESS: "Уже в проекте", P.DOSSIER_FILES: [{"id": "attOLD", "url": "x"}]}
+    r = _with_payload(reg(rtype="New — Pre-registration"), {
+        "Object Address": "Из заявки", "Order Month": "2027-03-01", "Contact Level": "Declared",
+        "Parallel Registrations": "Нет", "Visualizations": [{"kind": "link", "url": "https://disk/x"}],
+    }, files=[{"id": "attNEW", "url": "https://airtable/new.pdf", "filename": "plan.pdf"}])
+    pl = plan(r, project)
+    assert not pl.blocked
+    u = pl.project_updates
+    assert P.OBJECT_ADDRESS not in u                       # заполненное не трогаем
+    assert u[P.EXPECTED_ORDER_DATE] == "2027-03-01" and u[P.CONTACT_LEVEL] == "Declared"
+    assert u[P.PARALLEL_REGISTRATIONS] == "Нет"
+    assert u[P.DOSSIER_FILES] == [{"id": "attOLD"}, {"url": "https://airtable/new.pdf", "filename": "plan.pdf"}]
+    assert u[P.PRE_REGISTERED] == [DEALER]
+    assert "Contact Level" in pl.transferred and "Dossier Files" in pl.transferred
+
+
+def test_specifier_text_and_links_count_as_provided():
+    project = {P.NAME: "X", P.EXW_POTENTIAL: 40000, P.EXPECTED_ORDER_DATE: "2027-01-01", P.OBJECT_ADDRESS: "a",
+               P.CONTACT_LEVEL: "Declared", P.AW_ALTERNATIVES: "No — AW only", P.PARALLEL_REGISTRATIONS: "нет"}
+    r = _with_payload(reg(rtype="New — Pre-registration"),
+                      {"Specifier": "UNK Project", "Layouts": [{"kind": "link", "url": "https://d"}]})
+    pl = plan(r, project)
+    assert not pl.blocked and P.SPECIFIER not in pl.project_updates
+
+
+def test_really_missing_suggests_need_more_info():
+    pl = plan(_with_payload(reg(rtype="New — Pre-registration"), {}), {P.NAME: "X"})
+    assert pl.blocked and "ни в проекте, ни в заявке" in pl.admin_text and "Need more info" in pl.admin_text
+
+
+def test_need_more_info_has_reply_button():
+    pl = plan(reg("Need more info", note="Пришлите планировки"), None)
+    assert pl.reply_button
+
+
+def test_info_update_moves_fields_without_status():
+    r = _with_payload(reg(rtype="Update — info only"), {"Contact Level": "Joint meeting with AW"})
+    pl = plan(r, {P.NAME: "X"})
+    assert pl.project_updates == {P.CONTACT_LEVEL: "Joint meeting with AW"}
+
+
+def test_won_lost_do_not_touch_project():
+    r = _with_payload(reg(rtype="Update — Won"), {"Contact Level": "Declared"})
+    assert plan(r, {P.NAME: "X"}).project_updates == {}

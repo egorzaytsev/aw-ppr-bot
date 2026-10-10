@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from html import escape
 
@@ -48,19 +50,89 @@ def _empty(v) -> bool:
     return v in (None, "", [], 0)
 
 
-def ppr_missing(project: dict, status: str) -> list[str]:
-    """Чего не хватает в проекте для статуса Pre-registered / Registered."""
+# Ответы дилера из Payload → поля Projects (переносятся только в пустые поля)
+_PAYLOAD_TO_PROJECT = (
+    ("Object Name", Projects.OBJECT_NAME),
+    ("Object Part", Projects.OBJECT_PART),
+    ("Country", Projects.COUNTRY),
+    ("City", Projects.CITY),
+    ("Object Address", Projects.OBJECT_ADDRESS),
+    ("Project Stage", Projects.PROJECT_STAGE),
+    ("EXW Potential", Projects.EXW_POTENTIAL),
+    ("AW Alternatives", Projects.AW_ALTERNATIVES),
+    ("Contact Level", Projects.CONTACT_LEVEL),
+    ("Parallel Registrations", Projects.PARALLEL_REGISTRATIONS),
+    ("Quotation / Proforma №", Projects.QUOTATION),
+)
+# Ключи Payload с материалами — это Dossier Files
+DOSSIER_KEYS = (
+    "Visualizations", "Layouts", "Partner Presentation", "Bureau Documents", "Dealer Specification",
+    "AW Quotation File", "Third-party Statement", "Tender Brief", "Purchase Request",
+    "Other Third-party Document", "Extra Materials",
+)
+_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def payload_of(reg: dict) -> dict:
+    try:
+        data = json.loads(reg.get(Registrations.PAYLOAD) or "{}")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def transfers(reg: dict, project: dict) -> tuple[dict, set]:
+    """Что перенести из заявки в проект и какие поля дилер дал, но бот записать не может.
+
+    Возвращает (обновления пустых полей проекта, id полей «предоставлено» — Specifier текстом,
+    материалы ссылками).
+    """
+    payload = payload_of(reg)
+    updates: dict = {}
+    provided: set = set()
+    for key, fid in _PAYLOAD_TO_PROJECT:
+        value = payload.get(key)
+        if not _empty(value) and _empty(project.get(fid)):
+            updates[fid] = value
+    order = payload.get("Order Month")
+    if isinstance(order, str) and _ISO_DATE.fullmatch(order) and _empty(project.get(Projects.EXPECTED_ORDER_DATE)):
+        updates[Projects.EXPECTED_ORDER_DATE] = order
+    if payload.get("Specifier") and _empty(project.get(Projects.SPECIFIER)):
+        provided.add(Projects.SPECIFIER)  # связь с Companies ставит Егор
+    # Файлы заявки — в Dossier Files (дописываем к уже лежащим)
+    files = reg.get(Registrations.ATTACHMENTS) or []
+    if files:
+        kept = [{"id": a["id"]} for a in project.get(Projects.DOSSIER_FILES) or [] if a.get("id")]
+        updates[Projects.DOSSIER_FILES] = kept + [
+            {"url": a["url"], "filename": a.get("filename")} for a in files if a.get("url")
+        ]
+    if any(isinstance(payload.get(k), list) and payload[k] for k in DOSSIER_KEYS):
+        provided.add(Projects.DOSSIER_FILES)  # в том числе ссылками
+    return updates, provided
+
+
+def ppr_missing(project: dict, status: str, filled: dict | None = None, provided: set | None = None) -> list[str]:
+    """Чего не хватает для Pre-registered / Registered — с учётом того, что дал дилер в заявке."""
     if status not in (PPR_PRE, PPR_REG):
         return []
-    missing = [name for fid, name in _PPR_REQUIRED if _empty(project.get(fid))]
-    # Плюс то, что уже показывает сама формула PPR Missing (если она посчитана)
-    for name in (project.get(Projects.PPR_MISSING) or "").split(";"):
-        name = name.strip()
-        if name and not name.startswith("Quotation") and name not in missing:
-            missing.append(name)
-    if status == PPR_REG and _empty(project.get(Projects.QUOTATION)):
+    filled = filled or {}
+    provided = provided or set()
+
+    def has(fid: str) -> bool:
+        return not _empty(project.get(fid)) or not _empty(filled.get(fid)) or fid in provided
+
+    missing = [name for fid, name in _PPR_REQUIRED if not has(fid)]
+    if status == PPR_REG and not has(Projects.QUOTATION):
         missing.append("Quotation / Proforma №")
     return missing
+
+
+_FIELD_NAMES = {fid: key for key, fid in _PAYLOAD_TO_PROJECT}
+_FIELD_NAMES.update({Projects.EXPECTED_ORDER_DATE: "Expected Order Date", Projects.DOSSIER_FILES: "Dossier Files"})
+
+
+def _names(updates: dict) -> list[str]:
+    return [_FIELD_NAMES.get(fid, fid) for fid in updates]
 
 
 def processed_mark(decision: str, blocked: bool = False) -> str:
@@ -80,6 +152,10 @@ class Plan:
     broadcast_text: str | None = None
     # Сообщать ли админу об этой блокировке (только первый раз)
     blocked: bool = False
+    # Какие поля бот перенёс из заявки в проект — для сообщения админу
+    transferred: list[str] = field(default_factory=list)
+    # Кнопка «Ответить» под сообщением дилеру (запрос доп. информации)
+    reply_button: bool = False
 
 
 def _note(reg: dict) -> str:
@@ -116,6 +192,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
         return Plan(
             registration_updates=done,
             dealer_text=f"По заявке «{escape(dealer_name)}» нужна дополнительная информация.{_note(reg)}",
+            reply_button=True,
         )
 
     if decision not in (Decision.ACCEPT, Decision.ACCEPT_MERGE):
@@ -129,11 +206,19 @@ def plan(reg: dict, project: dict | None) -> Plan:
         )
     project_name = project.get(Projects.NAME) or dealer_name
 
-    # Новости, выигрыш, проигрыш — статус дилера не меняется
-    if request_type in NO_STATUS_TYPES:
+    # Выигрыш и проигрыш одного дилера — не повод менять проект: только ответ
+    if request_type in (RequestType.UPDATE_WON, RequestType.UPDATE_LOST):
         return Plan(
             registration_updates=done,
             dealer_text=f"По объекту «{escape(project_name)}» информацию приняли.{_note(reg)}",
+        )
+    moved, provided = transfers(reg, project)
+    if request_type == RequestType.UPDATE_INFO:
+        return Plan(
+            project_updates=moved,
+            registration_updates=done,
+            dealer_text=f"По объекту «{escape(project_name)}» информацию приняли.{_note(reg)}",
+            transferred=_names(moved),
         )
 
     reg_status = reg.get(Registrations.REG_STATUS)
@@ -146,12 +231,13 @@ def plan(reg: dict, project: dict | None) -> Plan:
         return _blocked(reg, decision, "в заявке не указан Dealer.")
     dealer = dealers[0]
 
-    missing = ppr_missing(project, status)
+    missing = ppr_missing(project, status, moved, provided)
     if missing:
         return _blocked(
             reg, decision,
             f"нельзя поставить {STATUS_FIELD_NAME[status]} в «{escape(project_name)}»: "
-            f"не хватает {escape('; '.join(missing))}.",
+            f"не хватает {escape('; '.join(missing))} — ни в проекте, ни в заявке.\n"
+            "Запросить у дилера: Decision → Need more info, текст — в Decision Note.",
         )
 
     notified = list(project.get(Projects.NOTIFIED) or [])
@@ -166,7 +252,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
             f"в «{escape(project_name)}» уже есть Registered — регистрация только у одного партнёра.",
         )
 
-    updates: dict = {}
+    updates: dict = dict(moved)
     broadcast: list[str] = []
     if status == PPR_NOTIFIED:
         if dealer not in notified + pre + registered:
@@ -210,6 +296,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
     return Plan(
         project_updates=updates,
         registration_updates=reg_updates,
+        transferred=_names(moved),
         dealer_text=text + _note(reg),
         broadcast_companies=broadcast,
         broadcast_text=(f"По объекту «{escape(project_name)}» появилась предрегистрация другого партнёра."

@@ -26,7 +26,7 @@ from .airtable_repo import (
     PPR_NOTIFIED, PPR_PRE_REGISTERED, PPR_REGISTERED, AirtableRepo, DealerProject, Person,
 )
 from .config import load_settings
-from .scenarios import FILL, LOST, NEW_PROJECT, NEWS, WON
+from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, WON
 from .scenarios.update_project import fill_preset
 from .slots import VALENCIA
 from .voice import Transcriber
@@ -59,6 +59,7 @@ CB_PICK = "pc:"        # + режим:id проекта — выбор прое�
 CB_CARD = "cd:"        # + действие:id проекта — кнопка в карточке
 CB_UPDATE_MODE = "um:"  # + режим — «Обновить проект»: что делаем
 CB_REMINDER = "rs:"    # + индекс слота напоминаний
+CB_REPLY = "rp:"       # + id заявки — ответить на запрос доп. информации
 MODE_MY, MODE_FILL, MODE_NEWS = "my", "fill", "news"
 PAGE_SIZE = 8
 EXPIRY_WARNING_DAYS = 14
@@ -270,7 +271,7 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _keep_news_audio(update: Update, ctx: ContextTypes.DEFAULT_TYPE, media) -> None:
     """Новость голосом: кроме расшифровки сохраняем сам файл — он уйдёт во вложения заявки."""
     person = await _identify(update, ctx)
-    if not person or not person.state or person.state.scenario != NEWS.code:
+    if not person or not person.state or person.state.scenario not in (NEWS.code, INFO_REPLY.code):
         return
     if (media.file_size or 0) > MAX_FILE_BYTES:
         return  # больше лимита Airtable — останется только расшифровка
@@ -318,6 +319,9 @@ async def _route(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person,
             await _send(update, [engine.current_screen(person.state)])
         return
 
+    if data.startswith(CB_REPLY):
+        await _start_reply(update, ctx, person, data[len(CB_REPLY):])
+        return
     if data.startswith(CB_REMINDER):
         await _save_reminder(update, ctx, person, data[len(CB_REMINDER):])
         return
@@ -467,6 +471,27 @@ async def _start_action(
     await _start_scenario(update, ctx, person, CARD_ACTIONS[action].code, preset)
 
 
+async def _start_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_id: str) -> None:
+    if await _blocked(update, ctx, person, f"{CB_REPLY}{reg_id}"):
+        return
+    try:
+        reg = await asyncio.to_thread(_repo(ctx).registration_fields, reg_id)
+    except Exception:
+        await update.effective_chat.send_message("Заявка не найдена.")
+        return
+    # Отвечать может только компания, от которой заявка
+    if not set(reg.get(Registrations.DEALER) or []) & set(person.company_ids):
+        await update.effective_chat.send_message("Заявка не найдена.")
+        return
+    target = reg.get(Registrations.TARGET_PROJECT) or []
+    preset = {
+        "_target": {"id": target[0] if target else None,
+                    "name": reg.get(Registrations.DEALER_PROJECT_NAME) or "заявка"},
+        "_reply_to": reg_id,
+    }
+    await _start_scenario(update, ctx, person, INFO_REPLY.code, preset)
+
+
 # ---------- напоминания ----------
 
 def _reminder_question() -> engine.Screen:
@@ -599,9 +624,9 @@ async def log_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 DECISIONS_INTERVAL = 60  # секунд между проверками Inbox
 
 
-async def _send_html(ctx_bot, chat_id, text: str) -> None:
+async def _send_html(ctx_bot, chat_id, text: str, markup=None) -> None:
     try:
-        await ctx_bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+        await ctx_bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
     except Exception:
         log.exception("Не удалось отправить сообщение в чат %s", chat_id)
 
@@ -633,8 +658,9 @@ async def process_decisions(app: Application) -> None:
 
         dealer_chats = await asyncio.to_thread(repo.chat_ids_for_people, reg.get(Registrations.SUBMITTED_BY) or [])
         if pl.dealer_text:
+            markup = _markup([[("Ответить", f"{CB_REPLY}{rec['id']}")]]) if pl.reply_button else None
             for chat in dealer_chats:
-                await _send_html(app.bot, chat, pl.dealer_text)
+                await _send_html(app.bot, chat, pl.dealer_text, markup)
         if pl.broadcast_companies and pl.broadcast_text:
             for chat in await asyncio.to_thread(repo.chat_ids_for_companies, pl.broadcast_companies):
                 if chat not in dealer_chats:
@@ -644,7 +670,10 @@ async def process_decisions(app: Application) -> None:
                 await _send_html(app.bot, admin, pl.admin_text)
             elif pl.dealer_text and not pl.blocked:
                 sent = "отправлен" if dealer_chats else "не отправлен — у автора нет Telegram"
-                await _send_html(app.bot, admin, f"✓ Решение применено, ответ дилеру {sent}:\n\n{pl.dealer_text}")
+                moved = f"\n\nИз заявки в проект перенесено: {', '.join(pl.transferred)}." if pl.transferred else ""
+                await _send_html(
+                    app.bot, admin, f"✓ Решение применено, ответ дилеру {sent}:\n\n{pl.dealer_text}{moved}"
+                )
 
 
 async def _decisions_loop(app: Application) -> None:

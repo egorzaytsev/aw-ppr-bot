@@ -223,6 +223,9 @@ class AirtableRepo:
         )
         return self._registrations.all(formula=formula, use_field_ids=True)
 
+    def registration_fields(self, reg_id: str) -> dict:
+        return self._registrations.get(reg_id, use_field_ids=True)["fields"]
+
     def project_fields(self, project_id: str) -> dict:
         return self._projects.get(project_id, use_field_ids=True)["fields"]
 

@@ -652,3 +652,14 @@ def test_own_design_skips_architect():
     r = engine.handle_callback(r.state, CH + "1")                 # Собственная проработка
     assert r.state.awaiting == "confirm" and "ГАП" not in r.screens[0].text
     assert engine.build_payload(r.state)["Specifier"] == "Собственная проработка"
+
+
+def test_info_reply_flow():
+    r = engine.start("info_reply", {"_target": {"id": None, "name": "Пао — Символ"}, "_reply_to": "recREG"})
+    r = engine.handle_text(r.state, "Планировки будут в понедельник")
+    r = engine.handle_callback(r.state, CH + "0")                 # без файлов
+    assert r.submit
+    p = engine.build_payload(r.state)
+    assert p["In Reply To"] == "recREG" and p["Dealer Project Name"] == "Пао — Символ"
+    assert p["Project Log"] == "Ответ дилера на запрос: Планировки будут в понедельник"
+    assert engine.stage_of(r.state)[0] == "Update — info only"

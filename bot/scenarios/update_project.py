@@ -60,6 +60,44 @@ NEWS = Scenario(
 )
 
 
+# ---------- Ответ на запрос доп. информации ----------
+
+def _reply_derive(a: dict) -> dict:
+    out: dict = {"Dealer Project Name": _target_name(a), "In Reply To": a.get("_reply_to")}
+    if a.get("Dealer News"):
+        out["Project Log"] = f"Ответ дилера на запрос: {a['Dealer News']}"
+    if a.get("Dealer News Audio"):
+        out["Dealer News Audio"] = a["Dealer News Audio"]
+    return out
+
+
+INFO_REPLY = Scenario(
+    code="info_reply",
+    title="Ответ на запрос",
+    questions=(
+        Question(
+            key="Dealer News",
+            label="Ответ",
+            prompt="Напишите ответ или запишите голосовое.",
+        ),
+        Question(
+            key="Extra Materials",
+            label="Файлы",
+            prompt="Есть файлы к ответу? Пришлите файлы или ссылку — или нажмите «Нет».",
+            kind="files",
+            choices=(("Нет", "нет"),),
+        ),
+    ),
+    phase_titles={1: "Ответ"},
+    stage=lambda p, a, m: (RequestType.UPDATE_INFO, "ответ на запрос"),
+    derive=_reply_derive,
+    verdict=lambda a, s, m: _plain_verdict(s),
+    project_name_key="Dealer Project Name",
+    done_text="Принято, ответ передан Егору.",
+    auto_submit=True,
+)
+
+
 # ---------- Выигран ----------
 
 WON = Scenario(
