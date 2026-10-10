@@ -17,5 +17,5 @@ def test_reply_card_shows_answer():
     reg = {R.DEALER_PROJECT_NAME: "Пао — Символ", R.REQUEST_TYPE: "Update — info only",
            R.PAYLOAD: json.dumps({"Dealer News": "Зеленый в крапинку", "In Reply To": "recREG"}, ensure_ascii=False)}
     card = request_card(reg, "recY", "Lola Sapaeva")
-    assert card.startswith("🛠 💬 Ответ на ваш запрос: <b>Пао — Символ</b>")
+    assert card.startswith("🛠 💬 Ответ на твой запрос: <b>Пао — Символ</b>")
     assert "Текст: Зеленый в крапинку" in card and "от Lola Sapaeva" in card

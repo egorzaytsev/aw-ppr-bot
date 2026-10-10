@@ -211,7 +211,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
 
     if decision in (Decision.DECLINE, Decision.NEED_INFO):
         if not note:
-            return _blocked(reg, decision, f"для «{decision}» заполните Decision Note — он уходит дилеру.")
+            return _blocked(reg, decision, f"для «{decision}» заполни Decision Note — он уходит дилеру.")
         if decision == Decision.DECLINE:
             return Plan(
                 registration_updates={**done, Registrations.REG_STATUS: RegStatus.DECLINED},
@@ -229,8 +229,8 @@ def plan(reg: dict, project: dict | None) -> Plan:
     if project is None:
         return _blocked(
             reg, decision,
-            "не указан Target Project. Перенос в Projects пока ручной: создайте или найдите проект "
-            "и поставьте его в Target Project — бот продолжит сам.",
+            "не указан Target Project. Перенос в Projects пока ручной: создай или найди проект "
+            "и поставь его в Target Project — бот продолжит сам.",
         )
     project_name = project.get(Projects.NAME) or dealer_name
     # Дилеру — объект его словами; имя в базе (латиницей) — в скобках, если отличается
@@ -261,7 +261,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
     reg_status = reg.get(Registrations.REG_STATUS)
     status = reg_status if reg_status in STATUS_FIELD else REQUEST_STATUS.get(request_type)
     if status is None:
-        return _blocked(reg, decision, "не понятно, какой статус дать — выставьте Reg Status.")
+        return _blocked(reg, decision, "не понятно, какой статус дать — выставь Reg Status.")
 
     dealers = reg.get(Registrations.DEALER) or []
     if not dealers:
@@ -321,7 +321,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
             text += "\nНа проекте есть предрегистрация другого партнёра."
     elif status == PPR_PRE:
         text = (f"По запросу {obj} установлен статус: <b>предрегистрация</b>.\n"
-                f"Вы {pre.index(dealer) + 1}-й из {len(pre)} в предрегистрации.")
+                f"Ты на {pre.index(dealer) + 1}-м месте из {len(pre)} в предрегистрации.")
         if others_registered:
             text += "\nНа проекте есть зарегистрированный партнёр."
     else:

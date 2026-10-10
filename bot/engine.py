@@ -201,12 +201,12 @@ def question_screen(state: DialogState) -> Screen:
     per_row = 1 if any(len(lbl) > 16 for lbl, _ in q.choices) else 2
     buttons = _rows(choice_buttons, per_row)
     if q.kind == "month":
-        lines.append("<i>Выберите год, потом месяц — или напишите: 03.2027</i>")
+        lines.append("<i>Выбери год, потом месяц — или напиши: 03.2027</i>")
         this_year = date.today().year
         buttons += _rows([(str(y), f"{CB_YEAR}{y}") for y in range(this_year, this_year + PICKER_YEARS)], 3)
     if q.kind == "slot":
         zone = slots.zone_name(_country(state))
-        lines.append(f"<i>Выберите день или напишите текстом удобные дату и время ({escape(zone)})</i>")
+        lines.append(f"<i>Выбери день или напиши текстом удобные дату и время ({escape(zone)})</i>")
         days = slots.next_workdays()
         buttons += _rows([(slots.day_label(d), f"{CB_DAY}{d.isoformat()}") for d in days], 2)
     if q.kind == "files" and isinstance(state.answers.get(q.key), list) and state.answers[q.key]:
@@ -219,7 +219,7 @@ def question_screen(state: DialogState) -> Screen:
 def _files_progress(state: DialogState) -> Screen:
     items = state.answers.get(_current_q(state).key) or []
     return Screen(
-        f"{phrases.pick(phrases.GOT_FILE)} Уже {len(items)}. Пришлите ещё файл или ссылку — или нажмите «Готово».",
+        f"{phrases.pick(phrases.GOT_FILE)} Уже {len(items)}. Пришли ещё файл или ссылку — или нажми «Готово».",
         [[("Готово", CB_DONE)]],
     )
 
@@ -227,7 +227,7 @@ def _files_progress(state: DialogState) -> Screen:
 def month_screen(state: DialogState) -> Screen:
     items = [(m, f"{CB_MONTH}{i}") for i, m in enumerate(MONTHS, 1)]
     buttons = _rows(items, 3) + [[("← Другой год", CB_YEAR_BACK)]]
-    return Screen(f"{state.pick_year} — выберите месяц:", buttons)
+    return Screen(f"{state.pick_year} — выбери месяц:", buttons)
 
 
 def slot_screen(state: DialogState) -> Screen:
@@ -236,7 +236,7 @@ def slot_screen(state: DialogState) -> Screen:
     items = [(slots.window_label(d, i, country), f"{CB_WINDOW}{i}") for i in range(len(slots.WINDOWS))]
     zone = slots.zone_name(country)
     return Screen(
-        f"{escape(slots.day_label(d))} — выберите время ({escape(zone)}) или напишите текстом:",
+        f"{escape(slots.day_label(d))} — выбери время ({escape(zone)}) или напиши текстом:",
         _rows(items, 2),
     )
 
@@ -294,7 +294,7 @@ def summary_screen(state: DialogState) -> Screen:
     sc = scenario_of(state)
     qs = sc.questions
     # Имя проекта дилеру не показываем: его присваивает Егор при проверке
-    lines = ["<b>Проверьте данные</b>"]
+    lines = ["<b>Проверь данные</b>"]
     target = state.answers.get("_target")
     if target:
         lines.append(f"Проект: <b>{escape(target['name'])}</b>")
@@ -461,7 +461,7 @@ def _wants_items(state: DialogState) -> bool:
 
 def handle_file(state: DialogState, item: dict) -> Result:
     if not _wants_items(state):
-        msg = Screen("Файл сейчас не нужен — ответьте на вопрос.")
+        msg = Screen("Файл сейчас не нужен — ответь на вопрос.")
         return Result(state, [msg, current_screen(state)])
     return _add_items(state, _current_q(state), [item])
 
@@ -498,7 +498,7 @@ def handle_text(state: DialogState, text: str) -> Result:
     if healed:
         return healed
     if state.awaiting == AWAIT_CONFIRM:
-        return Result(state, [Screen("Нажмите кнопку под сводкой."), summary_screen(state)])
+        return Result(state, [Screen("Нажми кнопку под сводкой."), summary_screen(state)])
     if state.awaiting == AWAIT_GATE:
         return Result(state, [gate_screen(state)])
     q = _current_q(state)

@@ -58,7 +58,7 @@ SECTIONS = (
     (EXPIRY, "⏳ <b>Срок подходит к концу</b>",
      "Если есть прогресс — «Сообщить новость», чтобы запросить продление."),
     (GAPS, "📝 <b>Не хватает данных для следующего этапа</b>", "Дополнить — «Дополнить материалы»."),
-    (STALE, f"💤 <b>Нет новостей больше {STALE_DAYS} дней</b>", "Расскажите, что нового, — «Сообщить новость»."),
+    (STALE, f"💤 <b>Нет новостей больше {STALE_DAYS} дней</b>", "Расскажи, что нового, — «Сообщить новость»."),
 )
 STATUS_NAME = {"registered": "регистрация", "pre_registered": "предрегистрация"}
 
@@ -107,7 +107,7 @@ def project_item(project, today: date, last_news: date | None) -> Item | None:
 
 def digest_text(items: list[Item], intro: str | None = None) -> str:
     """Сообщение, сгруппированное по причинам; пустые группы не показываем."""
-    parts = [f"<b>{escape(intro or 'Напоминание по вашим плейсментам')}</b>"]
+    parts = [f"<b>{escape(intro or 'Напоминание по твоим плейсментам')}</b>"]
     for reason, title, hint in SECTIONS:
         rows = [f"• {escape(it.name)} — {escape(it.reasons[reason])}" for it in items if reason in it.reasons]
         if rows:

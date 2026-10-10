@@ -198,7 +198,7 @@ def _iso(y: int, mo: int, d: int) -> str:
     try:
         return date(y, mo, d).isoformat()
     except ValueError:
-        raise ParseError("Такой даты нет — проверьте месяц и день") from None
+        raise ParseError("Такой даты нет — проверь месяц и день") from None
 
 
 def match_choice(text: str, choices: tuple[Choice, ...]) -> str | None:
@@ -220,7 +220,7 @@ def parse_answer(q: Question, text: str) -> Value:
             # Есть «Да, укажу» — свободный текст и есть уточнение
             if any(v == DETAIL for _, v in q.choices):
                 return text
-            raise ParseError("Выберите вариант кнопкой ниже")
+            raise ParseError("Выбери вариант кнопкой ниже")
         return value
     # Текстом набрали подпись кнопки-заготовки — считаем нажатием
     preset = match_choice(text, q.choices) if q.choices else None

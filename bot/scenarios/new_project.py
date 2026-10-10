@@ -105,7 +105,7 @@ PHASE_1 = (
         prompt="Город объекта:",
         kind="choice",
         choices_fn=lambda a: CITIES.get(a.get("Country"), ()) + ((OTHER_CITY, DETAIL),),
-        detail_prompt="Напишите город.",
+        detail_prompt="Напиши город.",
         ask_if=lambda a: a.get("Object Location") == LOC_OTHER,
     ),
     Question(
@@ -144,7 +144,7 @@ PHASE_1 = (
         key="Specifier",
         label="Архбюро",
         prompt="Архитектурное бюро — название.",
-        hint="Если архитектор работает сам, без бюро — «Частный архитектор». Если проект ведёте вы — «Собственная проработка».",
+        hint="Если архитектор работает сам, без бюро — «Частный архитектор». Если проект ведёшь ты — «Собственная проработка».",
         choices=((SOLO_ARCHITECT, SOLO), (OWN_DESIGN, OWN_DESIGN)),
         # На выборе архитектора бюро ещё нет — не спрашиваем
         ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION,
@@ -174,7 +174,7 @@ PHASE_1 = (
     Question(
         key="AW Alternatives",
         label="Альтернативы AW",
-        prompt="Предлагаете ли клиенту альтернативы Andreu World в той же номенклатуре?",
+        prompt="Предлагаешь ли клиенту альтернативы Andreu World в той же номенклатуре?",
         kind="choice",
         # Значения = варианты поля AW Alternatives в Projects
         choices=(
@@ -240,7 +240,7 @@ PHASE_2 = (
         ),
         evidence_for=("Indirect (bureau docs)", "Verifiable (email/contact)", "Joint meeting with AW"),
         evidence_key="Contact Evidence",
-        evidence_prompt="Пришлите подтверждение — файл или ссылку.",
+        evidence_prompt="Пришли подтверждение — файл или ссылку.",
     ),
     Question(
         phase=2,
@@ -248,7 +248,7 @@ PHASE_2 = (
         label="Актуальный объём",
         prompt="Актуальный объём Andreu World по прайсу, €?",
         prompt_fn=lambda a: (
-            f"Вы указывали {_money(a['PL Volume'])} по прайсу. Актуальный объём?"
+            f"Было указано {_money(a['PL Volume'])} по прайсу. Актуальный объём?"
             if a.get("PL Volume") is not None else "Актуальный объём Andreu World по прайсу, €?"
         ),
         hint="Числом, можно примерно: 45к, 120 000",
@@ -272,7 +272,7 @@ PHASE_2 = (
             group_min_one=True,
             key=key,
             label=label,
-            prompt=prompt + " Пришлите файлы или ссылку — или нажмите «Нет».",
+            prompt=prompt + " Пришли файлы или ссылку — или нажми «Нет».",
             hint=hint,
             kind="files",
             choices=(("Нет", NONE),),
@@ -283,9 +283,9 @@ PHASE_2 = (
              "Материалы — по одному виду. Файлы по одному, больше 5 МБ — ссылкой.", {}),
             ("Layouts", "Планировки", "Планировки.", "", {}),
             ("Partner Presentation", "Презентация партнёра",
-             "Ваша презентация для клиента — серии и мебель, которые вы предлагаете.", "", {}),
+             "Твоя презентация для клиента — серии и мебель, которые ты предлагаешь.", "", {}),
             ("Bureau Documents", "Документы бюро", "Документы бюро: ведомость, спецификация бюро.", "", {}),
-            ("Dealer Specification", "Ваша спецификация", "Ваша спецификация.",
+            ("Dealer Specification", "Твоя спецификация", "Ваша спецификация.",
              "Подтверждением плейсмента она не считается.", {}),
             ("AW Quotation File", "Квотация AW", "Квотация Andreu World, если уже есть.", "", {}),
         )
@@ -294,7 +294,7 @@ PHASE_2 = (
         phase=2,
         key="Call Slot 15",
         label="Звонок 15 минут",
-        prompt="Звонок на 15 минут — выберите день:",
+        prompt="Звонок на 15 минут — выбери день:",
         kind="slot",
     ),
 )
@@ -321,7 +321,7 @@ PHASE_3 = (
             group_min_one=True,
             key=key,
             label=label,
-            prompt=prompt + " Пришлите файлы или ссылку — или нажмите «Нет».",
+            prompt=prompt + " Пришли файлы или ссылку — или нажми «Нет».",
             hint=hint,
             kind="files",
             choices=(("Нет", NONE),),
@@ -346,7 +346,7 @@ PHASE_3 = (
         phase=3,
         key="Call Slot 30",
         label="Звонок 30 минут",
-        prompt="Звонок на 30 минут — выберите день:",
+        prompt="Звонок на 30 минут — выбери день:",
         kind="slot",
     ),
 )
@@ -356,7 +356,7 @@ _BY_KEY = {q.key: q for q in QUESTIONS}
 
 GATES = {
     1: Gate(
-        prompt="Хотите подать на предрегистрацию? Это ещё десять вопросов и материалы по проекту.",
+        prompt="Хочешь подать на предрегистрацию? Это ещё десять вопросов и материалы по проекту.",
         yes="Да",
         no="Пока только уведомление",
         summary_button="Подать на предрегистрацию",
@@ -486,7 +486,7 @@ def verdict(a: dict, stage_label: str, missing_phase1: list) -> list[str]:
     if missing_phase1 and track(a) == TRACK_FULL:
         lines.append(
             "Для предрегистрации не хватает: " + ", ".join(missing_phase1) + ". "
-            "Дозаполните сейчас или позже через «Обновить проект»."
+            "Дозаполни сейчас или позже через «Обновить проект»."
         )
     return lines
 

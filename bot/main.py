@@ -49,10 +49,10 @@ MENU_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 GREETING_TEXT = (
-    "Здравствуйте, это бот регистрации продакт плейсмента Andreu World. "
-    "Через него вы подаёте уведомления и предрегистрацию. Выберите действие внизу."
+    "Привет, это бот регистрации продакт плейсмента Andreu World. "
+    "Через него ты подаёшь уведомления и предрегистрацию. Выбери действие внизу."
 )
-NOT_FOUND_TEXT = "Вас пока нет в базе партнёров. Напишите Егору."
+NOT_FOUND_TEXT = "Тебя пока нет в базе партнёров. Напиши Егору."
 MENU_START = "Старт"
 # После отказа — одна кнопка, чтобы повторить вход, когда Егор добавит человека
 START_KEYBOARD = ReplyKeyboardMarkup([[MENU_START]], resize_keyboard=True, is_persistent=True)
@@ -79,17 +79,17 @@ STAGE_LABELS = {
 CARD_ACTIONS = {"fill": FILL, "news": NEWS, "won": WON, "lost": LOST}
 REMINDER_SLOTS = ("08:00–11:00", "11:00–14:00", "14:00–17:00", "17:00–20:00")
 WELCOME_TEXT = (
-    "Здравствуйте! Это бот программы регистрации продакт плейсмента Andreu World.\n\n"
-    "Через него вы регистрируете плейсмент мебели Andreu World в своих проектах: уведомление, "
+    "Привет! Это бот программы регистрации продакт плейсмента Andreu World.\n\n"
+    "Через него ты регистрируешь плейсмент мебели Andreu World в своих проектах: уведомление, "
     "затем предрегистрация и регистрация. Пара минут на проект, можно голосом.\n\n"
     "• <b>Новый проект</b> — подать уведомление о плейсменте\n"
-    "• <b>Мои проекты</b> — статусы и сроки ваших плейсментов\n"
+    "• <b>Мои проекты</b> — статусы и сроки твоих плейсментов\n"
     "• <b>Обновить проект</b> — новости и материалы\n\n"
-    "Чем раньше и полнее вы заявляете плейсмент, тем выше приоритет при совпадении с другим партнёром."
+    "Чем раньше и полнее ты заявляешь плейсмент, тем выше приоритет при совпадении с другим партнёром."
 )
 REMINDER_QUESTION = (
     "Иногда я буду напоминать о проектах, где подходит срок или не хватает данных. "
-    "В какое время дня вам удобнее получать напоминания? Время — ваше местное."
+    "В какое время дня тебе удобнее получать напоминания? Время — твоё местное."
 )
 
 
@@ -135,7 +135,7 @@ async def _save(ctx: ContextTypes.DEFAULT_TYPE, person: Person, state) -> None:
 
 
 def _hello(person: Person) -> str:
-    """«Ола, Лола!» / «Здравствуйте, Лола!» — по имени, если оно есть."""
+    """«Ола, Лола!» / «Привет, Лола!» — по имени, если оно есть."""
     first = phrases.first_name(person.name)
     word = phrases.pick(phrases.HELLO)
     return f"{word}, {escape(first)}!" if first else f"{word}!"
@@ -159,7 +159,7 @@ async def _blocked(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Perso
         await _save(ctx, person, None)
         return False
     await _send(update, [engine.Screen(
-        f"У вас есть незаконченная заявка: {escape(_dialog_name(person.state))}.",
+        f"У тебя есть незаконченная заявка: {escape(_dialog_name(person.state))}.",
         [[("Продолжить её", CB_MENU_RESUME)], [("Отменить её и перейти", f"{CB_DROP_AND_GO}{pending}")]],
     )])
     return True
@@ -174,16 +174,16 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not person.reminder_slot:
         # Первое знакомство: рассказ о боте и время напоминаний
-        welcome = WELCOME_TEXT.replace("Здравствуйте!", _hello(person), 1)
+        welcome = WELCOME_TEXT.replace("Привет!", _hello(person), 1)
         await update.effective_chat.send_message(welcome, parse_mode=ParseMode.HTML, reply_markup=MENU_KEYBOARD)
         await _send(update, [_reminder_question()])
     else:
-        greeting = GREETING_TEXT.replace("Здравствуйте, это", f"{_hello(person)} Это", 1)
+        greeting = GREETING_TEXT.replace("Привет, это", f"{_hello(person)} Это", 1)
         await update.effective_chat.send_message(greeting, reply_markup=MENU_KEYBOARD)
     if person.state:
         if _has_answers(person.state):
             await _send(update, [engine.Screen(
-                f"У вас есть незаконченная заявка: {escape(_dialog_name(person.state))}.",
+                f"У тебя есть незаконченная заявка: {escape(_dialog_name(person.state))}.",
                 [[("Продолжить её", CB_MENU_RESUME)], [("Отменить её", CB_DROP_AND_GO)]],
             )])
         else:
@@ -235,7 +235,7 @@ async def _handle_answer_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, te
         await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
         return
     if not person.state:
-        await update.effective_chat.send_message("Выберите действие внизу.", reply_markup=MENU_KEYBOARD)
+        await update.effective_chat.send_message("Выбери действие внизу.", reply_markup=MENU_KEYBOARD)
         return
     await _apply(update, ctx, person, engine.handle_text(person.state, text))
 
@@ -275,10 +275,10 @@ async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = await ctx.bot_data["transcriber"].transcribe(audio)
     except Exception:
         log.exception("Groq: ошибка распознавания")
-        await update.effective_chat.send_message("Не удалось распознать голосовое. Напишите текстом, пожалуйста.")
+        await update.effective_chat.send_message("Не удалось распознать голосовое. Напиши текстом, пожалуйста.")
         return
     if not text:
-        await update.effective_chat.send_message("Голосовое пустое — не расслышал. Повторите или напишите текстом.")
+        await update.effective_chat.send_message("Голосовое пустое — я ничего не расслышал. Повтори или напиши текстом.")
         return
     await update.effective_chat.send_message(f"🎙 <i>{escape(text)}</i>", parse_mode=ParseMode.HTML)
     await _keep_news_audio(update, ctx, media)
@@ -417,7 +417,7 @@ async def _show_project_list(
     projects = await _projects(ctx, person)
     if not projects:
         await update.effective_chat.send_message(
-            "Пока нет проектов с вашим плейсментом в программе. Подать новый — кнопка «Новый проект» внизу.",
+            "Пока нет проектов с твоим плейсментом в программе. Подать новый — кнопка «Новый проект» внизу.",
             reply_markup=MENU_KEYBOARD,
         )
         return
@@ -433,10 +433,10 @@ async def _show_project_list(
     if nav:
         buttons.append(nav)
     title = {
-        MODE_MY: "Ваши проекты",
+        MODE_MY: "Твои проекты",
         MODE_FILL: "Какой проект дополнить?",
         MODE_NEWS: "По какому проекту новость?",
-    }.get(mode, "Ваши проекты")
+    }.get(mode, "Твои проекты")
     if pages > 1:
         title += f" ({page + 1}/{pages})"
     await _send(update, [engine.Screen(title, buttons)])
@@ -451,10 +451,10 @@ async def _own_project(ctx: ContextTypes.DEFAULT_TYPE, person: Person, project_i
 async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, project_id: str) -> None:
     p = await _own_project(ctx, person, project_id)
     if not p:
-        await update.effective_chat.send_message("Проект не найден. Откройте «Мои проекты» заново.")
+        await update.effective_chat.send_message("Проект не найден. Открой «Мои проекты» заново.")
         return
     # Только своё: имя, статус дилера, срок, стадия, квотация. Других дилеров, лог, разбор, баллы — никогда.
-    lines = [f"<b>{escape(p.name)}</b>", f"Ваш статус: {PPR_LABELS[p.ppr_status].lower()}"]
+    lines = [f"<b>{escape(p.name)}</b>", f"Твой статус: {PPR_LABELS[p.ppr_status].lower()}"]
     days = _days_left(p)
     if days is not None:
         left = f"осталось {days} дн." if days >= 0 else "срок истёк"
@@ -466,7 +466,7 @@ async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Per
     if quotation:
         lines.append(f"Квотация: {escape(str(quotation))}")
     if days is not None and days <= EXPIRY_WARNING_DAYS:
-        lines += ["", "Срок подходит к концу. Если по проекту есть прогресс — нажмите «Сообщить новость», "
+        lines += ["", "Срок подходит к концу. Если по проекту есть прогресс — нажми «Сообщить новость», "
                       "чтобы запросить продление."]
     pid = p.record_id
     buttons = [
@@ -487,7 +487,7 @@ async def _start_action(
         return
     p = await _own_project(ctx, person, project_id)
     if not p:
-        await update.effective_chat.send_message("Проект не найден. Откройте список заново.")
+        await update.effective_chat.send_message("Проект не найден. Открой список заново.")
         return
     target = {"id": p.record_id, "name": p.name}
     preset = fill_preset(target, p.fields, p.ppr_status) if action == "fill" else {"_target": target}
@@ -558,7 +558,7 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
     except Exception:
         log.exception("Airtable: не удалось создать заявку")
         await update.effective_chat.send_message(
-            "Не получилось сохранить заявку — попробуйте ещё раз через минуту. Ответы не потеряны.",
+            "Не получилось сохранить заявку — попробуй ещё раз через минуту. Ответы не потеряны.",
         )
         await _send(update, [engine.summary_screen(state)])
         return
@@ -566,8 +566,11 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
     await _save(ctx, person, None)
     failed = await _upload_files(ctx, reg_id, files)
     done = f"{phrases.pick(phrases.THANKS)} {sc.done_text}"
+    egor = phrases.maybe_egor()
+    if egor:
+        done += f"\n{egor}"
     if failed:
-        done += f"\n\nНе загрузилось файлов: {len(failed)} ({', '.join(failed)}). Пришлите их Егору ссылкой."
+        done += f"\n\nНе загрузилось файлов: {len(failed)} ({', '.join(failed)}). Пришли их Егору ссылкой."
     await update.effective_chat.send_message(done, reply_markup=MENU_KEYBOARD)
     log.info("Заявка %s от %s (%s), файлов %d", reg_id, person.record_id, request_type, len(files))
 
@@ -634,11 +637,11 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
         return
     if not person.state:
-        await update.effective_chat.send_message("Выберите действие внизу.", reply_markup=MENU_KEYBOARD)
+        await update.effective_chat.send_message("Выбери действие внизу.", reply_markup=MENU_KEYBOARD)
         return
     if (item["size"] or 0) > MAX_FILE_BYTES:
         await update.effective_chat.send_message(
-            f"Файл «{item['name']}» больше {MAX_FILE_BYTES // 1024 // 1024} МБ — пришлите его ссылкой "
+            f"Файл «{item['name']}» больше {MAX_FILE_BYTES // 1024 // 1024} МБ — пришли его ссылкой "
             "(Яндекс Диск, Google Drive, облако)."
         )
         return
@@ -778,9 +781,9 @@ async def preview_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE, usern
     if username:
         person = await asyncio.to_thread(repo.find_by_username, username)
         if not person:
-            await update.effective_chat.send_message(f"🛠 Не нашёл @{escape(username.lstrip('@'))} в People.")
+            await update.effective_chat.send_message(f"🛠 Не нашёл в People @{escape(username.lstrip('@'))}.")
             return
-        header = f"🛠 Так выглядело бы напоминание для {escape(person.name)} (ему не отправлено):\n\n"
+        header = f"🛠 Так выглядело бы напоминание для {escape(person.name)} (не отправлено):\n\n"
     else:
         person = await _identify(update, ctx)
         header = ""
@@ -888,7 +891,7 @@ async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     log.exception("Необработанная ошибка", exc_info=ctx.error)
     if isinstance(update, Update) and update.effective_chat:
         try:
-            await update.effective_chat.send_message("Что-то пошло не так. Попробуйте ещё раз.")
+            await update.effective_chat.send_message("Что-то пошло не так. Попробуй ещё раз.")
         except Exception:
             pass
 

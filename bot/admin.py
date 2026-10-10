@@ -59,7 +59,7 @@ CARD_FIELDS = (
 
 def _title(rtype: str, payload: dict) -> str:
     if payload.get("In Reply To"):
-        return "💬 Ответ на ваш запрос"
+        return "💬 Ответ на твой запрос"
     return {
         "Update — info only": "📰 Новость по проекту",
         "Update — Won": "🏆 Дилер сообщает: выигран",
@@ -188,7 +188,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         pending[chat.id] = (action, reg_id, reply_id)
         what = "отказа" if action == ACTION_DECLINE else "запроса"
         await chat.send_message(
-            f"🛠 «{name}»: напишите текст {what} — он уйдёт дилеру как есть.",
+            f"🛠 «{name}»: напиши текст {what} — он уйдёт дилеру как есть.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
         )
         return
@@ -245,7 +245,7 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     text = text.strip()
     if not text:
         pending[chat.id] = item
-        await chat.send_message("🛠 Пустой текст — напишите ещё раз.")
+        await chat.send_message("🛠 Пустой текст — напиши ещё раз.")
         return True
     if action == ACTION_REMIND_USER:
         await ctx.bot_data["preview_reminder"](update, ctx, text)

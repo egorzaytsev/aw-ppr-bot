@@ -38,7 +38,7 @@ def test_pre_registration_position_and_broadcast():
     assert pl.project_updates[P.PRE_REGISTERED] == [OTHER1, DEALER]
     assert pl.project_updates[P.NOTIFIED] == [OTHER2]               # перешёл из уведомления
     assert pl.project_updates[P.STATUS_CONFIRMED] == "__today__"
-    assert "Вы 2-й из 2 в предрегистрации." in pl.dealer_text
+    assert "Ты на 2-м месте из 2 в предрегистрации." in pl.dealer_text
     assert sorted(pl.broadcast_companies) == [OTHER1, OTHER2]
     assert pl.broadcast_text == "По объекту «Petrovitch Office» появилась предрегистрация другого партнёра."
 
@@ -97,7 +97,7 @@ def test_position_from_actual_order_when_already_listed():
     project = {**FULL, P.PRE_REGISTERED: [DEALER, OTHER1, OTHER2]}
     pl = plan(reg(rtype="New — Pre-registration"), project)
     assert P.PRE_REGISTERED not in pl.project_updates and not pl.broadcast_companies
-    assert "Вы 1-й из 3 в предрегистрации." in pl.dealer_text
+    assert "Ты на 1-м месте из 3 в предрегистрации." in pl.dealer_text
 
 
 import json
