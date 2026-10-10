@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from html import escape
 
-from . import slots
+from . import phrases, slots
 from .scenarios import SCENARIOS
 from .scenarios.base import (
     DETAIL, ParseError, Question, Scenario, describe_items, find_links, format_value,
@@ -194,6 +194,9 @@ def question_screen(state: DialogState) -> Screen:
     lines = [f"<b>{escape(head)}.</b> {escape(q.text(state.answers))}"]
     if q.hint:
         lines.append(f"<i>{escape(q.hint)}</i>")
+    left = len(units) - pos + 1
+    if pos > 1 and left in phrases.LAST_STEPS and not state.editing and not state.filling:
+        lines.append(f"<i>{phrases.LAST_STEPS[left]}</i>")
     choice_buttons = [(lbl, f"{CB_CHOICE}{i}") for i, (lbl, _) in enumerate(q.choices)]
     per_row = 1 if any(len(lbl) > 16 for lbl, _ in q.choices) else 2
     buttons = _rows(choice_buttons, per_row)
@@ -216,7 +219,7 @@ def question_screen(state: DialogState) -> Screen:
 def _files_progress(state: DialogState) -> Screen:
     items = state.answers.get(_current_q(state).key) or []
     return Screen(
-        f"Принято: {len(items)}. Пришлите ещё файл или ссылку — или нажмите «Готово».",
+        f"{phrases.pick(phrases.GOT_FILE)} Уже {len(items)}. Пришлите ещё файл или ссылку — или нажмите «Готово».",
         [[("Готово", CB_DONE)]],
     )
 
@@ -399,7 +402,13 @@ def _advance(state: DialogState) -> Result:
         req = missing(state, required_only=True)
         return _ask(state, req[0]) if req else _to_summary(state)
     nxt = [i for i in applicable(state) if i > state.step]
-    return _ask(state, nxt[0]) if nxt else _end_of_questions(state)
+    if not nxt:
+        return _end_of_questions(state)
+    result = _ask(state, nxt[0])
+    ack = phrases.maybe_ack()
+    if ack and result.screens:
+        result.screens[0].text = f"{ack} {result.screens[0].text}"
+    return result
 
 
 def _accept(state: DialogState, q: Question, value) -> Result:

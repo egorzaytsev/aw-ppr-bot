@@ -23,7 +23,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import admin, dedup, engine, reminders
+from . import admin, dedup, engine, phrases, reminders
 from .airtable_ids import People, Projects, Registrations
 from .decisions import plan as decision_plan
 from .airtable_repo import (
@@ -134,6 +134,13 @@ async def _save(ctx: ContextTypes.DEFAULT_TYPE, person: Person, state) -> None:
     person.state = state
 
 
+def _hello(person: Person) -> str:
+    """«Ола, Лола!» / «Здравствуйте, Лола!» — по имени, если оно есть."""
+    first = phrases.first_name(person.name)
+    word = phrases.pick(phrases.HELLO)
+    return f"{word}, {escape(first)}!" if first else f"{word}!"
+
+
 def _has_answers(state) -> bool:
     return any(not k.startswith("_") for k in state.answers)
 
@@ -167,10 +174,12 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     if not person.reminder_slot:
         # Первое знакомство: рассказ о боте и время напоминаний
-        await update.effective_chat.send_message(WELCOME_TEXT, parse_mode=ParseMode.HTML, reply_markup=MENU_KEYBOARD)
+        welcome = WELCOME_TEXT.replace("Здравствуйте!", _hello(person), 1)
+        await update.effective_chat.send_message(welcome, parse_mode=ParseMode.HTML, reply_markup=MENU_KEYBOARD)
         await _send(update, [_reminder_question()])
     else:
-        await update.effective_chat.send_message(GREETING_TEXT, reply_markup=MENU_KEYBOARD)
+        greeting = GREETING_TEXT.replace("Здравствуйте, это", f"{_hello(person)} Это", 1)
+        await update.effective_chat.send_message(greeting, reply_markup=MENU_KEYBOARD)
     if person.state:
         if _has_answers(person.state):
             await _send(update, [engine.Screen(
@@ -556,7 +565,7 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
     # Заявка создана — чистим состояние сразу, чтобы повторное нажатие не создало дубль
     await _save(ctx, person, None)
     failed = await _upload_files(ctx, reg_id, files)
-    done = sc.done_text
+    done = f"{phrases.pick(phrases.THANKS)} {sc.done_text}"
     if failed:
         done += f"\n\nНе загрузилось файлов: {len(failed)} ({', '.join(failed)}). Пришлите их Егору ссылкой."
     await update.effective_chat.send_message(done, reply_markup=MENU_KEYBOARD)
@@ -737,7 +746,7 @@ async def _process_decisions(app: Application) -> None:
 REMINDERS_INTERVAL = 600  # секунд между проверками
 
 
-async def _build_digest(repo: AirtableRepo, companies: list[str], today: date):
+async def _build_digest(repo: AirtableRepo, companies: list[str], today: date, name: str = ""):
     """(текст, кнопки, пункты) напоминания для компаний человека; None — напоминать нечего."""
     projects = _sorted(await asyncio.to_thread(repo.dealer_projects, companies))
     if not projects:
@@ -750,7 +759,11 @@ async def _build_digest(repo: AirtableRepo, companies: list[str], today: date):
     if not items:
         return None
     buttons = [[(f"Открыть: {it.name[:40]}", f"{CB_PICK}{MODE_MY}:{it.project_id}")] for it in items[:PAGE_SIZE]]
-    return reminders.digest_text(items), buttons, items
+    intro = phrases.pick(phrases.REMINDER_INTRO)
+    first = phrases.first_name(name)
+    if first:
+        intro = intro.replace("Ола!", f"Ола, {first}!")
+    return reminders.digest_text(items, intro), buttons, items
 
 
 async def cmd_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -773,7 +786,7 @@ async def preview_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE, usern
         header = ""
     if not person:
         return
-    digest = await _build_digest(repo, person.company_ids, datetime.now(VALENCIA).date())
+    digest = await _build_digest(repo, person.company_ids, datetime.now(VALENCIA).date(), person.name)
     if not digest:
         await update.effective_chat.send_message("🛠 Напоминать нечего: по проектам всё в порядке.")
         return
@@ -838,7 +851,7 @@ async def process_reminders(app: Application) -> None:
         checked[rec["id"]] = today
         if not reminders.due(f.get(People.LAST_REMINDER), today):
             continue
-        digest = await _build_digest(repo, f.get(People.COMPANY) or [], today)
+        digest = await _build_digest(repo, f.get(People.COMPANY) or [], today, f.get(People.NAME, ""))
         if not digest:
             continue
         text, buttons, items = digest

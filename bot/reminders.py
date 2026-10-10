@@ -105,9 +105,9 @@ def project_item(project, today: date, last_news: date | None) -> Item | None:
     return Item(project.record_id, project.name, reasons) if reasons else None
 
 
-def digest_text(items: list[Item]) -> str:
+def digest_text(items: list[Item], intro: str | None = None) -> str:
     """Сообщение, сгруппированное по причинам; пустые группы не показываем."""
-    parts = ["<b>Напоминание по вашим плейсментам</b>"]
+    parts = [f"<b>{escape(intro or 'Напоминание по вашим плейсментам')}</b>"]
     for reason, title, hint in SECTIONS:
         rows = [f"• {escape(it.name)} — {escape(it.reasons[reason])}" for it in items if reason in it.reasons]
         if rows:
