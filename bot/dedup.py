@@ -29,7 +29,7 @@ _STOP = {
     "ves", "vsego", "obekta", "etaj", "etaji", "etaja",
 }
 _MIN_LEN = 4
-_SIMILAR = 0.8
+_SIMILAR = 0.85  # «Тайерс» ≠ «Тауэрс» (0.83), «Петрович» = «Petrovitch»
 
 
 def sound(text: str) -> str:

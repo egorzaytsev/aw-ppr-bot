@@ -388,3 +388,9 @@ class AirtableRepo:
             "people": [(r["fields"].get(People.NAME, ""), r["fields"].get(People.REMINDER_SLOT),
                         r["fields"].get(People.LAST_REMINDER)) for r in people],
         }
+
+    def person_name(self, person_id: str) -> str:
+        try:
+            return self._people.get(person_id, use_field_ids=True)["fields"].get(People.NAME, "")
+        except Exception:
+            return ""

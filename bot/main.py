@@ -235,6 +235,13 @@ async def _handle_answer_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, te
         await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
         return
     if not person.state:
+        if admin.is_admin(update, ctx):
+            await update.effective_chat.send_message(
+                "🛠 Сейчас я ничего не жду. Если это название проекта — нажми «Принять» на заявке ещё раз "
+                "(или открой /inbox) и выбери «Создать новый проект».",
+                reply_markup=MENU_KEYBOARD,
+            )
+            return
         await update.effective_chat.send_message("Выбери действие внизу.", reply_markup=MENU_KEYBOARD)
         return
     await _apply(update, ctx, person, engine.handle_text(person.state, text))
@@ -593,7 +600,8 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
             }
             await ctx.bot.send_message(
                 admin_chat,
-                admin.request_card(card_fields, reg_id, person.name, analysis),
+                admin.request_card(card_fields, reg_id, person.name, analysis,
+                                   ", ".join(_repo(ctx).company_name(c) for c in person.company_ids) or None),
                 parse_mode=ParseMode.HTML,
                 reply_markup=admin.decision_markup(ctx, reg_id),
             )

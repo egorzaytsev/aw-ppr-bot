@@ -11,7 +11,9 @@ PROJECTS = [
 def test_translit_and_transcription():
     assert dedup.sound("Символ") == "simvol" and dedup.sound("Symbol") == "simbol"
     assert dedup.sound("Петрович") == dedup.sound("Petrovitch")
-    assert dedup.overlap("Символ", "Symbol")
+    assert dedup.overlap("Символ", "Simvol") and dedup.overlap("Технодом", "Technodom")
+    # Похожее звучание разных компаний — не совпадение
+    assert not dedup.overlap("ООО «Айкон Тайерс»", "МР Групп Нева Тауэрс")
 
 
 def test_find_by_object_client_address():

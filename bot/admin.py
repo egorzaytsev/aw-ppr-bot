@@ -67,7 +67,8 @@ def _title(rtype: str, payload: dict) -> str:
     }.get(rtype, "Новая заявка")
 
 
-def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: str | None = None) -> str:
+def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: str | None = None,
+                 dealer: str | None = None) -> str:
     name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
     rtype = reg.get(Registrations.REQUEST_TYPE) or "—"
     try:
@@ -75,7 +76,11 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
     except ValueError:
         payload = {}
     head = f"🛠 {_title(rtype, payload)}: <b>{escape(name)}</b>"
-    lines = [head, escape(rtype) + (f" · от {escape(author)}" if author else "")]
+    lines = [head]
+    who = " · ".join(x for x in (dealer, author) if x)
+    if who:
+        lines.append(f"Дилер: <b>{escape(who)}</b>")
+    lines.append(escape(rtype))
     for key, label in CARD_FIELDS:
         if payload.get(key) not in (None, ""):
             lines.append(f"{label}: {escape(str(payload[key]))[:300]}")
@@ -99,9 +104,22 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.effective_chat.send_message(f"🛠 Заявок без решения: {len(recs)}")
     for rec in recs:
         await update.effective_chat.send_message(
-            request_card(rec["fields"], rec["id"]), parse_mode=ParseMode.HTML,
+            request_card(rec["fields"], rec["id"], await _author(repo, rec["fields"]),
+                         rec["fields"].get(Registrations.ANALYSIS), await _dealer(repo, rec["fields"])),
+            parse_mode=ParseMode.HTML,
             reply_markup=decision_markup(ctx, rec["id"]),
         )
+
+
+async def _dealer(repo, reg: dict) -> str | None:
+    ids = reg.get(Registrations.DEALER) or []
+    names = [await asyncio.to_thread(repo.company_name, c) for c in ids]
+    return ", ".join(names) or None
+
+
+async def _author(repo, reg: dict) -> str | None:
+    ids = reg.get(Registrations.SUBMITTED_BY) or []
+    return await asyncio.to_thread(repo.person_name, ids[0]) if ids else None
 
 
 async def _close_if_orphan_reply(repo, rec: dict) -> bool:
@@ -226,8 +244,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     if action == ACTION_NEW:
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
         await chat.send_message(
-            f"🛠 «{name}»: название нового проекта латиницей, как оно будет в Projects.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
+            f"🛠 «{name}»: напиши название нового проекта латиницей, как оно будет в Projects. "
+            "Передумал — просто нажми меню внизу.",
         )
 
 
