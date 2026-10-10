@@ -156,6 +156,16 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
     decided = reg.get(Registrations.DECISION)
     if decided and decided != Decision.NEED_INFO and action not in (ACTION_PICK,):
+        if reply_id:
+            # Исходная заявка уже решена — ответ дилера закрываем, чтобы не висел в /inbox
+            target = reg.get(Registrations.TARGET_PROJECT) or []
+            await asyncio.to_thread(repo.close_reply, reply_id, target[0] if target else None)
+            await chat.send_message(
+                f"🛠 По «{name}» решение уже стоит: {escape(decided)}. "
+                "Ответ дилера закрыт" + (" и добавлен в проект." if target else ".")
+            )
+            await _apply_now(ctx)
+            return
         await chat.send_message(f"🛠 По «{name}» решение уже стоит: {escape(decided)}.")
         return
 
