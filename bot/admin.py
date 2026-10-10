@@ -90,7 +90,9 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
 async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update, ctx):
         return
-    recs = await asyncio.to_thread(ctx.bot_data["repo"].pending_without_decision)
+    repo = ctx.bot_data["repo"]
+    recs = await asyncio.to_thread(repo.pending_without_decision)
+    recs = [rec for rec in recs if not await _close_if_orphan_reply(repo, rec)]
     if not recs:
         await update.effective_chat.send_message("🛠 В Inbox нет заявок без решения.")
         return
@@ -100,6 +102,23 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             request_card(rec["fields"], rec["id"]), parse_mode=ParseMode.HTML,
             reply_markup=decision_markup(ctx, rec["id"]),
         )
+
+
+async def _close_if_orphan_reply(repo, rec: dict) -> bool:
+    """Ответ дилера, чья исходная заявка уже решена, — закрыть молча. True — закрыт."""
+    original = _payload(rec["fields"]).get("In Reply To")
+    if not original:
+        return False
+    try:
+        orig = await asyncio.to_thread(repo.registration_fields, original)
+    except Exception:
+        return False
+    decided = orig.get(Registrations.DECISION)
+    if not decided or decided == Decision.NEED_INFO:
+        return False
+    target = orig.get(Registrations.TARGET_PROJECT) or []
+    await asyncio.to_thread(repo.close_reply, rec["id"], target[0] if target else None)
+    return True
 
 
 def _payload(reg: dict) -> dict:

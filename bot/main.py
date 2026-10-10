@@ -778,7 +778,9 @@ async def preview_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE, usern
         await update.effective_chat.send_message("🛠 Напоминать нечего: по проектам всё в порядке.")
         return
     text, buttons, _ = digest
-    await update.effective_chat.send_message(header + text, parse_mode=ParseMode.HTML, reply_markup=_markup(buttons))
+    # В чужом предпросмотре кнопок нет: проекты дилера админ из его карточки не откроет
+    markup = None if username else _markup(buttons)
+    await update.effective_chat.send_message(header + text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 # ---------- админское меню ----------
