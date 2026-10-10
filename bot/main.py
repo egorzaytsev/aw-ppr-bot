@@ -19,7 +19,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import engine
+from . import admin, engine
 from .airtable_ids import Projects, Registrations
 from .decisions import plan as decision_plan
 from .airtable_repo import (
@@ -229,6 +229,10 @@ async def _handle_answer_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, te
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text.strip()
+    if text in (MENU_NEW, MENU_UPDATE, MENU_MY, MENU_START):
+        admin._pending(ctx).pop(update.effective_chat.id, None)  # нажал меню — ввод для админа отменён
+    elif await admin.on_admin_text(update, ctx, text):
+        return
     if text.lower() in (MENU_START.lower(), "start"):
         await cmd_start(update, ctx)
         return
@@ -302,6 +306,9 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _route(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, data: str) -> None:
+    if data.startswith(admin.CB_ADMIN):
+        await admin.on_admin_callback(update, ctx, data)
+        return
     if data.startswith(CB_DROP_AND_GO):
         if person.state:
             await _save(ctx, person, None)
@@ -548,14 +555,15 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
     await update.effective_chat.send_message(done, reply_markup=MENU_KEYBOARD)
     log.info("Заявка %s от %s (%s), файлов %d", reg_id, person.record_id, request_type, len(files))
 
-    admin = ctx.bot_data.get("admin_chat_id")
-    if admin:
+    admin_chat = ctx.bot_data.get("admin_chat_id")
+    if admin_chat:
         try:
             await ctx.bot.send_message(
-                admin,
+                admin_chat,
                 f"Новая заявка: <b>{escape(str(name or '—'))}</b>\n"
                 f"{escape(request_type)} · от {escape(person.name)}\n<code>{reg_id}</code>",
                 parse_mode=ParseMode.HTML,
+                reply_markup=admin.decision_markup(ctx, reg_id),
             )
         except Exception:
             log.exception("Не удалось уведомить ADMIN_CHAT_ID")
@@ -632,8 +640,14 @@ async def _send_html(ctx_bot, chat_id, text: str, markup=None) -> None:
 
 
 async def process_decisions(app: Application) -> None:
+    # Минутный цикл и кнопки админа не должны обработать одну заявку дважды
+    async with app.bot_data.setdefault("decisions_lock", asyncio.Lock()):
+        await _process_decisions(app)
+
+
+async def _process_decisions(app: Application) -> None:
     repo: AirtableRepo = app.bot_data["repo"]
-    admin = app.bot_data.get("admin_chat_id")
+    admin_chat = app.bot_data.get("admin_chat_id")
     for rec in await asyncio.to_thread(repo.decisions_to_process):
         reg = rec["fields"]
         target = reg.get(Registrations.TARGET_PROJECT) or []
@@ -665,14 +679,14 @@ async def process_decisions(app: Application) -> None:
             for chat in await asyncio.to_thread(repo.chat_ids_for_companies, pl.broadcast_companies):
                 if chat not in dealer_chats:
                     await _send_html(app.bot, chat, pl.broadcast_text)
-        if admin:
+        if admin_chat:
             if pl.admin_text:
-                await _send_html(app.bot, admin, pl.admin_text)
+                await _send_html(app.bot, admin_chat, pl.admin_text)
             elif pl.dealer_text and not pl.blocked:
                 sent = "отправлен" if dealer_chats else "не отправлен — у автора нет Telegram"
                 moved = f"\n\nИз заявки в проект перенесено: {', '.join(pl.transferred)}." if pl.transferred else ""
                 await _send_html(
-                    app.bot, admin, f"✓ Решение применено, ответ дилеру {sent}:\n\n{pl.dealer_text}{moved}"
+                    app.bot, admin_chat, f"✓ Решение применено, ответ дилеру {sent}:\n\n{pl.dealer_text}{moved}"
                 )
 
 
@@ -722,6 +736,8 @@ def build_app() -> Application:
     app.bot_data["repo"] = AirtableRepo(settings.airtable_token, settings.airtable_base_id)
     app.bot_data["transcriber"] = transcriber
     app.bot_data["admin_chat_id"] = settings.admin_chat_id
+    app.bot_data["base_id"] = settings.airtable_base_id
+    app.bot_data["process_decisions"] = process_decisions
 
     app.add_handler(TypeHandler(Update, log_update), group=-1)
     private = filters.ChatType.PRIVATE
@@ -729,6 +745,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("new", cmd_new, filters=private))
     app.add_handler(CommandHandler("cancel", cmd_cancel, filters=private))
     app.add_handler(CommandHandler("time", cmd_time, filters=private))
+    app.add_handler(CommandHandler("inbox", admin.cmd_inbox, filters=private))
     app.add_handler(MessageHandler(private & (filters.VOICE | filters.AUDIO), on_voice))
     app.add_handler(MessageHandler(private & (filters.Document.ALL | filters.PHOTO), on_file))
     app.add_handler(MessageHandler(private & filters.TEXT & ~filters.COMMAND, on_text))

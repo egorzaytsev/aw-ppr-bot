@@ -249,3 +249,35 @@ class AirtableRepo:
         recs = self._companies.all(formula=_ids_formula(company_ids), fields=[Companies.PEOPLE], use_field_ids=True)
         people = sorted({pid for r in recs for pid in r["fields"].get(Companies.PEOPLE, [])})
         return self.chat_ids_for_people(people)
+
+    # ---------- решения из Telegram (админ) ----------
+
+    def pending_without_decision(self, limit: int = 10) -> list[dict]:
+        formula = (f"AND({{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)}, "
+                   f"{{{Registrations.DECISION}}}='')")
+        return self._registrations.all(formula=formula, use_field_ids=True, max_records=limit,
+                                       sort=["-" + Registrations.SUBMITTED_AT])
+
+    def set_decision(self, reg_id: str, decision: str, note: str | None = None,
+                     target_project_id: str | None = None) -> None:
+        fields: dict = {Registrations.DECISION: decision}
+        if note is not None:
+            fields[Registrations.DECISION_NOTE] = note
+        if target_project_id:
+            fields[Registrations.TARGET_PROJECT] = [target_project_id]
+        self._registrations.update(reg_id, fields)
+
+    def create_project(self, name: str) -> str:
+        rec = self._projects.create({Projects.NAME: name, Projects.STATUS: "Active"})
+        return rec["id"]
+
+    def find_project_candidates(self, words: list[str], limit: int = 3) -> list[tuple[str, str]]:
+        """Похожие проекты по словам из заявки (название проекта / объекта / адрес)."""
+        words = [w for w in words if len(w) >= 4][:6]
+        if not words:
+            return []
+        hay = (f"LOWER({{{Projects.NAME}}}&' '&{{{Projects.OBJECT_NAME}}}&' '&{{{Projects.OBJECT_ADDRESS}}})")
+        formula = "OR(" + ",".join(f"FIND({_quote(w.lower())}, {hay})" for w in words) + ")"
+        recs = self._projects.all(formula=formula, fields=[Projects.NAME, Projects.STATUS],
+                                  use_field_ids=True, max_records=limit)
+        return [(r["id"], (r["fields"].get(Projects.NAME) or "Без названия").strip()) for r in recs]
