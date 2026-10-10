@@ -49,18 +49,37 @@ def decision_markup(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> InlineKeyboa
     ])
 
 
-def request_card(reg: dict, reg_id: str) -> str:
+CARD_FIELDS = (
+    ("Dealer News", "Текст"), ("End Client", "Клиент"), ("Object Name", "Объект"), ("City", "Город"),
+    ("Project Stage", "Стадия"), ("Specifier", "Бюро"), ("Lead Architect", "ГАП"),
+    ("PL Volume", "Объём по прайсу, €"), ("Lost Reason", "Причина"), ("Order / Proforma №", "Заказ / проформа"),
+)
+
+
+def _title(rtype: str, payload: dict) -> str:
+    if payload.get("In Reply To"):
+        return "💬 Ответ на ваш запрос"
+    return {
+        "Update — info only": "📰 Новость по проекту",
+        "Update — Won": "🏆 Дилер сообщает: выигран",
+        "Update — Lost": "✖️ Дилер сообщает: проигран",
+    }.get(rtype, "Новая заявка")
+
+
+def request_card(reg: dict, reg_id: str, author: str | None = None) -> str:
     name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
     rtype = reg.get(Registrations.REQUEST_TYPE) or "—"
-    lines = [f"<b>{escape(name)}</b>", escape(rtype)]
     try:
         payload = json.loads(reg.get(Registrations.PAYLOAD) or "{}")
     except ValueError:
         payload = {}
-    for key in ("End Client", "Object Name", "City", "Project Stage", "Specifier", "PL Volume",
-                "Dealer News", "Lost Reason", "Order / Proforma №"):
+    head = f"{_title(rtype, payload)}: <b>{escape(name)}</b>"
+    lines = [head, escape(rtype) + (f" · от {escape(author)}" if author else "")]
+    for key, label in CARD_FIELDS:
         if payload.get(key) not in (None, ""):
-            lines.append(f"{escape(key)}: {escape(str(payload[key]))[:200]}")
+            lines.append(f"{label}: {escape(str(payload[key]))[:300]}")
+    if rtype == "Update — Lost" and payload.get("Project Log"):
+        lines.append(escape(payload["Project Log"])[:300])
     lines.append(f"<code>{reg_id}</code>")
     return "\n".join(lines)
 

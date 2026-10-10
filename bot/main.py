@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import date, datetime
 from html import escape
@@ -558,10 +559,14 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
     admin_chat = ctx.bot_data.get("admin_chat_id")
     if admin_chat:
         try:
+            card_fields = {
+                Registrations.DEALER_PROJECT_NAME: name,
+                Registrations.REQUEST_TYPE: request_type,
+                Registrations.PAYLOAD: json.dumps(payload, ensure_ascii=False),
+            }
             await ctx.bot.send_message(
                 admin_chat,
-                f"Новая заявка: <b>{escape(str(name or '—'))}</b>\n"
-                f"{escape(request_type)} · от {escape(person.name)}\n<code>{reg_id}</code>",
+                admin.request_card(card_fields, reg_id, person.name),
                 parse_mode=ParseMode.HTML,
                 reply_markup=admin.decision_markup(ctx, reg_id),
             )
