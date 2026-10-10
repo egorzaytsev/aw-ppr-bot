@@ -12,6 +12,8 @@ class People:
     TELEGRAM_CHAT_ID = "fldkrdC4GxwySZaOb"
     BOT_STATE = "fldTgLLWJ8c7uYFlI"
     REMINDER_SLOT = "fldspBKdbk8Ed9Ji5"
+    LAST_REMINDER = "fldpIUrdICo7UusyN"
+    COUNTRY = "fldKd7jlAKfey5xeD"
 
 
 class Companies:
@@ -22,6 +24,7 @@ class Companies:
     AS_REGISTERED = "flds1nP0HoRHISZeu"      # ← Projects.Registered
     REGISTRATIONS = "fldkMDN9qrMlcKQzi"      # ← Registrations.Dealer
     PEOPLE = "fld9kyOncMPx5R5GC"
+    NAME = "flddHSCWNh1RDWy9e"
 
 
 class Projects:
@@ -67,6 +70,7 @@ class Registrations:
     DECISION = "fldVa9VFrZtahGCwi"
     DECISION_NOTE = "fldL7Ncl5Ess8jsqQ"
     BOT_PROCESSED = "fld46XTTXBfX30llt"
+    ANALYSIS = "fldZk7APhOh9p3rsx"
 
 
 class RegStatus:

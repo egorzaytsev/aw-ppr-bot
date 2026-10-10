@@ -20,8 +20,8 @@ from telegram.ext import (
     filters,
 )
 
-from . import admin, engine
-from .airtable_ids import Projects, Registrations
+from . import admin, dedup, engine, reminders
+from .airtable_ids import People, Projects, Registrations
 from .decisions import plan as decision_plan
 from .airtable_repo import (
     PPR_NOTIFIED, PPR_PRE_REGISTERED, PPR_REGISTERED, AirtableRepo, DealerProject, Person,
@@ -556,6 +556,15 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
     await update.effective_chat.send_message(done, reply_markup=MENU_KEYBOARD)
     log.info("Заявка %s от %s (%s), файлов %d", reg_id, person.record_id, request_type, len(files))
 
+    analysis = None
+    if request_type.startswith("New"):
+        try:
+            found = dedup.find(payload, name or "", await asyncio.to_thread(_repo(ctx).dedup_projects))
+            analysis = dedup.analysis_text(found)
+            await asyncio.to_thread(_repo(ctx).set_analysis, reg_id, analysis)
+        except Exception:
+            log.exception("Поиск дублей для %s", reg_id)
+
     admin_chat = ctx.bot_data.get("admin_chat_id")
     if admin_chat:
         try:
@@ -566,7 +575,7 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
             }
             await ctx.bot.send_message(
                 admin_chat,
-                admin.request_card(card_fields, reg_id, person.name),
+                admin.request_card(card_fields, reg_id, person.name, analysis),
                 parse_mode=ParseMode.HTML,
                 reply_markup=admin.decision_markup(ctx, reg_id),
             )
@@ -698,6 +707,55 @@ async def _process_decisions(app: Application) -> None:
                 )
 
 
+# ---------- напоминания ----------
+
+REMINDERS_INTERVAL = 600  # секунд между проверками
+
+
+async def process_reminders(app: Application) -> None:
+    repo: AirtableRepo = app.bot_data["repo"]
+    checked: dict = app.bot_data.setdefault("reminders_checked", {})  # кого уже проверили сегодня
+    for rec in await asyncio.to_thread(repo.people_for_reminders):
+        f = rec["fields"]
+        now = reminders.person_now(f.get(People.COUNTRY))
+        today = now.date()
+        if checked.get(rec["id"]) == today or not reminders.in_slot(now, f.get(People.REMINDER_SLOT)):
+            continue
+        checked[rec["id"]] = today
+        if not reminders.due(f.get(People.LAST_REMINDER), today):
+            continue
+        companies = f.get(People.COMPANY) or []
+        projects = _sorted(await asyncio.to_thread(repo.dealer_projects, companies))
+        if not projects:
+            continue
+        news = await asyncio.to_thread(repo.last_news_by_project, companies)
+        items = [
+            it for p in projects
+            if (it := reminders.project_item(p, today, date.fromisoformat(news[p.record_id]) if p.record_id in news else None))
+        ]
+        if not items:
+            continue
+        buttons = [[(f"Открыть: {it.name[:40]}", f"{CB_PICK}{MODE_MY}:{it.project_id}")] for it in items[:PAGE_SIZE]]
+        try:
+            await app.bot.send_message(f[People.TELEGRAM_CHAT_ID], reminders.digest_text(items),
+                                       parse_mode=ParseMode.HTML, reply_markup=_markup(buttons))
+        except Exception:
+            log.exception("Не удалось отправить напоминание %s", rec["id"])
+            continue
+        await asyncio.to_thread(repo.set_last_reminder, rec["id"], today.isoformat())
+        log.info("Напоминание %s: %d проектов", rec["id"], len(items))
+
+
+async def _reminders_loop(app: Application) -> None:
+    await asyncio.sleep(30)  # дать боту подняться
+    while True:
+        try:
+            await process_reminders(app)
+        except Exception:
+            log.exception("Ошибка напоминаний")
+        await asyncio.sleep(REMINDERS_INTERVAL)
+
+
 async def _decisions_loop(app: Application) -> None:
     while True:
         try:
@@ -730,11 +788,13 @@ def build_app() -> Application:
 
     async def post_init(app: Application) -> None:
         app.bot_data["decisions_task"] = asyncio.create_task(_decisions_loop(app))
+        app.bot_data["reminders_task"] = asyncio.create_task(_reminders_loop(app))
 
     async def post_shutdown(app: Application) -> None:
-        task = app.bot_data.get("decisions_task")
-        if task:
-            task.cancel()
+        for key in ("decisions_task", "reminders_task"):
+            task = app.bot_data.get(key)
+            if task:
+                task.cancel()
         await transcriber.aclose()
 
     app = (

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 
 from pyairtable import Api
@@ -282,13 +283,59 @@ class AirtableRepo:
         rec = self._projects.create({Projects.NAME: name, Projects.STATUS: "Active"})
         return rec["id"]
 
-    def find_project_candidates(self, words: list[str], limit: int = 3) -> list[tuple[str, str]]:
-        """Похожие проекты по словам из заявки (название проекта / объекта / адрес)."""
-        words = [w for w in words if len(w) >= 4][:6]
-        if not words:
-            return []
-        hay = (f"LOWER({{{Projects.NAME}}}&' '&{{{Projects.OBJECT_NAME}}}&' '&{{{Projects.OBJECT_ADDRESS}}})")
-        formula = "OR(" + ",".join(f"FIND({_quote(w.lower())}, {hay})" for w in words) + ")"
-        recs = self._projects.all(formula=formula, fields=[Projects.NAME, Projects.STATUS],
-                                  use_field_ids=True, max_records=limit)
-        return [(r["id"], (r["fields"].get(Projects.NAME) or "Без названия").strip()) for r in recs]
+    # ---------- напоминания ----------
+
+    def people_for_reminders(self) -> list[dict]:
+        formula = (f"AND({{{People.TELEGRAM_CHAT_ID}}}!='', {{{People.REMINDER_SLOT}}}!='', "
+                   f"COUNTA({{{People.COMPANY}}})>0)")
+        fields = [People.NAME, People.COMPANY, People.TELEGRAM_CHAT_ID, People.REMINDER_SLOT,
+                  People.LAST_REMINDER, People.COUNTRY]
+        return self._people.all(formula=formula, fields=fields, use_field_ids=True)
+
+    def set_last_reminder(self, person_id: str, day: str) -> None:
+        self._people.update(person_id, {People.LAST_REMINDER: day})
+
+    def last_news_by_project(self, company_ids: list[str]) -> dict:
+        """Последняя заявка компании по каждому проекту (Target Project) — дата YYYY-MM-DD."""
+        reg_ids = [rid for f in self._company_fields(company_ids) for rid in f.get(Companies.REGISTRATIONS, [])]
+        if not reg_ids:
+            return {}
+        out: dict = {}
+        for i in range(0, len(reg_ids), 50):  # длина формулы
+            recs = self._registrations.all(
+                formula=_ids_formula(reg_ids[i:i + 50]),
+                fields=[Registrations.TARGET_PROJECT, Registrations.SUBMITTED_AT], use_field_ids=True,
+            )
+            for r in recs:
+                at = (r["fields"].get(Registrations.SUBMITTED_AT) or "")[:10]
+                for pid in r["fields"].get(Registrations.TARGET_PROJECT) or []:
+                    if at and at > out.get(pid, ""):
+                        out[pid] = at
+        return out
+
+    # ---------- поиск дублей ----------
+
+    _DEDUP_TTL = 600  # секунд: проекты для сравнения кэшируем
+
+    def dedup_projects(self) -> list[dict]:
+        cached = getattr(self, "_dedup_cache", None)
+        if cached and time.monotonic() - cached[0] < self._DEDUP_TTL:
+            return cached[1]
+        names = {r["id"]: r["fields"].get(Companies.NAME, "")
+                 for r in self._companies.all(fields=[Companies.NAME], use_field_ids=True)}
+        recs = self._projects.all(
+            fields=[Projects.NAME, Projects.OBJECT_NAME, Projects.OBJECT_ADDRESS, Projects.END_CLIENT],
+            use_field_ids=True,
+        )
+        projects = [{
+            "id": r["id"],
+            "name": (r["fields"].get(Projects.NAME) or "").strip(),
+            "object": r["fields"].get(Projects.OBJECT_NAME) or "",
+            "address": r["fields"].get(Projects.OBJECT_ADDRESS) or "",
+            "clients": [names.get(c, "") for c in r["fields"].get(Projects.END_CLIENT) or []],
+        } for r in recs]
+        self._dedup_cache = (time.monotonic(), projects)
+        return projects
+
+    def set_analysis(self, reg_id: str, text: str) -> None:
+        self._registrations.update(reg_id, {Registrations.ANALYSIS: text})

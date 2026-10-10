@@ -9,13 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
+from . import dedup
 from .airtable_ids import Decision, Registrations
 
 log = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ def _title(rtype: str, payload: dict) -> str:
     }.get(rtype, "Новая заявка")
 
 
-def request_card(reg: dict, reg_id: str, author: str | None = None) -> str:
+def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: str | None = None) -> str:
     name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
     rtype = reg.get(Registrations.REQUEST_TYPE) or "—"
     try:
@@ -80,6 +80,8 @@ def request_card(reg: dict, reg_id: str, author: str | None = None) -> str:
             lines.append(f"{label}: {escape(str(payload[key]))[:300]}")
     if rtype == "Update — Lost" and payload.get("Project Log"):
         lines.append(escape(payload["Project Log"])[:300])
+    if analysis:
+        lines.append(escape(analysis))
     lines.append(f"<code>{reg_id}</code>")
     return "\n".join(lines)
 
@@ -105,13 +107,6 @@ def _payload(reg: dict) -> dict:
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
-
-
-def _search_words(reg: dict) -> list[str]:
-    payload = _payload(reg)
-    text = " ".join(str(payload.get(k) or "") for k in ("Object Name", "End Client", "Object Address"))
-    text += " " + (reg.get(Registrations.DEALER_PROJECT_NAME) or "")
-    return sorted(set(re.findall(r"[\w-]{4,}", text.lower())), key=len, reverse=True)
 
 
 async def _apply_now(ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -186,7 +181,9 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
                 await asyncio.to_thread(repo.close_reply, reply_id, target[0])
             await _apply_now(ctx)
             return
-        candidates = await asyncio.to_thread(repo.find_project_candidates, _search_words(reg))
+        projects = await asyncio.to_thread(repo.dedup_projects)
+        found = dedup.find(_payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "", projects)
+        candidates = [(c.project_id, f"{c.name} ({', '.join(c.reasons)})") for c in found]
         tail = f":{reply_id}" if reply_id else ""
         rows = [[InlineKeyboardButton(f"В проект: {pname[:40]}",
                                       callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{pid}{tail}")]
@@ -194,7 +191,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         rows.append([InlineKeyboardButton("Создать новый проект",
                                           callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-{tail}")])
         rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")])
-        hint = "Похожие проекты в базе:" if candidates else "Похожих проектов по словам из заявки не нашёл."
+        hint = ("Похожие проекты в базе (по объекту, клиенту, адресу):" if candidates
+                else "Похожих проектов по объекту, клиенту и адресу не нашёл.")
         await chat.send_message(f"🛠 «{name}»: в какой проект?\n{hint}", reply_markup=InlineKeyboardMarkup(rows))
         return
 
