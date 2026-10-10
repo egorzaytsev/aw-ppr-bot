@@ -367,3 +367,24 @@ class AirtableRepo:
 
     def company_name(self, company_id: str) -> str:
         return self._company_names().get(company_id) or company_id
+
+    # ---------- сводка для админа ----------
+
+    def admin_stats(self) -> dict:
+        pending = self._registrations.all(
+            formula=f"AND({{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)}, "
+                    f"OR({{{Registrations.DECISION}}}='', {{{Registrations.DECISION}}}={_quote('Need more info')}))",
+            fields=[Registrations.DECISION], use_field_ids=True)
+        blocked = self._registrations.all(
+            formula=f"LEFT({{{Registrations.BOT_PROCESSED}}}, 8)='blocked:'",
+            fields=[Registrations.DEALER_PROJECT_NAME], use_field_ids=True)
+        people = self._people.all(
+            formula=f"AND({{{People.TELEGRAM_CHAT_ID}}}!='', COUNTA({{{People.COMPANY}}})>0)",
+            fields=[People.NAME, People.REMINDER_SLOT, People.LAST_REMINDER], use_field_ids=True)
+        return {
+            "no_decision": sum(1 for r in pending if not r["fields"].get(Registrations.DECISION)),
+            "need_info": sum(1 for r in pending if r["fields"].get(Registrations.DECISION)),
+            "blocked": [r["fields"].get(Registrations.DEALER_PROJECT_NAME) or r["id"] for r in blocked],
+            "people": [(r["fields"].get(People.NAME, ""), r["fields"].get(People.REMINDER_SLOT),
+                        r["fields"].get(People.LAST_REMINDER)) for r in people],
+        }

@@ -7,7 +7,10 @@ import logging
 from datetime import date, datetime
 from html import escape
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
+from telegram import (
+    BotCommand, BotCommandScopeChat, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -309,6 +312,9 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _route(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, data: str) -> None:
     if data.startswith(admin.CB_ADMIN):
         await admin.on_admin_callback(update, ctx, data)
+        return
+    if data.startswith(CB_ADMIN_MENU):
+        await _admin_menu_action(update, ctx, data[len(CB_ADMIN_MENU):])
         return
     if data.startswith(CB_DROP_AND_GO):
         if person.state:
@@ -751,11 +757,15 @@ async def cmd_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Админ: /reminder — своё напоминание сейчас; /reminder username — что получил бы человек."""
     if not admin.is_admin(update, ctx):
         return
+    await preview_reminder(update, ctx, ctx.args[0] if ctx.args else None)
+
+
+async def preview_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE, username: str | None) -> None:
     repo = _repo(ctx)
-    if ctx.args:
-        person = await asyncio.to_thread(repo.find_by_username, ctx.args[0])
+    if username:
+        person = await asyncio.to_thread(repo.find_by_username, username)
         if not person:
-            await update.effective_chat.send_message(f"🛠 Не нашёл @{escape(ctx.args[0].lstrip('@'))} в People.")
+            await update.effective_chat.send_message(f"🛠 Не нашёл @{escape(username.lstrip('@'))} в People.")
             return
         header = f"🛠 Так выглядело бы напоминание для {escape(person.name)} (ему не отправлено):\n\n"
     else:
@@ -769,6 +779,49 @@ async def cmd_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     text, buttons, _ = digest
     await update.effective_chat.send_message(header + text, parse_mode=ParseMode.HTML, reply_markup=_markup(buttons))
+
+
+# ---------- админское меню ----------
+
+CB_ADMIN_MENU = "am:"
+
+
+def _admin_menu() -> engine.Screen:
+    return engine.Screen("🛠 <b>Админ</b>", [
+        [("📥 Заявки на проверке", f"{CB_ADMIN_MENU}inbox")],
+        [("🔔 Моё напоминание", f"{CB_ADMIN_MENU}remind"), ("👀 Напоминание дилера", f"{CB_ADMIN_MENU}remind_user")],
+        [("📊 Сводка", f"{CB_ADMIN_MENU}stats")],
+    ])
+
+
+async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not admin.is_admin(update, ctx):
+        return  # для всех остальных команды нет
+    await _send(update, [_admin_menu()])
+
+
+async def _admin_menu_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE, action: str) -> None:
+    if not admin.is_admin(update, ctx):
+        return
+    chat = update.effective_chat
+    if action == "inbox":
+        await admin.cmd_inbox(update, ctx)
+    elif action == "remind":
+        await preview_reminder(update, ctx, None)
+    elif action == "remind_user":
+        admin._pending(ctx)[chat.id] = (admin.ACTION_REMIND_USER, "", "")
+        await chat.send_message("🛠 Username дилера (без @), например Lola_Sapaeva:")
+    elif action == "stats":
+        st = await asyncio.to_thread(_repo(ctx).admin_stats)
+        lines = ["🛠 <b>Сводка</b>",
+                 f"Без решения: {st['no_decision']}",
+                 f"Ждём ответа дилера (Need more info): {st['need_info']}"]
+        if st["blocked"]:
+            lines.append("Заблокировано: " + escape(", ".join(st["blocked"])))
+        lines.append(f"\nПодключено людей: {len(st['people'])}")
+        for name, slot, last in st["people"]:
+            lines.append(f"• {escape(name)} — время {slot or 'не выбрано'}, напоминание {_date(last) or '—'}")
+        await chat.send_message("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def process_reminders(app: Application) -> None:
@@ -838,6 +891,19 @@ def build_app() -> Application:
     transcriber = Transcriber(settings.groq_api_key, settings.groq_model)
 
     async def post_init(app: Application) -> None:
+        # Подсказки «/»: дилерам — только свои команды, админу — ещё и админские
+        dealer_cmds = [BotCommand("start", "Начать"), BotCommand("new", "Новый проект"),
+                       BotCommand("cancel", "Отменить заявку"), BotCommand("time", "Время напоминаний")]
+        try:
+            await app.bot.set_my_commands(dealer_cmds, scope=BotCommandScopeDefault())
+            if settings.admin_chat_id:
+                await app.bot.set_my_commands(
+                    [BotCommand("admin", "Админ-меню"), BotCommand("inbox", "Заявки на проверке"),
+                     BotCommand("reminder", "Напоминание сейчас")] + dealer_cmds,
+                    scope=BotCommandScopeChat(int(settings.admin_chat_id)),
+                )
+        except Exception:
+            log.exception("Не удалось задать список команд")
         app.bot_data["decisions_task"] = asyncio.create_task(_decisions_loop(app))
         app.bot_data["reminders_task"] = asyncio.create_task(_reminders_loop(app))
 
@@ -857,6 +923,7 @@ def build_app() -> Application:
     app.bot_data["admin_chat_id"] = settings.admin_chat_id
     app.bot_data["base_id"] = settings.airtable_base_id
     app.bot_data["process_decisions"] = process_decisions
+    app.bot_data["preview_reminder"] = preview_reminder
 
     app.add_handler(TypeHandler(Update, log_update), group=-1)
     private = filters.ChatType.PRIVATE
@@ -866,6 +933,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("time", cmd_time, filters=private))
     app.add_handler(CommandHandler("inbox", admin.cmd_inbox, filters=private))
     app.add_handler(CommandHandler("reminder", cmd_reminder, filters=private))
+    app.add_handler(CommandHandler("admin", cmd_admin, filters=private))
     app.add_handler(MessageHandler(private & (filters.VOICE | filters.AUDIO), on_voice))
     app.add_handler(MessageHandler(private & (filters.Document.ALL | filters.PHOTO), on_file))
     app.add_handler(MessageHandler(private & filters.TEXT & ~filters.COMMAND, on_text))

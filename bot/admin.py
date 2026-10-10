@@ -25,6 +25,7 @@ BASE_URL = "https://airtable.com/{base}/{table}/{rec}"
 
 ACTION_ACCEPT, ACTION_DECLINE, ACTION_INFO = "acc", "dec", "inf"
 ACTION_PICK, ACTION_NEW, ACTION_CANCEL = "pick", "new", "cancel"
+ACTION_REMIND_USER = "remind_user"  # ждём username для предпросмотра напоминания
 
 
 def is_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -226,6 +227,9 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     if not text:
         pending[chat.id] = item
         await chat.send_message("🛠 Пустой текст — напишите ещё раз.")
+        return True
+    if action == ACTION_REMIND_USER:
+        await ctx.bot_data["preview_reminder"](update, ctx, text)
         return True
     if action == ACTION_NEW:
         project_id = await asyncio.to_thread(repo.create_project, text)
