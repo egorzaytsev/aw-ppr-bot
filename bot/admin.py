@@ -73,7 +73,7 @@ def request_card(reg: dict, reg_id: str, author: str | None = None) -> str:
         payload = json.loads(reg.get(Registrations.PAYLOAD) or "{}")
     except ValueError:
         payload = {}
-    head = f"{_title(rtype, payload)}: <b>{escape(name)}</b>"
+    head = f"🛠 {_title(rtype, payload)}: <b>{escape(name)}</b>"
     lines = [head, escape(rtype) + (f" · от {escape(author)}" if author else "")]
     for key, label in CARD_FIELDS:
         if payload.get(key) not in (None, ""):
@@ -89,9 +89,9 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     recs = await asyncio.to_thread(ctx.bot_data["repo"].pending_without_decision)
     if not recs:
-        await update.effective_chat.send_message("В Inbox нет заявок без решения.")
+        await update.effective_chat.send_message("🛠 В Inbox нет заявок без решения.")
         return
-    await update.effective_chat.send_message(f"Заявок без решения: {len(recs)}")
+    await update.effective_chat.send_message(f"🛠 Заявок без решения: {len(recs)}")
     for rec in recs:
         await update.effective_chat.send_message(
             request_card(rec["fields"], rec["id"]), parse_mode=ParseMode.HTML,
@@ -136,7 +136,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action == ACTION_CANCEL:
         pending.pop(chat.id, None)
-        await chat.send_message("Отменено.")
+        await chat.send_message("🛠 Отменено.")
         return
 
     try:
@@ -156,14 +156,14 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
     decided = reg.get(Registrations.DECISION)
     if decided and decided != Decision.NEED_INFO and action not in (ACTION_PICK,):
-        await chat.send_message(f"По «{name}» решение уже стоит: {escape(decided)}.")
+        await chat.send_message(f"🛠 По «{name}» решение уже стоит: {escape(decided)}.")
         return
 
     if action in (ACTION_DECLINE, ACTION_INFO):
         pending[chat.id] = (action, reg_id, reply_id)
         what = "отказа" if action == ACTION_DECLINE else "запроса"
         await chat.send_message(
-            f"«{name}»: напишите текст {what} — он уйдёт дилеру как есть.",
+            f"🛠 «{name}»: напишите текст {what} — он уйдёт дилеру как есть.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
         )
         return
@@ -171,10 +171,9 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     if action == ACTION_ACCEPT:
         target = reg.get(Registrations.TARGET_PROJECT) or []
         if target:
-            await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE)
+            await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, "")
             if reply_id:
                 await asyncio.to_thread(repo.close_reply, reply_id, target[0])
-            await chat.send_message(f"«{name}»: принято, применяю…")
             await _apply_now(ctx)
             return
         candidates = await asyncio.to_thread(repo.find_project_candidates, _search_words(reg))
@@ -186,21 +185,20 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
                                           callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-{tail}")])
         rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")])
         hint = "Похожие проекты в базе:" if candidates else "Похожих проектов по словам из заявки не нашёл."
-        await chat.send_message(f"«{name}»: в какой проект?\n{hint}", reply_markup=InlineKeyboardMarkup(rows))
+        await chat.send_message(f"🛠 «{name}»: в какой проект?\n{hint}", reply_markup=InlineKeyboardMarkup(rows))
         return
 
     if action == ACTION_PICK and project_id:
-        await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, None, project_id)
+        await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, "", project_id)
         if reply_id:
             await asyncio.to_thread(repo.close_reply, reply_id, project_id)
-        await chat.send_message(f"«{name}»: принято в существующий проект, применяю…")
         await _apply_now(ctx)
         return
 
     if action == ACTION_NEW:
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
         await chat.send_message(
-            f"«{name}»: название нового проекта латиницей, как оно будет в Projects.",
+            f"🛠 «{name}»: название нового проекта латиницей, как оно будет в Projects.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
         )
 
@@ -219,14 +217,14 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     text = text.strip()
     if not text:
         pending[chat.id] = item
-        await chat.send_message("Пустой текст — напишите ещё раз.")
+        await chat.send_message("🛠 Пустой текст — напишите ещё раз.")
         return True
     if action == ACTION_NEW:
         project_id = await asyncio.to_thread(repo.create_project, text)
-        await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT, None, project_id)
+        await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT, "", project_id)
         if reply_id:
             await asyncio.to_thread(repo.close_reply, reply_id, project_id)
-        await chat.send_message(f"Проект «{escape(text)}» создан, принимаю заявку…", parse_mode=ParseMode.HTML)
+        await chat.send_message(f"🛠 Проект «{escape(text)}» создан в Projects.", parse_mode=ParseMode.HTML)
     else:
         decision = Decision.DECLINE if action == ACTION_DECLINE else Decision.NEED_INFO
         if decision == Decision.NEED_INFO:
@@ -237,6 +235,5 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
             reg = await asyncio.to_thread(repo.registration_fields, reg_id)
             target = reg.get(Registrations.TARGET_PROJECT) or []
             await asyncio.to_thread(repo.close_reply, reply_id, target[0] if target else None)
-        await chat.send_message("Отправляю дилеру…")
     await _apply_now(ctx)
     return True

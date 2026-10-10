@@ -168,7 +168,7 @@ def _blocked(reg: dict, decision: str, reason: str) -> Plan:
     first_time = reg.get(Registrations.BOT_PROCESSED) != processed_mark(decision, blocked=True)
     return Plan(
         registration_updates={Registrations.BOT_PROCESSED: processed_mark(decision, blocked=True)},
-        admin_text=f"⚠️ Заявка «{escape(name)}»: {reason}" if first_time else None,
+        admin_text=f"🛠 ⚠️ Заявка «{escape(name)}»: {reason}" if first_time else None,
         blocked=True,
     )
 

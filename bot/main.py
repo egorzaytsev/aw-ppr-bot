@@ -688,10 +688,13 @@ async def _process_decisions(app: Application) -> None:
             if pl.admin_text:
                 await _send_html(app.bot, admin_chat, pl.admin_text)
             elif pl.dealer_text and not pl.blocked:
-                sent = "отправлен" if dealer_chats else "не отправлен — у автора нет Telegram"
-                moved = f"\n\nИз заявки в проект перенесено: {', '.join(pl.transferred)}." if pl.transferred else ""
+                name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+                first_line = pl.dealer_text.split("\n")[0]
+                sent = "Дилеру ушло" if dealer_chats else "Дилеру не ушло (нет Telegram)"
+                moved = f"\nПеренесено в проект: {', '.join(pl.transferred)}." if pl.transferred else ""
                 await _send_html(
-                    app.bot, admin_chat, f"✓ Решение применено, ответ дилеру {sent}:\n\n{pl.dealer_text}{moved}"
+                    app.bot, admin_chat,
+                    f"🛠 ✓ «{name}»: {escape(reg.get(Registrations.DECISION) or '')}.\n{sent}: {first_line}{moved}",
                 )
 
 
