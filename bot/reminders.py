@@ -26,7 +26,6 @@ PERSON_TZ = {
     "Georgia": "Asia/Tbilisi", "Armenia": "Asia/Yerevan", "Kyrgyzstan": "Asia/Bishkek",
     "Belarus": "Europe/Minsk", "Spain": "Europe/Madrid", "Italy": "Europe/Rome", "Poland": "Europe/Warsaw",
 }
-STATUS_WORD = {"registered": "регистрации", "pre_registered": "предрегистрации"}
 _TITLES = {q.key: q.title for q in QUESTIONS}
 # Необязательное в напоминаниях не требуем
 _SKIP_IN_REMINDERS = {"Object Part"}
@@ -53,11 +52,23 @@ def due(last_reminder: str | None, today: date) -> bool:
     return (today - date.fromisoformat(last_reminder[:10])).days >= REMIND_EVERY_DAYS
 
 
+# Причины напоминания — по ним группируется сообщение
+EXPIRY, GAPS, STALE = "expiry", "gaps", "stale"
+SECTIONS = (
+    (EXPIRY, "⏳ <b>Срок подходит к концу</b>",
+     "Если есть прогресс — «Сообщить новость», чтобы запросить продление."),
+    (GAPS, "📝 <b>Не хватает данных для следующего этапа</b>", "Дополнить — «Дополнить материалы»."),
+    (STALE, f"💤 <b>Нет новостей больше {STALE_DAYS} дней</b>", "Расскажите, что нового, — «Сообщить новость»."),
+)
+STATUS_NAME = {"registered": "регистрация", "pre_registered": "предрегистрация"}
+
+
 @dataclass
 class Item:
     project_id: str
     name: str
-    lines: list[str]
+    # причина → подробность («до 20.10.2026, осталось 8 дн.»)
+    reasons: dict
 
 
 def _gap_titles(keys: list[str]) -> list[str]:
@@ -73,32 +84,32 @@ def _gap_titles(keys: list[str]) -> list[str]:
 
 def project_item(project, today: date, last_news: date | None) -> Item | None:
     """Что напомнить по одному проекту (DealerProject); None — напоминать нечего."""
-    lines: list[str] = []
-    if project.ppr_status in STATUS_WORD and project.status_expiry:
+    reasons: dict = {}
+    if project.ppr_status in STATUS_NAME and project.status_expiry:
         expiry = date.fromisoformat(project.status_expiry[:10])
         days = (expiry - today).days
         if days <= EXPIRY_DAYS:
             left = f"осталось {days} дн." if days >= 0 else "срок истёк"
-            lines.append(f"срок {STATUS_WORD[project.ppr_status]} до {expiry:%d.%m.%Y}, {left} "
-                         "Если есть прогресс — «Сообщить новость», чтобы запросить продление.")
+            reasons[EXPIRY] = f"{STATUS_NAME[project.ppr_status]} до {expiry:%d.%m.%Y}, {left}"
     keys, _ = gaps_for(project.fields, project.ppr_status)
     if project.track == "Simplified (<30k)":
         keys = [k for k in keys if k in _PHASE1]  # Simplified: дальше уведомления не идут
     gaps = _gap_titles(keys)
     if gaps:
         more = f" и ещё {len(gaps) - MAX_GAPS}" if len(gaps) > MAX_GAPS else ""
-        lines.append("не хватает данных: " + ", ".join(gaps[:MAX_GAPS]) + more + ". «Дополнить материалы».")
+        reasons[GAPS] = ", ".join(gaps[:MAX_GAPS]) + more
     if last_news is None:
-        lines.append("новостей по проекту от вас ещё не было.")
+        reasons[STALE] = "новостей ещё не было"
     elif (today - last_news).days >= STALE_DAYS:
-        lines.append(f"нет новостей с {last_news:%d.%m} — больше {STALE_DAYS} дней.")
-    return Item(project.record_id, project.name, lines) if lines else None
+        reasons[STALE] = f"последняя {last_news:%d.%m}"
+    return Item(project.record_id, project.name, reasons) if reasons else None
 
 
 def digest_text(items: list[Item]) -> str:
+    """Сообщение, сгруппированное по причинам; пустые группы не показываем."""
     parts = ["<b>Напоминание по вашим плейсментам</b>"]
-    for it in items:
-        parts.append("")
-        parts.append(f"<b>{escape(it.name)}</b>")
-        parts += [f"• {escape(line)}" for line in it.lines]
+    for reason, title, hint in SECTIONS:
+        rows = [f"• {escape(it.name)} — {escape(it.reasons[reason])}" for it in items if reason in it.reasons]
+        if rows:
+            parts += ["", title, *rows, hint]
     return "\n".join(parts)

@@ -18,8 +18,7 @@ def proj(status="pre_registered", expiry="2026-10-20", fields=None, track="Full"
 
 def test_expiry_soon_and_no_gaps():
     it = reminders.project_item(proj(), TODAY, date(2026, 10, 1))
-    assert it.lines == ["срок предрегистрации до 20.10.2026, осталось 8 дн. Если есть прогресс — "
-                        "«Сообщить новость», чтобы запросить продление."]
+    assert it.reasons == {"expiry": "предрегистрация до 20.10.2026, осталось 8 дн."}
 
 
 def test_nothing_to_remind():
@@ -31,8 +30,8 @@ def test_stale_news_and_gaps_titles():
     for k in (P.OBJECT_ADDRESS, P.CONTACT_LEVEL, P.DOSSIER_FILES):
         del f[k]
     it = reminders.project_item(proj("notified", None, f), TODAY, date(2026, 9, 15))
-    assert "не хватает данных: Адрес, Уровень контакта, Материалы." in it.lines[0]
-    assert it.lines[1] == "нет новостей с 15.09 — больше 21 дней."
+    assert it.reasons["gaps"] == "Адрес, Уровень контакта, Материалы"
+    assert it.reasons["stale"] == "последняя 15.09"
 
 
 def test_simplified_only_phase1_gaps():
@@ -47,3 +46,19 @@ def test_slot_weekday_and_weekly():
     assert reminders.due(None, TODAY) and not reminders.due("2026-10-08", TODAY)
     assert reminders.due("2026-10-05", TODAY)
     assert not reminders.due(None, date(2026, 10, 10))  # суббота
+
+
+
+def test_digest_grouped_by_reason():
+    items = [reminders.Item("p1", "Petrovitch", {"expiry": "предрегистрация до 20.10.2026, осталось 8 дн.",
+                                                 "stale": "последняя 15.09"}),
+             reminders.Item("p2", "JTI Saint Petersburg", {"gaps": "Адрес, Материалы",
+                                                           "stale": "новостей ещё не было"})]
+    text = reminders.digest_text(items)
+    expiry_at, gaps_at, stale_at = (text.index(h) for h in ("Срок подходит", "Не хватает данных", "Нет новостей"))
+    assert expiry_at < gaps_at < stale_at
+    assert "• Petrovitch — предрегистрация до 20.10.2026, осталось 8 дн." in text
+    assert "• JTI Saint Petersburg — Адрес, Материалы" in text
+    assert text.count("• Petrovitch") == 2 and "• JTI Saint Petersburg — новостей ещё не было" in text
+    only_stale = reminders.digest_text([reminders.Item("p", "X", {"stale": "последняя 01.09"})])
+    assert "Срок подходит" not in only_stale and "Не хватает" not in only_stale
