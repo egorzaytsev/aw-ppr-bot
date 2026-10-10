@@ -111,6 +111,32 @@ def transfers(reg: dict, project: dict) -> tuple[dict, set]:
     return updates, provided
 
 
+OWN_DESIGN = "Собственная проработка"
+
+
+def company_links(reg: dict, project: dict, dealer: str | None) -> list[dict]:
+    """Связи проекта с Companies по заявке: End Client, Specifier, DEALER.
+
+    Каждая запись: {"field", "name" (найти или создать по названию) или "company_id", "type"}.
+    Заполненные End Client / Specifier не трогаем; DEALER — дописываем компанию дилера.
+    """
+    payload = payload_of(reg)
+    links: list[dict] = []
+    client = str(payload.get("End Client") or "").strip()
+    if client and _empty(project.get(Projects.END_CLIENT)):
+        links.append({"field": Projects.END_CLIENT, "name": client, "type": "End Client"})
+    spec = str(payload.get("Specifier") or "").strip()
+    if spec and _empty(project.get(Projects.SPECIFIER)):
+        if spec == OWN_DESIGN and dealer:
+            links.append({"field": Projects.SPECIFIER, "company_id": dealer})  # проектирует сам дилер
+        elif spec != OWN_DESIGN:
+            solo = payload.get("Specifier Type") == "Частный архитектор"
+            links.append({"field": Projects.SPECIFIER, "name": spec, "type": "Architect" if solo else "Design Studio"})
+    if dealer and dealer not in (project.get(Projects.DEALER) or []):
+        links.append({"field": Projects.DEALER, "company_id": dealer, "append": True})
+    return links
+
+
 def ppr_missing(project: dict, status: str, filled: dict | None = None, provided: set | None = None) -> list[str]:
     """Чего не хватает для Pre-registered / Registered — с учётом того, что дал дилер в заявке."""
     if status not in (PPR_PRE, PPR_REG):
@@ -156,6 +182,8 @@ class Plan:
     transferred: list[str] = field(default_factory=list)
     # Кнопка «Ответить» под сообщением дилеру (запрос доп. информации)
     reply_button: bool = False
+    # Связи с Companies, которые применяющий код найдёт/создаст (см. company_links)
+    links: list[dict] = field(default_factory=list)
 
 
 def _note(reg: dict) -> str:
@@ -219,9 +247,12 @@ def plan(reg: dict, project: dict | None) -> Plan:
             dealer_text=f"По запросу {obj} информацию приняли.{_note(reg)}",
         )
     moved, provided = transfers(reg, project)
+    dealers_ = reg.get(Registrations.DEALER) or []
+    links = company_links(reg, project, dealers_[0] if dealers_ else None)
     if request_type == RequestType.UPDATE_INFO:
         return Plan(
             project_updates=moved,
+            links=links,
             registration_updates=done,
             dealer_text=None if is_reply else f"По запросу {obj} информацию приняли и внесли в проект.{_note(reg)}",
             transferred=_names(moved),
@@ -302,6 +333,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
     return Plan(
         project_updates=updates,
         registration_updates=reg_updates,
+        links=links,
         transferred=_names(moved),
         dealer_text=text + _note(reg),
         broadcast_companies=broadcast,

@@ -280,7 +280,8 @@ class AirtableRepo:
             self._registrations.update(reg_id, {Registrations.REG_STATUS: "Cancelled"})
 
     def create_project(self, name: str) -> str:
-        rec = self._projects.create({Projects.NAME: name, Projects.STATUS: "Active"})
+        # Новый проект из заявки — Prospecting, статус двигает Егор
+        rec = self._projects.create({Projects.NAME: name, Projects.STATUS: "Prospecting"})
         return rec["id"]
 
     # ---------- напоминания ----------
@@ -339,3 +340,30 @@ class AirtableRepo:
 
     def set_analysis(self, reg_id: str, text: str) -> None:
         self._registrations.update(reg_id, {Registrations.ANALYSIS: text})
+
+    # ---------- компании ----------
+
+    def _company_names(self) -> dict:
+        cached = getattr(self, "_companies_cache", None)
+        if cached and time.monotonic() - cached[0] < self._DEDUP_TTL:
+            return cached[1]
+        names = {r["id"]: r["fields"].get(Companies.NAME, "")
+                 for r in self._companies.all(fields=[Companies.NAME], use_field_ids=True)}
+        self._companies_cache = (time.monotonic(), names)
+        return names
+
+    def find_or_create_company(self, name: str, ctype: str, country: str | None = None) -> tuple[str, bool]:
+        """Компания по названию (с учётом транслитерации); нет — создаём. (id, создана ли)."""
+        from . import dedup  # без цикла импортов
+        found = dedup.match_company(name, self._company_names())
+        if found:
+            return found, False
+        fields: dict = {Companies.NAME: name.strip(), Companies.TYPE: ctype}
+        if country:
+            fields[Companies.COUNTRY] = [country]
+        rec = self._companies.create(fields, typecast=True)
+        self._company_names()[rec["id"]] = name.strip()
+        return rec["id"], True
+
+    def company_name(self, company_id: str) -> str:
+        return self._company_names().get(company_id) or company_id

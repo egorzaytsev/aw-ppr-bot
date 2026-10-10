@@ -25,6 +25,8 @@ class Companies:
     REGISTRATIONS = "fldkMDN9qrMlcKQzi"      # ← Registrations.Dealer
     PEOPLE = "fld9kyOncMPx5R5GC"
     NAME = "flddHSCWNh1RDWy9e"
+    TYPE = "fldIjlQabi2MbWHB1"
+    COUNTRY = "fld18L0SpuGcNIGOD"
 
 
 class Projects:
@@ -49,6 +51,7 @@ class Projects:
     PARALLEL_REGISTRATIONS = "fld8Nw4DWPyEDkcUs"
     DOSSIER_FILES = "fldlZAQm173wqC7hh"
     QUOTATION = "fld2eKHFMhU73fxS5"
+    DEALER = "fldpdzk9bY1jFMPeJ"
     NOTIFIED = "fldiKRdTlngI6AXK8"
     PRE_REGISTERED = "fldSXoNH5rwWCYaWT"
     REGISTERED = "fld75C5ApwGwVCT5N"

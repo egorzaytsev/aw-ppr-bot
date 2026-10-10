@@ -163,3 +163,19 @@ def test_accepted_reply_is_silent_for_dealer():
     r = _with_payload(reg(rtype="Update — info only"), {"Dealer News": "Именно так", "In Reply To": "recORIG"})
     pl = plan(r, {P.NAME: "PAO Simvol"})
     assert pl.dealer_text is None and pl.registration_updates[R.BOT_PROCESSED] == "done:Accept"
+
+
+def test_company_links_client_specifier_dealer():
+    r = _with_payload(reg(), {"End Client": "ПАО Сбербанк", "Specifier": "Петр Иванов",
+                              "Specifier Type": "Частный архитектор"})
+    pl = plan(r, dict(FULL, **{P.SPECIFIER: []}))
+    by_field = {l["field"]: l for l in pl.links}
+    assert by_field[P.END_CLIENT] == {"field": P.END_CLIENT, "name": "ПАО Сбербанк", "type": "End Client"}
+    assert by_field[P.SPECIFIER]["type"] == "Architect" and by_field[P.SPECIFIER]["name"] == "Петр Иванов"
+    assert by_field[P.DEALER] == {"field": P.DEALER, "company_id": DEALER, "append": True}
+
+
+def test_own_design_links_dealer_as_specifier_and_keeps_filled():
+    r = _with_payload(reg(), {"End Client": "X", "Specifier": "Собственная проработка"})
+    pl = plan(r, dict(FULL, **{P.SPECIFIER: [], P.END_CLIENT: ["recC"], P.DEALER: [DEALER]}))
+    assert pl.links == [{"field": P.SPECIFIER, "company_id": DEALER}]

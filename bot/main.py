@@ -669,11 +669,28 @@ async def _process_decisions(app: Application) -> None:
         pl = decision_plan(reg, project)
         if not pl.registration_updates:
             continue
-        if pl.project_updates:
+        link_notes: list[str] = []
+        if pl.project_updates or pl.links:
             updates = {
                 k: (datetime.now(VALENCIA).date().isoformat() if v == "__today__" else v)
                 for k, v in pl.project_updates.items()
             }
+            # Связи с Companies: найти или создать по названию из заявки
+            country = (project or {}).get(Projects.COUNTRY) or updates.get(Projects.COUNTRY)
+            for link in pl.links:
+                if link.get("company_id"):
+                    cid, created = link["company_id"], False
+                else:
+                    cid, created = await asyncio.to_thread(
+                        repo.find_or_create_company, link["name"], link["type"], country)
+                if link.get("append"):
+                    updates[link["field"]] = list((project or {}).get(link["field"]) or []) + [cid]
+                else:
+                    updates[link["field"]] = [cid]
+                label = {Projects.END_CLIENT: "End Client", Projects.SPECIFIER: "Specifier",
+                         Projects.DEALER: "DEALER"}[link["field"]]
+                cname = await asyncio.to_thread(repo.company_name, cid)
+                link_notes.append(f"{label} → {cname}" + (" (новая компания)" if created else ""))
             await asyncio.to_thread(repo.update_project, target[0], updates)
             # Текст дилеру — по фактическому состоянию проекта после записи (место в очереди, Registered)
             fresh = await asyncio.to_thread(repo.project_fields, target[0])
@@ -701,6 +718,8 @@ async def _process_decisions(app: Application) -> None:
                 first_line = pl.dealer_text.split("\n")[0]
                 sent = "Дилеру ушло" if dealer_chats else "Дилеру не ушло (нет Telegram)"
                 moved = f"\nПеренесено в проект: {', '.join(pl.transferred)}." if pl.transferred else ""
+                if link_notes:
+                    moved += "\nСвязи: " + escape("; ".join(link_notes)) + "."
                 await _send_html(
                     app.bot, admin_chat,
                     f"🛠 ✓ «{name}»: {escape(reg.get(Registrations.DECISION) or '')}.\n{sent}: {first_line}{moved}",

@@ -108,3 +108,26 @@ def analysis_text(candidates: list[Candidate]) -> str:
     lines = ["Возможные совпадения:"]
     lines += [f"• {c.name} — совпадает: {', '.join(c.reasons)} (баллы {c.score})" for c in candidates]
     return "\n".join(lines)
+
+
+def _company_key(name: str) -> str:
+    key = " ".join(tokens(name))
+    return key or sound(name).strip()
+
+
+def match_company(name: str, companies: dict) -> str | None:
+    """id существующей компании с тем же названием (ООО/ПАО и транслитерация не мешают)."""
+    key = _company_key(name)
+    if not key:
+        return None
+    best, best_ratio = None, 0.0
+    for cid, cname in companies.items():
+        other = _company_key(cname or "")
+        if not other:
+            continue
+        if other == key:
+            return cid
+        ratio = SequenceMatcher(None, key, other).ratio()
+        if ratio > best_ratio:
+            best, best_ratio = cid, ratio
+    return best if best_ratio >= 0.92 else None

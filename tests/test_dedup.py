@@ -27,3 +27,10 @@ def test_find_by_object_client_address():
 def test_no_false_match_on_common_words():
     assert dedup.find({"Object Name": "Офис", "End Client": "ООО Ромашка"}, "", PROJECTS) == []
     assert "не найдено" in dedup.analysis_text([])
+
+
+def test_match_company_ignores_legal_form_and_script():
+    companies = {"c1": "Sberbank", "c2": "UNK Project", "c3": "Petrovich"}
+    assert dedup.match_company("ПАО Сбербанк", companies) == "c1"
+    assert dedup.match_company("ООО «Петрович»", companies) == "c3"
+    assert dedup.match_company("Ромашка", companies) is None
