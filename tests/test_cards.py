@@ -7,7 +7,7 @@ D, O1, O2 = "recSTATIO", "recOTHER1", "recOTHER2"
 
 
 def plain(text: str) -> str:
-    return re.sub(r"</?b>", "", text)
+    return re.sub(r"</?(b|code)>", "", text)
 
 
 def project(**kw):
@@ -35,7 +35,9 @@ def test_header_and_full_track_missing_lines():
     assert "📎 Файлы досье — визуализации, планировки, список серий." in lines
     assert "📅 Месяц размещения заказа." in lines
     assert "👉 Всё это можно добавить через «Обновить проект» → «Дополнить материалы»." in lines
-    assert lines[-1] == "✉️ Указывай референс AW-26-0220 в теме писем по этому проекту."
+    assert lines[-2:] == ["✉️ Указывай название проекта и референс в теме писем по этому проекту:",
+                          "MedallClinic SPB AW-26-0220"]
+    assert "<code>MedallClinic SPB AW-26-0220</code>" in cards.accept_card(p, D, "STATIO", {}, first_time=True)
 
 
 def test_all_data_present_and_no_tail_on_repeat():

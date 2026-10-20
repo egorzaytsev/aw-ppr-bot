@@ -127,6 +127,13 @@ def pl_volume_of(payload: dict, project: dict) -> float | None:
     return round(exw / EXW_FACTOR) if exw else None
 
 
+def subject_lines(project: dict) -> list[str]:
+    """Подсказка для темы писем; вторая строка — моноширинная, копируется одним нажатием."""
+    subject = f"{project.get(Projects.NAME) or ''} {project.get(Projects.PPR_REF) or ''}".strip()
+    return ["✉️ Указывай название проекта и референс в теме писем по этому проекту:",
+            f"<code>{escape(subject)}</code>"]
+
+
 def accept_card(project: dict, dealer: str, dealer_name: str, payload: dict, first_time: bool,
                 note: str = "", title: str = "✅ Заявка принята") -> str:
     """Ответ дилеру на принятую заявку о статусе (уведомление / предрегистрация / регистрация)."""
@@ -136,7 +143,7 @@ def accept_card(project: dict, dealer: str, dealer_name: str, payload: dict, fir
     else:
         lines += next_step_body(project, dealer)
     if first_time and project.get(Projects.PPR_REF):
-        lines += ["", f"✉️ Указывай референс {escape(project[Projects.PPR_REF])} в теме писем по этому проекту."]
+        lines += ["", *subject_lines(project)]
     if note:
         lines += ["", f"💬 Комментарий: {escape(note)}"]
     return "\n".join(lines)
@@ -155,7 +162,7 @@ def declined_upgrade_card(project: dict, dealer: str, dealer_name: str, payload:
     else:
         lines += next_step_body(project, dealer)
     if first_time and project.get(Projects.PPR_REF):
-        lines += ["", f"✉️ Указывай референс {escape(project[Projects.PPR_REF])} в теме писем по этому проекту."]
+        lines += ["", *subject_lines(project)]
     return "\n".join(lines)
 
 
