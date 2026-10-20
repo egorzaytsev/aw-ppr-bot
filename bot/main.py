@@ -26,7 +26,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import admin, cards, dedup, engine, phrases, reminders, routing
+from . import admin, alerts, cards, dedup, engine, phrases, reminders, routing
 from .airtable_ids import Decision, People, Projects, Registrations, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
@@ -987,7 +987,11 @@ async def _process_decisions(app: Application) -> None:
         await asyncio.to_thread(repo.update_registration, rec["id"], pl.registration_updates)
         log.info("Решение по %s: %s", rec["id"], pl.registration_updates.get(Registrations.BOT_PROCESSED))
 
+        # Карточку решения видят все люди компании дилера, автор — первым
         dealer_chats = await asyncio.to_thread(repo.chat_ids_for_people, reg.get(Registrations.SUBMITTED_BY) or [])
+        for chat in await asyncio.to_thread(repo.chat_ids_for_companies, dealers):
+            if chat not in dealer_chats:
+                dealer_chats.append(chat)
         if pl.dealer_text:
             markup = _markup([[("Ответить", f"{CB_REPLY}{rec['id']}")]]) if pl.reply_button else None
             for chat in dealer_chats:
@@ -1233,6 +1237,37 @@ async def _refresh_reviewers(app: Application) -> None:
     app.bot_data["lola_chat_id"] = chat
 
 
+ALERTS_INTERVAL = 60
+
+
+async def _alerts_loop(app: Application) -> None:
+    """Ошибки — Егору пачкой раз в минуту; в 9 утра — сводка за сутки."""
+    handler: alerts.AlertHandler = app.bot_data["alerts"]
+    while True:
+        await asyncio.sleep(ALERTS_INTERVAL)
+        admin_chat = app.bot_data.get("admin_chat_id")
+        if not admin_chat:
+            continue
+        try:
+            text = handler.drain()
+            if text:
+                await _send_html(app.bot, admin_chat, text)
+            now = datetime.now(VALENCIA)
+            if alerts.summary_due(now, app.bot_data.get("summary_day")):
+                repo: AirtableRepo = app.bot_data["repo"]
+                stats = await asyncio.to_thread(repo.admin_stats)
+                overdue = sum(1 for r in await asyncio.to_thread(repo.undecided)
+                              if admin.age_hours(r["fields"].get(Registrations.SUBMITTED_AT)) >= DEALER_LATE_HOURS)
+                unknown = len(await asyncio.to_thread(repo.open_unknown_users))
+                await _send_html(app.bot, admin_chat,
+                                 alerts.summary_text(now, handler.day_count, stats, overdue, unknown))
+                handler.day_count = 0
+                app.bot_data["summary_day"] = now.date().isoformat()
+        except Exception:
+            # Не log.exception — иначе ошибка отправки сама станет «ошибкой бота» по кругу
+            log.warning("Не удалось отправить оповещение Егору", exc_info=True)
+
+
 async def _decisions_loop(app: Application) -> None:
     while True:
         try:
@@ -1287,10 +1322,11 @@ def build_app() -> Application:
         except Exception:
             log.exception("Не удалось задать список команд")
         app.bot_data["decisions_task"] = asyncio.create_task(_decisions_loop(app))
+        app.bot_data["alerts_task"] = asyncio.create_task(_alerts_loop(app))
         app.bot_data["reminders_task"] = asyncio.create_task(_reminders_loop(app))
 
     async def post_shutdown(app: Application) -> None:
-        for key in ("decisions_task", "reminders_task"):
+        for key in ("decisions_task", "reminders_task", "alerts_task"):
             task = app.bot_data.get(key)
             if task:
                 task.cancel()
@@ -1305,6 +1341,9 @@ def build_app() -> Application:
     app.bot_data["repo"] = AirtableRepo(settings.airtable_token, settings.airtable_base_id)
     app.bot_data["transcriber"] = transcriber
     app.bot_data["admin_chat_id"] = settings.admin_chat_id
+    alert_handler = alerts.AlertHandler()
+    logging.getLogger().addHandler(alert_handler)
+    app.bot_data["alerts"] = alert_handler
     app.bot_data["base_id"] = settings.airtable_base_id
     app.bot_data["process_decisions"] = process_decisions
     app.bot_data["preview_reminder"] = preview_reminder
