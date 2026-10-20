@@ -318,14 +318,37 @@ async def _keep_news_audio(update: Update, ctx: ContextTypes.DEFAULT_TYPE, media
     await _save(ctx, person, person.state)
 
 
+# Нажатия, после которых показывать «✅ выбранное» нет смысла (навигация, служебное)
+_NO_MARK_PREFIXES = ("pl:", "am:", "menu:", "rx:")
+
+
+async def _mark_choice(query) -> None:
+    """Вместо кнопок — строка «✅ <что нажали>», чтобы в переписке был виден ответ."""
+    label = None
+    markup = query.message.reply_markup if query.message else None
+    for row in (markup.inline_keyboard if markup else []):
+        for button in row:
+            if button.callback_data == query.data:
+                label = button.text
+    text_html = query.message.text_html if query.message and query.message.text else None
+    if not label or not text_html or (query.data or "").startswith(_NO_MARK_PREFIXES):
+        await query.edit_message_reply_markup(None)
+        return
+    await query.edit_message_text(f"{text_html}\n✅ <i>{escape(label)}</i>", parse_mode=ParseMode.HTML,
+                                  reply_markup=None)
+
+
 async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
-    # Убираем кнопки у нажатого сообщения — защита от двойных нажатий
+    # Убираем кнопки у нажатого сообщения (защита от двойных нажатий) и оставляем выбранный ответ
     try:
-        await query.edit_message_reply_markup(None)
+        await _mark_choice(query)
     except Exception:
-        pass
+        try:
+            await query.edit_message_reply_markup(None)
+        except Exception:
+            pass
 
     person = await _identify(update, ctx)
     if not person:
