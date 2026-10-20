@@ -26,10 +26,8 @@ def test_parse_month():
 
 
 # Индексы: фаза 1 — 0 клиент, 1 объект, 2 часть, 3 где объект, 4 страна, 5 город, 6 адрес,
-# (после сдвига) 7 площадь, 8 стадия, 9 бюро, 10 ГАП, 11 объём, 12 альтернативы; фаза 2 — 13…27;
-# фаза 3 — 28…35. Старые строки ниже — до вопроса о ГАПе:
-# 7 площадь, 8 стадия, 9 бюро, 10 объём, 11 альтернативы; фаза 2 — 12…26 (материалы 20…25);
-# фаза 3 — 27…34 (документы третьей стороны 29…32)
+# 7 площадь, 8 объём, 9 стадия, 10 AW в проекте бюро, 11 бюро, 12 ГАП, 13 альтернативы;
+# фаза 2 — 14…27 (материалы 20…25); фаза 3 — 28…35 (документы третьей стороны 30…33)
 CH = engine.CB_CHOICE
 FILE = {"kind": "file", "file_id": "F1", "file_unique_id": "U1", "name": "plan.pdf", "size": 1000,
         "mime": "application/pdf"}
@@ -57,11 +55,11 @@ def _run_phase1(exw="120к", stage=3, skip_optional=False, other_place=False):
         r = engine.handle_text(r.state, "4 500 м2")
         assert r.state.awaiting == "qualifier"
         r = engine.handle_callback(r.state, engine.CB_QUALIFIER + "1")
+    r = engine.handle_text(r.state, exw)                          # объём
     r = engine.handle_callback(r.state, CH + str(stage))          # стадия
     if stage != 0:
-        assert r.state.step == 9
-        r = engine.handle_callback(r.state, CH + "1")             # собственная проработка (ГАП не спрашиваем)
-    r = engine.handle_text(r.state, exw)
+        assert r.state.step == 10
+        r = engine.handle_callback(r.state, CH + "2")             # бюро нет — проект ведём мы (бюро и ГАП не спрашиваем)
     r = engine.handle_callback(r.state, CH + "1")                 # да, по тендеру
     return r
 
@@ -75,11 +73,10 @@ def _notification_summary(**kw):
 
 def _run_phase2(r):
     assert r.state.awaiting == "gate"
-    assert "ещё десять вопросов" in r.screens[0].text
+    assert "ещё девять вопросов" in r.screens[0].text
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
-    assert r.state.phase == 2 and r.state.step == 13
-    assert "Предрегистрация · 1/10" in r.screens[0].text
-    r = engine.handle_text(r.state, "Мы, в мае 2026 на презентации")
+    assert r.state.phase == 2 and r.state.step == 14
+    assert "Предрегистрация · 1/9" in r.screens[0].text
     r = engine.handle_text(r.state, "ПАО Сбербанк, АХО")
     r = engine.handle_callback(r.state, engine.CB_SKIP)           # влияющие
     r = engine.handle_callback(r.state, CH + "0")                 # конкурентов нет
@@ -96,7 +93,7 @@ def _run_phase2(r):
     r = engine.handle_text(r.state, "март 2027")
     # Материалы по шагам
     assert r.state.step == 21
-    assert "Предрегистрация · 9/10 · Материалы 1/6" in r.screens[0].text
+    assert "Предрегистрация · 8/9 · Материалы 1/6" in r.screens[0].text
     r = engine.handle_callback(r.state, engine.CB_DONE)           # без файлов «Готово» не работает
     assert r.state.step == 21
     r = engine.handle_file(r.state, FILE)
@@ -140,7 +137,9 @@ def test_full_phase1_offers_prereg_then_notification_summary():
     assert p["PL Volume"] == 120000 and p["EXW Potential"] == 54000
     assert "EXW" not in summary                                  # пересчёт дилеру не показываем
     assert p["Project Log"] == ("Площадь: 4 500 м² (из документа)\n"
-                                "Объём по прайсу: 120 000 € → EXW 54 000 € (−55%)")
+                                "Объём по прайсу: 120 000 € → EXW 54 000 € (−55%)\n"
+                                "AW в проекте бюро: Бюро нет — проект ведём мы")
+    assert p["Specifier"] == "Собственная проработка"
     assert "Project Name" not in p
     assert p["Dealer Project Name"] == "ПАО Сбербанк — Штаб-квартира на Лесной — 3–5 этажи, кафе"
 
@@ -231,7 +230,7 @@ def test_prereg_then_registration_full_flow():
     assert p["Quotation / Proforma №"] == "Q-2026-1187"
     assert "Competing Dealers" in p and p["Competing Dealers"] == "Нет"
     log = p["Project Log"].splitlines()
-    assert "Кто и когда предложил AW: Мы, в мае 2026 на презентации" in log
+    assert "AW в проекте бюро: Бюро нет — проект ведём мы" in log
     assert "Звонок 30 минут: 16.10, 15:00, Мск" in log
     names = [it["name"] for _, it in engine.collected_files(r.state)]
     assert names == ["plan.pdf", "spec.xlsx", "vedomost.pdf"]
@@ -268,9 +267,11 @@ def test_file_not_expected():
 def test_stage_change_to_other_asks_specifier():
     r = _notification_summary(stage=0)
     r = engine.handle_callback(r.state, engine.CB_EDIT)
-    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "8")
+    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "9")
     r = engine.handle_callback(r.state, CH + "2")                 # Проектирование
-    assert r.state.step == 9 and r.state.awaiting == "answer"
+    assert r.state.step == 10 and r.state.awaiting == "answer"  # AW в проекте бюро?
+    r = engine.handle_callback(r.state, CH + "0")                 # да, заложен бюро
+    assert engine._current_q(r.state).key == "Specifier"
     r = engine.handle_text(r.state, "UNK Project")
     assert engine._current_q(r.state).key == "Lead Architect"   # за бюро — ГАП
     r = engine.handle_text(r.state, "Иванов")
@@ -280,16 +281,16 @@ def test_stage_change_to_other_asks_specifier():
 def test_stage_change_to_architect_drops_specifier():
     r = _notification_summary()
     r = engine.handle_callback(r.state, engine.CB_EDIT)
-    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "8")
+    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "9")
     r = engine.handle_callback(r.state, CH + "0")
     assert r.state.awaiting == "confirm"
-    assert "Specifier" not in r.state.answers
+    assert "AW Origin" not in r.state.answers and "Specifier" not in engine.build_payload(r.state)
 
 
 def test_text_matches_choice_label():
     r = _notification_summary()
     r = engine.handle_callback(r.state, engine.CB_EDIT)
-    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "12")
+    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "13")
     r = engine.handle_text(r.state, "нет, только AW")
     assert r.state.answers["AW Alternatives"] == "No — AW only"
     assert r.state.awaiting == "confirm"
@@ -304,9 +305,9 @@ def test_required_question_has_no_skip():
 def test_bad_answer_repeats_question():
     r = engine.start(NEW_PROJECT.code)
     st = r.state
-    st.step = 11  # объём AW
+    st.step = 8  # объём AW
     r = engine.handle_text(st, "не знаю")
-    assert r.state.step == 11
+    assert r.state.step == 8
     assert r.screens[0].text.startswith("⚠️")
 
 
@@ -554,7 +555,7 @@ def test_lost_reason_mapping_and_other():
     assert p["Project Log"] == "Причина проигрыша (со слов дилера): Клиент купил б/у мебель"
 
 
-FULL_LOG = ("Кто и когда предложил AW: бюро\nРешение по мебели принимает: клиент\n"
+FULL_LOG = ("AW в проекте бюро: Да, заложен бюро\nРешение по мебели принимает: клиент\n"
             "Влияют на решение: ГП\nКонкурирующие дилеры: Нет")
 
 
@@ -620,7 +621,8 @@ def _to_specifier():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     r = engine.handle_callback(r.state, engine.CB_EDIT)
-    return engine.handle_callback(r.state, engine.CB_EDIT_STEP + "9")
+    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "10")
+    return engine.handle_callback(r.state, CH + "0")              # AW заложен бюро → название бюро
 
 
 def test_bureau_then_architect_unknown():
@@ -651,11 +653,25 @@ def test_solo_architect_name_required():
     assert p["Lead Architect"] == "Иван Петров"
 
 
-def test_own_design_skips_architect():
-    r = _to_specifier()
-    r = engine.handle_callback(r.state, CH + "1")                 # Собственная проработка
-    assert r.state.awaiting == "confirm" and "ГАП" not in r.screens[0].text
+def test_own_design_skips_bureau_and_architect():
+    r = _notification_summary()                                   # «Бюро нет — проект ведём мы»
+    text = r.screens[0].text
+    assert "AW в проекте бюро: Бюро нет — проект ведём мы" in text and "ГАП" not in text and "Архбюро" not in text
     assert engine.build_payload(r.state)["Specifier"] == "Собственная проработка"
+
+
+def test_dealer_offers_aw_needs_bureau_not_architect():
+    r = _run_phase1()
+    r = engine.handle_callback(r.state, engine.CB_GATE_NO)
+    r = engine.handle_callback(r.state, engine.CB_EDIT)
+    r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "10")
+    r = engine.handle_callback(r.state, CH + "1")                 # нет — AW предлагаем мы взамен
+    assert engine._current_q(r.state).key == "Specifier"
+    r = engine.handle_text(r.state, "UNK Project")
+    assert r.state.awaiting == "confirm" and "ГАП" not in r.screens[0].text
+    p = engine.build_payload(r.state)
+    assert p["Specifier"] == "UNK Project" and "Lead Architect" not in p
+    assert "AW в проекте бюро: Нет — AW предлагаем мы взамен" in p["Project Log"]
 
 
 def test_info_reply_flow():
@@ -688,13 +704,13 @@ def test_fill_asks_bureau_on_architect_selection_and_log_answers():
               P.OBJECT_ADDRESS: "a", P.PROJECT_STAGE: "Architect selection", P.EXW_POTENTIAL: 1,
               P.AW_ALTERNATIVES: "No — AW only", P.EXPECTED_ORDER_DATE: "2027-01-01", P.CONTACT_LEVEL: "Declared",
               P.PARALLEL_REGISTRATIONS: "нет", P.DOSSIER_FILES: [{"id": "a"}],
-              P.PROJECT_LOG: "Кто и когда предложил AW: бюро\nВлияют на решение: ГП"}
+              P.PROJECT_LOG: "Влияют на решение: ГП"}
     preset = fill_preset({"id": "recP", "name": "X"}, fields, "notified")
     assert preset["_ask"] == ["Specifier", "Lead Architect", "Decision Maker Company", "Competing Dealers"]
     r = engine.start("project_fill", preset)
     assert engine._current_q(r.state).key == "Specifier"
-    assert ("Бюро ещё не выбрано", "ch:2") in [b for row in r.screens[-1].buttons for b in row]
-    r = engine.handle_callback(r.state, "ch:2")
+    assert ("Бюро ещё не выбрано", "ch:1") in [b for row in r.screens[-1].buttons for b in row]
+    r = engine.handle_callback(r.state, "ch:1")
     assert engine._current_q(r.state).key == "Decision Maker Company"   # ГАП не спрашиваем
     r = engine.handle_text(r.state, "Петрович")
     r = engine.handle_callback(r.state, "ch:0")
@@ -753,3 +769,19 @@ def test_fill_summary_is_flat():
     text = r.screens[-1].text
     assert "1. Адрес: ул. Лесная, 9\n2. Заявлен другим производителям: Нет" in text
     assert "<b>Уведомление</b>" not in text and "<b>Предрегистрация</b>" not in text
+
+
+def test_fill_asks_aw_origin_when_missing_in_log():
+    from bot.airtable_ids import Projects as P
+    from bot.scenarios.update_project import fill_preset
+    fields = {P.END_CLIENT: ["c"], P.OBJECT_NAME: "o", P.OBJECT_PART: "p", P.COUNTRY: "Russia", P.CITY: "Moscow",
+              P.OBJECT_ADDRESS: "a", P.PROJECT_STAGE: "Design", P.SPECIFIER: ["s"], P.EXW_POTENTIAL: 1,
+              P.AW_ALTERNATIVES: "No — AW only", P.EXPECTED_ORDER_DATE: "2027-01-01", P.CONTACT_LEVEL: "Declared",
+              P.PARALLEL_REGISTRATIONS: "нет", P.DOSSIER_FILES: [{"id": "a"}],
+              P.PROJECT_LOG: FULL_LOG.replace("AW в проекте бюро: Да, заложен бюро\n", "")}
+    preset = fill_preset({"id": "recP", "name": "X"}, fields, "notified")
+    assert preset["_ask"] == ["AW Origin"]
+    r = engine.start("project_fill", preset)
+    r = engine.handle_callback(r.state, CH + "1")                 # нет — AW предлагаем мы взамен
+    assert r.state.awaiting == "confirm"                          # бюро уже в проекте, ГАП не нужен
+    assert engine.build_payload(r.state)["Project Log"] == "AW в проекте бюро: Нет — AW предлагаем мы взамен"

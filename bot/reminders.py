@@ -28,7 +28,7 @@ PERSON_TZ = {
 }
 _TITLES = {q.key: q.title for q in QUESTIONS}
 # Необязательное и ответы из Project Log в напоминаниях не требуем
-_SKIP_IN_REMINDERS = {"Object Part", *LOG_GAP_KEYS}
+_SKIP_IN_REMINDERS = {"Object Part", "AW Origin", *LOG_GAP_KEYS}
 _PHASE1 = {q.key for q in QUESTIONS if q.phase == 1}
 
 

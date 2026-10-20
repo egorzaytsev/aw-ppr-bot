@@ -134,3 +134,13 @@ def test_declined_upgrade_card():
 def test_architect_selection_bureau_line():
     p = project(**{P.PPR_NEXT_MISSING: "Specifier;", P.PROJECT_STAGE: "Architect selection"})
     assert "🏛 Архитектурное бюро — как только клиент его выберет." in plain(cards.accept_card(p, D, "S", {}, False))
+
+
+def test_admin_card_shows_aw_origin():
+    import json
+    from bot.admin import request_card
+    from bot.airtable_ids import Registrations as R
+    reg = {R.DEALER_PROJECT_NAME: "Медалл", R.REQUEST_TYPE: "New — Notification",
+           R.PAYLOAD: json.dumps({"Specifier": "UNK Project", "AW Origin": "Нет — AW предлагает дилер взамен продукта бюро"},
+                                 ensure_ascii=False)}
+    assert "AW в проекте бюро: Нет — AW предлагает дилер взамен продукта бюро" in plain(request_card(reg, "recR"))

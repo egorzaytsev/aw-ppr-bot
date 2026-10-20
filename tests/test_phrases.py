@@ -24,5 +24,5 @@ def test_ack_prefix_and_last_steps_hint():
     # Реакция бывает не всегда, но встречается и стоит в начале
     assert any(t.split(" ")[0] in phrases.ACKS or t.startswith(tuple(phrases.ACKS)) for t in texts)
     st = r.state
-    st.step = 12  # последний вопрос фазы 1 — альтернативы
+    st.step = 13  # последний вопрос фазы 1 — альтернативы
     assert "Последний вопрос — и готово." in engine.question_screen(st).text

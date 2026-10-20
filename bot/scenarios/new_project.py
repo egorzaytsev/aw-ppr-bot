@@ -19,6 +19,10 @@ TRACK_SIMPLIFIED = "Simplified (<30k)"
 OWN_DESIGN = "Собственная проработка"
 SOLO_ARCHITECT = "Частный архитектор"
 SOLO = "__solo__"
+# AW в проекте бюро — значения пишутся в Project Log как есть
+ORIGIN_BUREAU = "Да, заложен бюро"
+ORIGIN_DEALER = "Нет — AW предлагает дилер взамен продукта бюро"
+ORIGIN_OWN = "Бюро нет — проект ведёт дилер"
 WHOLE_OBJECT = "Весь объект"
 STAGE_ARCHITECT_SELECTION = "Architect selection"
 LOC_MOSCOW, LOC_SPB, LOC_OTHER = "moscow", "spb", "other"
@@ -57,13 +61,13 @@ PHASE_1 = (
         key="End Client",
         label="Конечный клиент",
         prompt="Конечный клиент — компания, для которой делается объект.",
-        hint="Например: ПАО Сбербанк, отель Hyatt Regency",
+        hint="Например: Сбербанк, Hyatt Regency",
     ),
     Question(
         key="Object Name",
         label="Объект",
         prompt="Название объекта — здание, комплекс или кодовое имя.",
-        hint="Например: штаб-квартира на Лесной, ЖК «Символ»",
+        hint="Например: офис на Лесной, ЖК Символ",
     ),
     Question(
         key="Object Part",
@@ -118,13 +122,22 @@ PHASE_1 = (
     Question(
         key="Area m2",
         label="Площадь",
-        prompt="Площадь, м² — числом.",
+        prompt="Площадь объекта, м²?",
+        hint="Числом, можно примерно",
         kind="number",
         unit="м²",
         optional=True,
         qualifier_prompt="Откуда цифра площади?",
         qualifier_key="Area Source",
         qualifiers=(("Со слов", "со слов"), ("Из документа", "из документа")),
+    ),
+    Question(
+        key="PL Volume",
+        label="Объём AW по прайсу",
+        prompt="Предполагаемый объём Andreu World по прайсу, €?",
+        hint="Можно примерно: 45к, 120 000",
+        kind="number",
+        unit="€",
     ),
     Question(
         key="Project Stage",
@@ -141,13 +154,27 @@ PHASE_1 = (
         ),
     ),
     Question(
+        key="AW Origin",
+        label="AW в проекте бюро",
+        prompt="AW заложен в проект бюро?",
+        kind="choice",
+        # Откуда ждать подтверждение: документы бюро или предложение самого дилера
+        choices=(
+            ("Да, заложен бюро", ORIGIN_BUREAU),
+            ("Нет — AW предлагаем мы взамен", ORIGIN_DEALER),
+            ("Бюро нет — проект ведём мы", ORIGIN_OWN),
+        ),
+        # На выборе архитектора бюро ещё нет — не спрашиваем
+        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION,
+    ),
+    Question(
         key="Specifier",
         label="Архбюро",
         prompt="Архитектурное бюро — название.",
-        hint="Если архитектор работает сам, без бюро — «Частный архитектор». Если проект ведёшь ты — «Собственная проработка».",
-        choices=((SOLO_ARCHITECT, SOLO), (OWN_DESIGN, OWN_DESIGN)),
-        # На выборе архитектора бюро ещё нет — не спрашиваем
-        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION,
+        hint="Если архитектор работает сам, без бюро — «Частный архитектор».",
+        choices=((SOLO_ARCHITECT, SOLO),),
+        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION
+        and a.get("AW Origin") in (ORIGIN_BUREAU, ORIGIN_DEALER),
     ),
     Question(
         key="Lead Architect",
@@ -159,17 +186,10 @@ PHASE_1 = (
         optional_fn=lambda a: a.get("Specifier") != SOLO,
         skip_label="Пока не знаю",
         missing_label="пока не известен",
-        # При собственной проработке ГАП — сам дилер, не спрашиваем
+        # ГАП нужен, только если AW заложил сам архитектор; частному архитектору — всегда (это его имя)
         ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION
-        and a.get("Specifier") not in (None, OWN_DESIGN),
-    ),
-    Question(
-        key="PL Volume",
-        label="Объём AW по прайсу",
-        prompt="Предполагаемый объём Andreu World по прайсу, € — числом.",
-        hint="Можно примерно: 45к, 120 000",
-        kind="number",
-        unit="€",
+        and a.get("Specifier") not in (None, OWN_DESIGN)
+        and (a.get("AW Origin") == ORIGIN_BUREAU or a.get("Specifier") == SOLO),
     ),
     Question(
         key="AW Alternatives",
@@ -188,13 +208,6 @@ PHASE_1 = (
 # ---------- фаза 2: предрегистрация ----------
 
 PHASE_2 = (
-    Question(
-        phase=2,
-        key="AW Introduced By",
-        label="Кто и когда предложил AW",
-        prompt="Кто и когда предложил мебель Andreu World в этот проект?",
-        hint="Например: бюро на концепции, май 2026",
-    ),
     Question(
         phase=2,
         key="Decision Maker Company",
@@ -357,7 +370,7 @@ _BY_KEY = {q.key: q for q in QUESTIONS}
 
 GATES = {
     1: Gate(
-        prompt="Хочешь подать на предрегистрацию? Это ещё десять вопросов и материалы по проекту.",
+        prompt="Хочешь подать на предрегистрацию? Это ещё девять вопросов и материалы по проекту.",
         yes="Да",
         no="Пока только уведомление",
         summary_button="Подать на предрегистрацию",
@@ -393,7 +406,12 @@ def location(a: dict) -> dict:
 
 
 def specifier(a: dict) -> dict:
-    """Частный архитектор: в Specifier — его имя, с пометкой (в Companies заводится компания его имени)."""
+    """Частный архитектор: в Specifier — его имя, с пометкой (в Companies заводится компания его имени).
+
+    Проект ведёт сам дилер — Specifier = «Собственная проработка» (в проект ставится компания дилера).
+    """
+    if a.get("AW Origin") == ORIGIN_OWN:
+        return {"Specifier": OWN_DESIGN}
     if a.get("Specifier") != SOLO:
         return {}
     # None — убрать служебное «__solo__», пока имя ещё не названо
@@ -440,7 +458,7 @@ def stage(phase_reached: int, a: dict, missing_phase1: list) -> tuple[str, str]:
 
 # Что уходит строками в Project Log при Accept (полей в Projects нет)
 LOG_KEYS = (
-    "AW Introduced By", "Decision Maker Company", "Influencers", "Competing Dealers",
+    "AW Origin", "Decision Maker Company", "Influencers", "Competing Dealers",
     "Order Month", "Call Slot 15", "Decision Maker", "Shipment Month", "Call Slot 30",
 )
 

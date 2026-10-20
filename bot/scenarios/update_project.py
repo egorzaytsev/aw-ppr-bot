@@ -11,7 +11,8 @@ from dataclasses import replace
 from ..airtable_ids import Projects, RequestType
 from .base import DETAIL, Question, Scenario
 from .new_project import (
-    OWN_DESIGN, QUESTIONS, STAGE_ARCHITECT_SELECTION, current_pl, exw, location, project_log,
+    ORIGIN_BUREAU, ORIGIN_OWN, OWN_DESIGN, QUESTIONS, SOLO, STAGE_ARCHITECT_SELECTION, current_pl, exw, location,
+    project_log,
     specifier,
 )
 
@@ -215,17 +216,21 @@ EXTRA_FILES_KEY = "Extra Materials"
 # «Бюро ещё не выбрано» — только в «Дополнить»: формула пропусков требует бюро и на выборе архитектора
 NO_BUREAU_YET = "__no_bureau__"
 # Ответы предрегистрации без полей в Projects — живут в Project Log строкой «Заголовок: …»
-LOG_GAP_KEYS = ("AW Introduced By", "Decision Maker Company", "Influencers", "Competing Dealers")
+LOG_GAP_KEYS = ("Decision Maker Company", "Influencers", "Competing Dealers")
 
 
 def _ask_only(q: Question) -> Question:
     """Вопрос сценария «Новый проект», который задаётся, только если поле пустое в проекте."""
+    if q.key == "AW Origin":
+        return replace(q, ask_if=lambda a: "AW Origin" in a.get("_ask", ()))
     if q.key == "Specifier":
         return replace(q, choices=q.choices + (("Бюро ещё не выбрано", NO_BUREAU_YET),),
-                       ask_if=lambda a: "Specifier" in a.get("_ask", ()))
+                       ask_if=lambda a: "Specifier" in a.get("_ask", ()) and a.get("AW Origin") != ORIGIN_OWN)
     if q.key == "Lead Architect":
+        # ГАП — только если AW заложил архитектор (или ответа о бюро в этот раз не было); частному — всегда
         return replace(q, ask_if=lambda a: "Lead Architect" in a.get("_ask", ())
-                       and a.get("Specifier") not in (None, OWN_DESIGN, NO_BUREAU_YET))
+                       and a.get("Specifier") not in (None, OWN_DESIGN, NO_BUREAU_YET)
+                       and (a.get("AW Origin") in (None, ORIGIN_BUREAU) or a.get("Specifier") == SOLO))
 
     def ask_if(a: dict, q: Question = q) -> bool:
         return q.key in a.get("_ask", ()) and q.applies(a)
@@ -285,6 +290,9 @@ def gaps_for(project_fields: dict, ppr_status: str) -> tuple[list[str], dict]:
     if _empty(f.get(Projects.COUNTRY)) or _empty(f.get(Projects.CITY)):
         for k in ("Object Location", "Country", "City"):  # страна и город — только если «Другое»
             need(k)
+    # AW в проекте бюро — поля в Projects нет, ответ живёт в Project Log
+    if stage != STAGE_ARCHITECT_SELECTION and f"{_FILL_TITLES['AW Origin']}:" not in (f.get(Projects.PROJECT_LOG) or ""):
+        need("AW Origin")
     if _empty(f.get(Projects.SPECIFIER)) and stage != STAGE_ARCHITECT_SELECTION:
         need("Specifier")
         need("Lead Architect")  # ГАП в Projects отдельного поля нет — спрашиваем вместе с бюро
