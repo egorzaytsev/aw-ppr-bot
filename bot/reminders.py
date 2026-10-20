@@ -1,7 +1,7 @@
 """Напоминания дилерам по их плейсментам — раз в неделю, в выбранное время.
 
 Поводы (по каждому проекту):
-- до конца срока предрегистрации/регистрации 7 дней или меньше (квотации — 14);
+- до конца срока предрегистрации/регистрации или квотации 7 дней или меньше;
 - не хватает данных для следующего этапа (и пропуски уведомления);
 - по проекту нет новостей от дилера 21 день и больше (или не было вовсе).
 """
@@ -15,8 +15,7 @@ from zoneinfo import ZoneInfo
 from .scenarios.new_project import QUESTIONS
 from .scenarios.update_project import LOG_GAP_KEYS, MATERIAL_KEYS, gaps_for
 
-EXPIRY_DAYS = 7         # статус — 1 месяц, напоминаем за неделю
-QUOTE_EXPIRY_DAYS = 14  # квотация — за две недели
+EXPIRY_DAYS = 7  # до конца статуса или квотации — напоминаем за неделю
 STALE_DAYS = 21
 REMIND_EVERY_DAYS = 7
 MAX_GAPS = 3
@@ -89,7 +88,7 @@ def project_item(project, today: date, last_news: date | None, quote_valid: str 
     if quote_valid:
         until = date.fromisoformat(quote_valid[:10])
         days = (until - today).days
-        if days <= QUOTE_EXPIRY_DAYS:
+        if days <= EXPIRY_DAYS:
             left = f"осталось {days} дн." if days >= 0 else "срок истёк"
             reasons[EXPIRY] = f"квотация до {until:%d.%m.%Y}, {left}"
     if project.ppr_status in STATUS_NAME and project.status_expiry:

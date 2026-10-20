@@ -72,6 +72,8 @@ def test_digest_grouped_by_reason():
 
 def test_quote_validity_reminder():
     it = reminders.project_item(proj("notified", None, track="Simplified (<30k)"), TODAY, date(2026, 10, 1),
-                                quote_valid="2026-10-20")
-    assert it.reasons == {"expiry": "квотация до 20.10.2026, осталось 8 дн."}
+                                quote_valid="2026-10-18")
+    assert it.reasons == {"expiry": "квотация до 18.10.2026, осталось 6 дн."}
+    assert reminders.project_item(proj("notified", None, track="Simplified (<30k)"), TODAY, date(2026, 10, 1),
+                                  quote_valid="2026-10-20") is None   # 8 дней — ещё рано
     assert reminders.project_item(proj("notified", None), TODAY, date(2026, 10, 1), "2026-12-31") is None
