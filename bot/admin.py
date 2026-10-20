@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -243,14 +244,35 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not recs:
         await update.effective_chat.send_message("🛠 В Inbox нет заявок без решения.")
         return
+    if not recs:
+        await update.effective_chat.send_message("🛠 В Inbox нет заявок без решения.")
+        return
     await update.effective_chat.send_message(f"🛠 Заявок без решения: {len(recs)}")
     for rec in recs:
         await update.effective_chat.send_message(
             request_card(rec["fields"], rec["id"], await _author(repo, rec["fields"]),
-                         rec["fields"].get(Registrations.ANALYSIS), await _dealer(repo, rec["fields"])),
+                         rec["fields"].get(Registrations.ANALYSIS), await _dealer(repo, rec["fields"]))
+            + age_line(rec["fields"].get(Registrations.SUBMITTED_AT)),
             parse_mode=ParseMode.HTML,
             reply_markup=decision_markup(ctx, rec["id"], await merge_candidates(repo, rec["fields"])),
         )
+
+
+def age_hours(submitted_at: str | None, now: datetime | None = None) -> float:
+    if not submitted_at:
+        return 0.0
+    then = datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
+    return ((now or datetime.now(timezone.utc)) - then).total_seconds() / 3600
+
+
+def age_line(submitted_at: str | None, now: datetime | None = None) -> str:
+    """«⏰ На проверке 2 дн.» — срок ответа дилеру 72 часа."""
+    if not submitted_at:
+        return ""
+    hours = age_hours(submitted_at, now)
+    age = f"{int(hours)} ч" if hours < 24 else f"{int(hours // 24)} дн."
+    late = " — срок 72 ч прошёл" if hours >= 72 else ""
+    return f"\n⏰ На проверке {age}{late}"
 
 
 async def merge_candidates(repo, reg: dict) -> list:

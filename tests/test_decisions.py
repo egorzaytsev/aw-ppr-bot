@@ -40,7 +40,10 @@ def test_pre_registration_position_and_broadcast():
     assert pl.project_updates[P.STATUS_CONFIRMED] == "__today__"
     assert "Ты на 2-м месте из 2 в предрегистрации." in pl.dealer_text
     assert sorted(pl.broadcast_companies) == [OTHER1, OTHER2]
-    assert pl.broadcast_text == "По объекту «Petrovitch Office» появилась предрегистрация другого партнёра."
+    assert pl.broadcast_text.splitlines() == [
+        "🔎 По объекту «Petrovitch Office» появилась предрегистрация другого партнёра.",
+        "Чтобы не потерять приоритет — дополни данные по проекту или запроси предрегистрацию.",
+    ]
 
 
 def test_pre_registration_blocked_by_missing_fields_admin_once():

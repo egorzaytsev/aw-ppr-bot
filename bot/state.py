@@ -36,6 +36,8 @@ class DialogState:
     pick_year: int = 0
     # День, выбранный в пикере слота (YYYY-MM-DD)
     pick_date: str = ""
+    # Напоминание о брошенной заявке уже отправлено
+    nudged: bool = False
     started_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )

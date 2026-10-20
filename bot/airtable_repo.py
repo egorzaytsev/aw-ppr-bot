@@ -115,6 +115,12 @@ class AirtableRepo:
         )
         return self._first(formula)
 
+    def people_with_dialogs(self) -> list[tuple[Person, str | None]]:
+        """Люди с открытым диалогом и Chat ID — (человек, страна) для напоминания о брошенной заявке."""
+        recs = self._people.all(
+            formula=f"AND({{{People.BOT_STATE}}}!='', {{{People.TELEGRAM_CHAT_ID}}}!='')", use_field_ids=True)
+        return [(self._to_person(r), r["fields"].get(People.COUNTRY)) for r in recs]
+
     def bind_chat_id(self, person_id: str, chat_id: int) -> None:
         self._people.update(person_id, {People.TELEGRAM_CHAT_ID: str(chat_id)})
 
@@ -258,12 +264,18 @@ class AirtableRepo:
 
     # ---------- решения из Telegram (админ) ----------
 
-    def pending_without_decision(self, limit: int = 10) -> list[dict]:
-        """На проверке: без решения или с запросом доп. информации (ждут окончательного решения)."""
+    def pending_without_decision(self, limit: int = 30) -> list[dict]:
+        """На проверке: без решения или с запросом доп. информации — самые старые первыми."""
         formula = (f"AND({{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)}, "
                    f"OR({{{Registrations.DECISION}}}='', {{{Registrations.DECISION}}}={_quote('Need more info')}))")
         return self._registrations.all(formula=formula, use_field_ids=True, max_records=limit,
-                                       sort=["-" + Registrations.SUBMITTED_AT])
+                                       sort=[Registrations.SUBMITTED_AT])
+
+    def undecided(self) -> list[dict]:
+        """На проверке без решения и без ввода админа — для напоминаний о сроке."""
+        formula = (f"AND({{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)}, "
+                   f"{{{Registrations.DECISION}}}='', LEFT({{{Registrations.BOT_PROCESSED}}}, 6)!='await:')")
+        return self._registrations.all(formula=formula, use_field_ids=True)
 
     def set_decision(self, reg_id: str, decision: str, note: str | None = None,
                      target_project_id: str | None = None) -> None:

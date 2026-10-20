@@ -386,6 +386,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
         transferred=_names(moved),
         dealer_text=text + _note(reg),
         broadcast_companies=broadcast,
-        broadcast_text=(f"По объекту «{escape(project_name)}» появилась предрегистрация другого партнёра."
+        broadcast_text=(f"🔎 По объекту «{escape(project_name)}» появилась предрегистрация другого партнёра.\n"
+                        "Чтобы не потерять приоритет — дополни данные по проекту или запроси предрегистрацию."
                         if broadcast else None),
     )

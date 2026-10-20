@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 from html import escape
 
 from telegram import (
@@ -524,11 +525,12 @@ async def _show_project_list(
     if mode != MODE_MY and await _blocked(update, ctx, person, f"{CB_LIST}{mode}:{page}"):
         return
     projects = await _projects(ctx, person)
+    pending = await asyncio.to_thread(_repo(ctx).pending_requests, person.company_ids) if mode == MODE_MY else []
     if not projects:
-        await update.effective_chat.send_message(
-            "Пока нет проектов с твоим плейсментом в программе. Подать новый — кнопка «Новый проект» внизу.",
-            reply_markup=MENU_KEYBOARD,
-        )
+        text = "Пока нет проектов с твоим плейсментом в программе. Подать новый — кнопка «Новый проект» внизу."
+        if pending:
+            text = pending_text(pending) + "\n\n" + text
+        await update.effective_chat.send_message(text, parse_mode=ParseMode.HTML, reply_markup=MENU_KEYBOARD)
         return
     pages = (len(projects) + PAGE_SIZE - 1) // PAGE_SIZE
     page = max(0, min(page, pages - 1))
@@ -549,7 +551,30 @@ async def _show_project_list(
     }.get(mode, "Твои проекты")
     if pages > 1:
         title += f" ({page + 1}/{pages})"
+    if pending and page == 0:
+        title = pending_text(pending) + "\n\n" + title
     await _send(update, [engine.Screen(title, buttons)])
+
+
+PENDING_LABELS = {
+    RequestType.NEW_NOTIFICATION: "уведомление", RequestType.NEW_PRE_REGISTRATION: "предрегистрация",
+    RequestType.NEW_REGISTRATION: "регистрация", RequestType.UPGRADE_PRE_REGISTRATION: "переход на предрегистрацию",
+    RequestType.UPGRADE_REGISTRATION: "переход на регистрацию", RequestType.UPDATE_FIELDS: "дополнение",
+    RequestType.UPDATE_NEWS: "новость", RequestType.UPDATE_INFO: "обновление", RequestType.UPDATE_WON: "выигран",
+    RequestType.UPDATE_LOST: "проигран", RequestType.QUOTE_SIMPLIFIED: "квотация",
+}
+
+
+def pending_text(pending: list) -> str:
+    """«⏳ На проверке: 2» и по строке на заявку — дилер видит, что заявка дошла."""
+    lines = [f"⏳ <b>На проверке: {len(pending)}</b>"]
+    for r in pending[:PAGE_SIZE]:
+        kind = PENDING_LABELS.get(r.request_type or "", "заявка")
+        since = f", с {r.submitted_at[8:10]}.{r.submitted_at[5:7]}" if r.submitted_at else ""
+        lines.append(f"• {escape(r.name)} — {kind}{since}")
+    if len(pending) > PAGE_SIZE:
+        lines.append(f"• и ещё {len(pending) - PAGE_SIZE}")
+    return "\n".join(lines)
 
 
 async def _own_project(ctx: ContextTypes.DEFAULT_TYPE, person: Person, project_id: str) -> DealerProject | None:
@@ -968,9 +993,10 @@ async def _process_decisions(app: Application) -> None:
             for chat in dealer_chats:
                 await _send_html(app.bot, chat, pl.dealer_text, markup)
         if pl.broadcast_companies and pl.broadcast_text:
+            open_btn = _markup([[("Открыть проект", f"{CB_PICK}{MODE_MY}:{target[0]}")]]) if target else None
             for chat in await asyncio.to_thread(repo.chat_ids_for_companies, pl.broadcast_companies):
                 if chat not in dealer_chats:
-                    await _send_html(app.bot, chat, pl.broadcast_text)
+                    await _send_html(app.bot, chat, pl.broadcast_text, open_btn)
         if admin_chat:
             if pl.admin_text:
                 await _send_html(app.bot, admin_chat, pl.admin_text)
@@ -1122,6 +1148,60 @@ async def process_reminders(app: Application) -> None:
         log.info("Напоминание %s: %d проектов", rec["id"], len(items))
 
 
+ABANDONED_HOURS = 24
+ABANDON_DAY = (9, 20)  # пишем только днём по местному времени человека
+
+
+async def _check_abandoned(app: Application) -> None:
+    """Начатая и не отправленная заявка: через 24 часа одно напоминание «Продолжить / Удалить»."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    for person, country in await asyncio.to_thread(repo.people_with_dialogs):
+        st = person.state
+        if not st or st.nudged or not _has_answers(st):
+            continue
+        started = datetime.fromisoformat(st.started_at)
+        if datetime.now(timezone.utc) - started < timedelta(hours=ABANDONED_HOURS):
+            continue
+        if not ABANDON_DAY[0] <= reminders.person_now(country).hour < ABANDON_DAY[1]:
+            continue
+        st.nudged = True
+        await asyncio.to_thread(repo.save_state, person.record_id, st)
+        await _send_html(app.bot, person.chat_id,
+                         f"📝 У тебя незаконченная заявка: {escape(_dialog_name(st))}. Она ещё не отправлена. Продолжим?",
+                         _markup([[("Продолжить", CB_MENU_RESUME)], [("Удалить", CB_DROP_AND_GO)]]))
+
+
+REVIEW_REMIND_HOURS = 48   # напоминание проверяющему
+DEALER_LATE_HOURS = 72     # обещанный дилеру срок ответа
+LATE_TEXT = ("⏳ Заявка «{name}» на проверке дольше обычного — ответ задерживается. "
+             "Егор в курсе, ответ придёт сюда.")
+
+
+async def _check_overdue(app: Application) -> None:
+    """Заявки без решения: 48 ч — снова карточка проверяющему, 72 ч — дилеру о задержке. По разу."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    ctx = SimpleNamespace(bot_data=app.bot_data)
+    for rec in await asyncio.to_thread(repo.undecided):
+        f = rec["fields"]
+        hours = admin.age_hours(f.get(Registrations.SUBMITTED_AT))
+        mark = f.get(Registrations.BOT_PROCESSED) or ""
+        name = f.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+        if hours >= DEALER_LATE_HOURS and mark != "late:72":
+            for chat in await asyncio.to_thread(repo.chat_ids_for_people, f.get(Registrations.SUBMITTED_BY) or []):
+                await _send_html(app.bot, chat, LATE_TEXT.format(name=escape(name)))
+            await asyncio.to_thread(repo.update_registration, rec["id"], {Registrations.BOT_PROCESSED: "late:72"})
+        elif hours >= REVIEW_REMIND_HOURS and not mark:
+            types = await asyncio.to_thread(repo.company_types, f.get(Registrations.DEALER) or [])
+            _, chat = routing.resolve(app.bot_data, routing.route(types))
+            if chat:
+                card = admin.request_card(f, rec["id"], None, f.get(Registrations.ANALYSIS),
+                                          ", ".join(repo.company_name(c) for c in f.get(Registrations.DEALER) or []) or None)
+                await _send_html(app.bot, chat, "⏰ <b>Ждёт решения больше 48 часов</b>\n\n" + card
+                                 + admin.age_line(f.get(Registrations.SUBMITTED_AT)),
+                                 admin.decision_markup(ctx, rec["id"], await admin.merge_candidates(repo, f)))
+            await asyncio.to_thread(repo.update_registration, rec["id"], {Registrations.BOT_PROCESSED: "late:48"})
+
+
 async def _reminders_loop(app: Application) -> None:
     await asyncio.sleep(30)  # дать боту подняться
     while True:
@@ -1129,6 +1209,14 @@ async def _reminders_loop(app: Application) -> None:
             await process_reminders(app)
         except Exception:
             log.exception("Ошибка напоминаний")
+        try:
+            await _check_overdue(app)
+        except Exception:
+            log.exception("Ошибка проверки сроков")
+        try:
+            await _check_abandoned(app)
+        except Exception:
+            log.exception("Ошибка проверки брошенных заявок")
         await asyncio.sleep(REMINDERS_INTERVAL)
 
 
