@@ -181,6 +181,8 @@ class Plan:
     # Компании, которым разослать «появилась предрегистрация другого партнёра»
     broadcast_companies: list[str] = field(default_factory=list)
     broadcast_text: str | None = None
+    # Блокировка из-за недостающих данных: готовый текст запроса дилеру
+    ask_text: str | None = None
     # Сообщать ли админу об этой блокировке (только первый раз)
     blocked: bool = False
     # Какие поля бот перенёс из заявки в проект — для сообщения админу
@@ -205,14 +207,37 @@ def _note(reg: dict) -> str:
     return f"\n\nКомментарий: {escape(note)}" if note else ""
 
 
-def _blocked(reg: dict, decision: str, reason: str) -> Plan:
+def _blocked(reg: dict, decision: str, reason: str, ask_text: str | None = None) -> Plan:
     name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
     first_time = reg.get(Registrations.BOT_PROCESSED) != processed_mark(decision, blocked=True)
     return Plan(
         registration_updates={Registrations.BOT_PROCESSED: processed_mark(decision, blocked=True)},
         admin_text=f"🛠 ⚠️ Заявка «{escape(name)}»: {reason}" if first_time else None,
         blocked=True,
+        ask_text=ask_text,
     )
+
+
+# Недостающее для статуса → как спросить дилера
+ASK_RU = {
+    "Contact Level": "подтверждение контакта с клиентом или бюро (документ, переписка или контакт)",
+    "Dossier Files": "файлы досье — визуализации, планировки, список серий",
+    "Expected Order Date": "месяц размещения заказа",
+    "EXW Potential": "уточнённый объём",
+    "Object Address": "адрес объекта",
+    "Specifier": "архитектурное бюро",
+    "AW Alternatives": "декларация об альтернативах",
+    "Parallel Registrations": "заявлен ли проект у других производителей",
+    "Quotation / Proforma №": "номер квотации или проформы",
+}
+
+
+def ask_text(status: str, missing: list[str]) -> str:
+    """Готовый запрос дилеру по списку недостающего (кнопка «Запросить у дилера»)."""
+    lines = [f"Чтобы дать {STATUS_LABEL[status]}, не хватает:"]
+    lines += [f"• {ASK_RU.get(m, m)}" for m in missing]
+    lines.append("Добавь через «Обновить проект» → «Дополнить материалы» или ответь здесь.")
+    return "\n".join(lines)
 
 
 def plan(reg: dict, project: dict | None) -> Plan:
@@ -320,7 +345,8 @@ def plan(reg: dict, project: dict | None) -> Plan:
             reg, decision,
             f"нельзя поставить {STATUS_FIELD_NAME[status]} в «{escape(project_name)}»: "
             f"не хватает {escape('; '.join(missing))} — ни в проекте, ни в заявке.\n"
-            "Запросить у дилера: Decision → Need more info, текст — в Decision Note.",
+            "Запросить у дилера — кнопкой ниже: готовый текст или свой.",
+            ask_text=ask_text(status, missing),
         )
 
     notified = list(project.get(Projects.NOTIFIED) or [])

@@ -142,7 +142,9 @@ def test_specifier_text_and_links_count_as_provided():
 
 def test_really_missing_suggests_need_more_info():
     pl = plan(_with_payload(reg(rtype="New — Pre-registration"), {}), {P.NAME: "X"})
-    assert pl.blocked and "ни в проекте, ни в заявке" in pl.admin_text and "Need more info" in pl.admin_text
+    assert pl.blocked and "ни в проекте, ни в заявке" in pl.admin_text and "кнопкой ниже" in pl.admin_text
+    assert pl.ask_text.startswith("Чтобы дать предрегистрацию, не хватает:\n• уточнённый объём\n")
+    assert pl.ask_text.endswith("«Дополнить материалы» или ответь здесь.")
 
 
 def test_need_more_info_has_reply_button():

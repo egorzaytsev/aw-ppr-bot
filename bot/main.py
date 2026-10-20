@@ -999,7 +999,8 @@ async def _process_decisions(app: Application) -> None:
                     await _send_html(app.bot, chat, pl.broadcast_text, open_btn)
         if admin_chat:
             if pl.admin_text:
-                await _send_html(app.bot, admin_chat, pl.admin_text)
+                await _send_html(app.bot, admin_chat, pl.admin_text,
+                                 admin.ask_markup(rec["id"]) if pl.ask_text else None)
             elif card and pl.dealer_text:
                 created = target[0] in created_projects
                 created_projects.discard(target[0])

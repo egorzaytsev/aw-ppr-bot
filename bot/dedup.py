@@ -110,6 +110,22 @@ def analysis_text(candidates: list[Candidate]) -> str:
     return "\n".join(lines)
 
 
+_LEGAL = re.compile(r"^(ооо|пао|зао|оао|ао|ип|llc|ltd)\s+", re.IGNORECASE)
+
+
+def latin_name(payload: dict) -> str:
+    """Черновик названия проекта латиницей: «Клиент Объект» транслитом, без ООО и кавычек."""
+    parts = []
+    for key in ("End Client", "Object Name"):
+        raw = re.sub(r"[«»\"'“”]", "", str(payload.get(key) or "")).strip()
+        raw = _LEGAL.sub("", raw)
+        if raw:
+            parts.append("".join(_TRANSLIT.get(ch.lower(), ch) if ch.lower() in _TRANSLIT else ch for ch in raw))
+    words = " ".join(parts).split()
+    name = " ".join(w[:1].upper() + w[1:] for w in words)
+    return name[:40].strip()
+
+
 def _company_key(name: str) -> str:
     key = " ".join(tokens(name))
     return key or sound(name).strip()

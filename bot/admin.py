@@ -17,6 +17,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from . import dedup, routing
+from .decisions import plan as decision_plan
 from .scenarios.base import describe_items, format_value
 from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
 from .airtable_ids import Decision, Registrations
@@ -31,6 +32,12 @@ ACTION_PICK, ACTION_NEW, ACTION_CANCEL = "pick", "new", "cancel"
 ACTION_REMIND_USER = "remind_user"  # ждём username для предпросмотра напоминания
 # Отказ в пред/регистрации без проекта: куда зафиксировать уведомление
 ACTION_DPICK, ACTION_DNEW = "dpick", "dnew"
+# Блокировка из-за недостающих данных: отправить дилеру готовый запрос
+ACTION_ASK = "ask"
+# Название нового проекта — предложенный транслит одним нажатием
+ACTION_NAME = "name"
+# Принять с комментарием: сначала текст, потом обычный выбор проекта
+ACTION_ACCEPT_NOTE = "accn"
 UPGRADE_REQUESTS = {"New — Pre-registration", "New — Registration",
                     "Upgrade — Pre-registration", "Upgrade — Registration"}
 
@@ -69,6 +76,13 @@ def _pending(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
     return ctx.bot_data.setdefault("admin_pending", {})
 
 
+def ask_markup(reg_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📨 Запросить у дилера", callback_data=f"{CB_ADMIN}{ACTION_ASK}:{reg_id}")],
+        [InlineKeyboardButton("✏️ Свой текст запроса", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
+    ])
+
+
 def record_url(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> str:
     return BASE_URL.format(base=ctx.bot_data["base_id"], table="tbl4lKbYhOkVIYNHQ", rec=reg_id)
 
@@ -83,6 +97,8 @@ def decision_markup(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str,
         rows.append([InlineKeyboardButton("🆕 Принять как новый", callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-")])
     else:
         rows.append([InlineKeyboardButton("Принять", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}")])
+    rows.append([InlineKeyboardButton("💬 Принять с комментарием",
+                                      callback_data=f"{CB_ADMIN}{ACTION_ACCEPT_NOTE}:{reg_id}")])
     return InlineKeyboardMarkup(rows + [
         [InlineKeyboardButton("Отклонить", callback_data=f"{CB_ADMIN}{ACTION_DECLINE}:{reg_id}"),
          InlineKeyboardButton("Запросить инфо", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
@@ -352,7 +368,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         return
     # Кнопка под ответом дилера — решение по исходной заявке, ответ закрывается вместе с ней
     original = _payload(reg).get("In Reply To")
-    if original and action in (ACTION_ACCEPT, ACTION_DECLINE, ACTION_INFO):
+    if original and action in (ACTION_ACCEPT, ACTION_DECLINE, ACTION_INFO, ACTION_ACCEPT_NOTE):
         reply_id, reg_id = reg_id, original
         try:
             reg = await asyncio.to_thread(repo.registration_fields, reg_id)
@@ -362,7 +378,10 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
     _mark_decider(ctx, update, reg_id)
     decided = reg.get(Registrations.DECISION)
-    if decided and decided != Decision.NEED_INFO and action not in (ACTION_PICK, ACTION_DPICK, ACTION_DNEW):
+    # Заблокированное решение ещё можно заменить запросом дилеру
+    stuck = str(reg.get(Registrations.BOT_PROCESSED) or "").startswith("blocked:") and action in (ACTION_ASK, ACTION_INFO)
+    if decided and decided != Decision.NEED_INFO and not stuck \
+            and action not in (ACTION_PICK, ACTION_DPICK, ACTION_DNEW, ACTION_NAME):
         if reply_id:
             # Исходная заявка уже решена — ответ дилера закрываем, чтобы не висел в /inbox
             target = reg.get(Registrations.TARGET_PROJECT) or []
@@ -374,6 +393,27 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
             await _apply_now(ctx)
             return
         await chat.send_message(f"🛠 По «{name}» решение уже стоит: {escape(decided)}.")
+        return
+
+    if action == ACTION_ASK:
+        target = reg.get(Registrations.TARGET_PROJECT) or []
+        project = await asyncio.to_thread(repo.project_fields, target[0]) if target else None
+        text = decision_plan(reg, project).ask_text
+        if not text:
+            await chat.send_message(f"🛠 По «{name}» данных уже хватает — нажми решение ещё раз.")
+            return
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.BOT_PROCESSED: ""})
+        await asyncio.to_thread(repo.set_decision, reg_id, Decision.NEED_INFO, text)
+        await _apply_now(ctx)
+        return
+
+    if action == ACTION_ACCEPT_NOTE:
+        pending[chat.id] = (action, reg_id, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
+        await chat.send_message(
+            f"🛠 «{name}»: напиши комментарий — он уйдёт дилеру строкой 💬 в карточке. Потом выберешь проект.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
+        )
         return
 
     if action in (ACTION_DECLINE, ACTION_INFO):
@@ -389,7 +429,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     if action == ACTION_ACCEPT:
         target = reg.get(Registrations.TARGET_PROJECT) or []
         if target:
-            await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, "")
+            await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, _accept_note(ctx, reg_id))
             if reply_id:
                 await asyncio.to_thread(repo.close_reply, reply_id, target[0])
             await _apply_now(ctx)
@@ -415,14 +455,24 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         await _apply_now(ctx)
         return
 
+    if action == ACTION_NAME:
+        # project_id здесь — исходное действие (new / dnew), reply_id — ответ дилера
+        suggestion = dedup.latin_name(_payload(reg))
+        if suggestion and project_id in (ACTION_NEW, ACTION_DNEW):
+            pending.pop(chat.id, None)
+            await asyncio.to_thread(repo.clear_awaiting, reg_id)
+            await create_named_project(ctx, project_id, reg_id, reply_id, suggestion)
+        return
+
     if action == ACTION_DNEW:
         pending[chat.id] = (ACTION_DNEW, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DNEW, reply_id, chat.id)
-        await chat.send_message(f"🛠 «{name}»: напиши название нового проекта латиницей. Передумал — нажми меню внизу.")
+        await chat.send_message(f"🛠 «{name}»: напиши название нового проекта латиницей. Передумал — нажми меню внизу.",
+                                reply_markup=name_markup(reg, reg_id, ACTION_DNEW, reply_id))
         return
 
     if action == ACTION_PICK and project_id:
-        await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, "", project_id)
+        await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, _accept_note(ctx, reg_id), project_id)
         if reply_id:
             await asyncio.to_thread(repo.close_reply, reply_id, project_id)
         await _apply_now(ctx)
@@ -432,9 +482,39 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id, chat.id)
         await chat.send_message(
-            f"🛠 «{name}»: напиши название нового проекта латиницей, как оно будет в Projects. "
-            "Передумал — просто нажми меню внизу.",
+            f"🛠 «{name}»: напиши название нового проекта латиницей, как оно будет в Projects"
+            + (" — или возьми вариант кнопкой" if dedup.latin_name(_payload(reg)) else "")
+            + ". Передумал — просто нажми меню внизу.",
+            reply_markup=name_markup(reg, reg_id, ACTION_NEW, reply_id),
         )
+
+
+def _accept_note(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> str:
+    """Комментарий к «Принять» (или пусто — чтобы не ушёл старый текст запроса информации)."""
+    return ctx.bot_data.setdefault("accept_notes", {}).pop(reg_id, "")
+
+
+def name_markup(reg: dict, reg_id: str, action: str, reply_id: str = "") -> InlineKeyboardMarkup | None:
+    suggestion = dedup.latin_name(_payload(reg))
+    if not suggestion:
+        return None
+    data = f"{CB_ADMIN}{ACTION_NAME}:{reg_id}:{action}" + (f":{reply_id}" if reply_id else "")
+    return InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ {suggestion}", callback_data=data)]])
+
+
+async def create_named_project(ctx: ContextTypes.DEFAULT_TYPE, action: str, reg_id: str, reply_id: str,
+                               name: str) -> None:
+    """Создать проект с этим названием: new — принять в него, dnew — отказ фиксируется в нём."""
+    repo = ctx.bot_data["repo"]
+    project_id = await asyncio.to_thread(repo.create_project, name)
+    ctx.bot_data.setdefault("created_projects", set()).add(project_id)  # для итога «Проект создан»
+    if action == ACTION_DNEW:
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id]})
+    else:
+        await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT, _accept_note(ctx, reg_id), project_id)
+        if reply_id:
+            await asyncio.to_thread(repo.close_reply, reply_id, project_id)
+    await _apply_now(ctx)
 
 
 async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str, resume: bool = True) -> bool:
@@ -467,18 +547,14 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id, chat.id)
         await chat.send_message("🛠 Выбери проект кнопкой под сообщением об отказе.")
         return True
-    if action == ACTION_DNEW:
-        project_id = await asyncio.to_thread(repo.create_project, text)
-        ctx.bot_data.setdefault("created_projects", set()).add(project_id)
-        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id]})
-        await _apply_now(ctx)
+    if action in (ACTION_DNEW, ACTION_NEW):
+        await create_named_project(ctx, action, reg_id, reply_id, text)
         return True
-    if action == ACTION_NEW:
-        project_id = await asyncio.to_thread(repo.create_project, text)
-        ctx.bot_data.setdefault("created_projects", set()).add(project_id)  # для итога «Проект создан»
-        await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT, "", project_id)
-        if reply_id:
-            await asyncio.to_thread(repo.close_reply, reply_id, project_id)
+    if action == ACTION_ACCEPT_NOTE:
+        # Комментарий запомнили — дальше как обычное «Принять»
+        ctx.bot_data.setdefault("accept_notes", {})[reg_id] = text
+        await on_admin_callback(update, ctx, f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}" + (f"::{reply_id}" if reply_id else ""))
+        return True
     else:
         decision = Decision.DECLINE if action == ACTION_DECLINE else Decision.NEED_INFO
         reg = await asyncio.to_thread(repo.registration_fields, reg_id)
