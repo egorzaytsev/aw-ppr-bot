@@ -16,6 +16,8 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from . import dedup
+from .scenarios.base import describe_items, format_value
+from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
 from .airtable_ids import Decision, Registrations
 
 log = logging.getLogger(__name__)
@@ -53,9 +55,17 @@ def record_url(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> str:
     return BASE_URL.format(base=ctx.bot_data["base_id"], table="tbl4lKbYhOkVIYNHQ", rec=reg_id)
 
 
-def decision_markup(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Принять", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}")],
+def decision_markup(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str,
+                    candidates: list | None = None) -> InlineKeyboardMarkup:
+    """Совпадения есть — «Слить с: …» на каждое и «Принять как новый»; нет — просто «Принять»."""
+    rows = [[InlineKeyboardButton(f"🔗 Слить с: {name[:40]}",
+                                  callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{pid}")]
+            for pid, name in (candidates or [])]
+    if candidates:
+        rows.append([InlineKeyboardButton("🆕 Принять как новый", callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-")])
+    else:
+        rows.append([InlineKeyboardButton("Принять", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}")])
+    return InlineKeyboardMarkup(rows + [
         [InlineKeyboardButton("Отклонить", callback_data=f"{CB_ADMIN}{ACTION_DECLINE}:{reg_id}"),
          InlineKeyboardButton("Запросить инфо", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
         [InlineKeyboardButton("Открыть в Airtable", url=record_url(ctx, reg_id))],
@@ -100,6 +110,83 @@ def _pair(*items: tuple) -> str | None:
     return " · ".join(parts) or None
 
 
+_QUESTIONS = {q.key: q for q in _NEW_PROJECT_QUESTIONS}
+
+CONTACT_RU = {
+    "Declared": "Заявляю (без подтверждения)",
+    "Indirect (bureau docs)": "Документы от бюро",
+    "Verifiable (email/contact)": "Переписка или контакт",
+    "Joint meeting with AW": "Готов к совместной встрече",
+}
+ALT_RU = {
+    "No — AW only": "Нет, только AW",
+    "Yes — tender requirement": "Да, по требованию тендера",
+    "Yes — own initiative": "Да, по своей инициативе",
+}
+STATUS_REQUESTS = {"New — Pre-registration", "New — Registration",
+                   "Upgrade — Pre-registration", "Upgrade — Registration"}
+FIELD_UPDATES = {"Update — info only", "Update — fields"}
+# Служебные ключи Payload — в списке изменений не показываем
+_META_KEYS = {"Dealer Project Name", "Project Log", "PPR Track", "EXW Potential", "In Reply To",
+              "Specifier Type", "Dealer News Audio"}
+
+
+def _ru(key: str, value) -> str:
+    """Значение поля по-русски: варианты Airtable → подписи, числа, даты, файлы."""
+    if key == "Contact Level":
+        return CONTACT_RU.get(value, str(value))
+    if key == "AW Alternatives":
+        return ALT_RU.get(value, str(value))
+    if key == "Project Stage":
+        return STAGE_LABELS.get(value, str(value))
+    q = _QUESTIONS.get(key)
+    if q is not None:
+        return format_value(q, value)
+    if isinstance(value, list):
+        return describe_items(value)
+    return str(value)
+
+
+def _card_body(rtype: str, payload: dict) -> list[str]:
+    body: list[str] = []
+    if payload.get("Dealer News"):
+        body.append(f"«{_v(payload, 'Dealer News')}»")
+    if rtype in FIELD_UPDATES and not payload.get("In Reply To"):
+        changes = [(k, v) for k, v in payload.items()
+                   if k not in _META_KEYS and k != "Dealer News" and v not in (None, "")]
+        if changes:
+            body.append("📝 Изменения:")
+            for k, v in changes:
+                title = _QUESTIONS[k].title if k in _QUESTIONS else k
+                body.append(f"• {escape(title)}: {escape(_ru(k, v))[:300]}")
+        return body
+    pl = payload.get("PL Volume")
+    stage = _ru("Project Stage", payload["Project Stage"]) if payload.get("Project Stage") else ""
+    part = payload.get("Object Part")
+    obj = _v(payload, "Object Name") + (f" · {escape(str(part))}" if part and part != "Весь объект" else "")
+    for row in (
+        _pair(("Клиент", _v(payload, "End Client"))),
+        _pair(("Объект", obj)),
+        _pair(("Город", _v(payload, "City")), ("Стадия", escape(stage))),
+        _pair(("Бюро", _v(payload, "Specifier")), ("ГАП", _v(payload, "Lead Architect"))),
+        _pair(("Объём по прайсу", f"{pl:,.0f} €".replace(",", " ") if isinstance(pl, (int, float)) else "")),
+        _pair(("Альтернативы AW", escape(_ru("AW Alternatives", payload["AW Alternatives"]))
+               if payload.get("AW Alternatives") else "")),
+        _pair(("Уровень контакта", escape(_ru("Contact Level", payload["Contact Level"]))
+               if payload.get("Contact Level") else "")),
+        _pair(("Причина", _v(payload, "Lost Reason"))),
+        _pair(("Заказ / проформа", _v(payload, "Order / Proforma №"))),
+    ):
+        if row:
+            body.append(row)
+    if rtype == "Update — Lost" and payload.get("Project Log"):
+        body.append(escape(payload["Project Log"])[:300])
+    if rtype in STATUS_REQUESTS and payload.get("Contact Level") == "Declared":
+        body += ["", "⚠️ Уровень контакта — заявляю, без подтверждения. "
+                     "Для предрегистрации рекомендуется запросить документы"]
+    return body
+
+
 def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: str | None = None,
                  dealer: str | None = None) -> str:
     name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
@@ -117,24 +204,7 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
         lines.append(f"👤 {who}")
     lines.append(f"🏗 <b>{escape(name)}</b>")
 
-    body = []
-    if payload.get("Dealer News"):
-        body.append(f"«{_v(payload, 'Dealer News')}»")
-    stage = STAGE_LABELS.get(payload.get("Project Stage"), payload.get("Project Stage"))
-    pl = payload.get("PL Volume")
-    for row in (
-        _pair(("Клиент", _v(payload, "End Client"))),
-        _pair(("Объект", _v(payload, "Object Name"))),
-        _pair(("Город", _v(payload, "City")), ("Стадия", escape(str(stage)) if stage else "")),
-        _pair(("Бюро", _v(payload, "Specifier")), ("ГАП", _v(payload, "Lead Architect"))),
-        _pair(("Объём по прайсу", f"{pl:,.0f} €".replace(",", " ") if isinstance(pl, (int, float)) else "")),
-        _pair(("Причина", _v(payload, "Lost Reason"))),
-        _pair(("Заказ / проформа", _v(payload, "Order / Proforma №"))),
-    ):
-        if row:
-            body.append(row)
-    if rtype == "Update — Lost" and payload.get("Project Log"):
-        body.append(escape(payload["Project Log"])[:300])
+    body = _card_body(rtype, payload)
     if body:
         lines += [""] + body
     if analysis:
@@ -158,8 +228,17 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             request_card(rec["fields"], rec["id"], await _author(repo, rec["fields"]),
                          rec["fields"].get(Registrations.ANALYSIS), await _dealer(repo, rec["fields"])),
             parse_mode=ParseMode.HTML,
-            reply_markup=decision_markup(ctx, rec["id"]),
+            reply_markup=decision_markup(ctx, rec["id"], await merge_candidates(repo, rec["fields"])),
         )
+
+
+async def merge_candidates(repo, reg: dict) -> list:
+    """Совпадения для кнопок «Слить с»: только у новой заявки без Target Project."""
+    if reg.get(Registrations.TARGET_PROJECT) or not str(reg.get(Registrations.REQUEST_TYPE) or "").startswith("New"):
+        return []
+    projects = await asyncio.to_thread(repo.dedup_projects)
+    found = dedup.find(_payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "", projects)
+    return [(c.project_id, c.name) for c in found]
 
 
 async def _dealer(repo, reg: dict) -> str | None:

@@ -607,9 +607,9 @@ def test_project_list_sorting_and_labels():
              mk("Pre 12", "pre_registered", 12), mk("Notif A", "notified", None)]
     order = [p.name for p in _sorted(items)]
     assert order == ["Pre 12", "Reg 40", "Notif A", "Notif B"]
-    assert _button_label(items[2]) in ("Pre 12 · Предрегистрация · 12 дн.", "Pre 12 · Предрегистрация · 11 дн.",
-                                       "Pre 12 · Предрегистрация · 13 дн.")
-    assert _button_label(items[0]) == "Notif B · Уведомление"
+    assert _button_label(items[2]) in ("Pre 12 · предрегистрация · 12 дн.", "Pre 12 · предрегистрация · 11 дн.",
+                                       "Pre 12 · предрегистрация · 13 дн.")
+    assert _button_label(items[0]) == "Notif B · уведомление"
 
 
 def _to_specifier():

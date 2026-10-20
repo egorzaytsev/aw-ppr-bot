@@ -53,6 +53,9 @@ class Projects:
     QUOTATION = "fld2eKHFMhU73fxS5"
     DEALER = "fldpdzk9bY1jFMPeJ"
     PROJECT_LOG = "fldC3PJr8sT9iZ8Rg"
+    PPR_REF = "fld9H3DLTtTOTluOb"            # формула AW-YY-####
+    PPR_NEXT_MISSING = "fldVIAWgivyBeKX4a"   # формула: чего не хватает для следующего этапа
+    PROBABILITY = "fldHldhYLswedJe8s"
     NOTIFIED = "fldiKRdTlngI6AXK8"
     PRE_REGISTERED = "fldSXoNH5rwWCYaWT"
     REGISTERED = "fld75C5ApwGwVCT5N"
