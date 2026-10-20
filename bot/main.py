@@ -25,7 +25,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import admin, cards, dedup, engine, phrases, reminders
+from . import admin, cards, dedup, engine, phrases, reminders, routing
 from .airtable_ids import People, Projects, Registrations, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
@@ -689,7 +689,9 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
         except Exception:
             log.exception("Поиск дублей для %s", reg_id)
 
-    admin_chat = ctx.bot_data.get("admin_chat_id")
+    # Дилерские заявки — Лоле, остальные — Егору
+    types = await asyncio.to_thread(_repo(ctx).company_types, person.company_ids)
+    _, admin_chat = routing.resolve(ctx.bot_data, routing.route(types))
     if admin_chat:
         try:
             card_fields = {
@@ -705,7 +707,7 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
                 reply_markup=admin.decision_markup(ctx, reg_id, candidates),
             )
         except Exception:
-            log.exception("Не удалось уведомить ADMIN_CHAT_ID")
+            log.exception("Не удалось уведомить проверяющего %s", admin_chat)
 
 
 async def _upload_files(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str, files: list) -> list[str]:
@@ -817,10 +819,14 @@ def _admin_summary(reg: dict, pl, project_name: str, created: bool, dealer: str,
 
 async def _process_decisions(app: Application) -> None:
     repo: AirtableRepo = app.bot_data["repo"]
-    admin_chat = app.bot_data.get("admin_chat_id")
     created_projects: set = app.bot_data.setdefault("created_projects", set())
+    decided_by: dict = app.bot_data.setdefault("decided_by", {})
     for rec in await asyncio.to_thread(repo.decisions_to_process):
         reg = rec["fields"]
+        # Полный итог — тому, кто решал (по кнопке), иначе по маршруту; Егору при решении Лолы — строка
+        routed = routing.resolve(app.bot_data, routing.route(
+            await asyncio.to_thread(repo.company_types, reg.get(Registrations.DEALER) or [])))[0]
+        decider, admin_chat = routing.resolve(app.bot_data, decided_by.get(rec["id"]) or routed)
         target = reg.get(Registrations.TARGET_PROJECT) or []
         project = await asyncio.to_thread(repo.project_fields, target[0]) if target else None
         pl = decision_plan(reg, project)
@@ -906,6 +912,16 @@ async def _process_decisions(app: Application) -> None:
             elif pl.dealer_text and not pl.blocked:
                 await _send_html(app.bot, admin_chat, _admin_summary(
                     reg, pl, pl.project_name or "", False, dealer_name, bool(dealer_chats), [], None))
+        if not pl.blocked:
+            decided_by.pop(rec["id"], None)
+            other = routing.EGOR if decider != routing.EGOR else (routing.LOLA if routed == routing.LOLA else None)
+            other_chat = routing.chats(app.bot_data).get(other) if other else None
+            if other_chat and other_chat != admin_chat:
+                fresh_ref = ((await asyncio.to_thread(repo.project_fields, target[0])) if target else {}) or {}
+                await _send_html(app.bot, other_chat, routing.summary_line(
+                    decider, reg.get(Registrations.DECISION) or "", fresh_ref.get(Projects.PPR_REF) or "",
+                    fresh_ref.get(Projects.NAME) or reg.get(Registrations.DEALER_PROJECT_NAME) or "",
+                    pl.status_label or "", pl.declined_upgrade))
 
 
 # ---------- напоминания ----------
@@ -1045,13 +1061,35 @@ async def _reminders_loop(app: Application) -> None:
         await asyncio.sleep(REMINDERS_INTERVAL)
 
 
+async def _refresh_reviewers(app: Application) -> None:
+    """Chat ID Лолы (@aw_eeu) из People: появляется, когда она впервые пишет боту."""
+    person = await asyncio.to_thread(app.bot_data["repo"].find_by_username, routing.LOLA_USERNAME)
+    chat = person.chat_id if person and person.chat_id else None
+    if chat and chat != app.bot_data.get("lola_chat_id"):
+        try:
+            await app.bot.set_my_commands(ADMIN_COMMANDS + DEALER_COMMANDS, scope=BotCommandScopeChat(int(chat)))
+        except Exception:
+            log.exception("Не удалось задать команды Лоле")
+    app.bot_data["lola_chat_id"] = chat
+
+
 async def _decisions_loop(app: Application) -> None:
     while True:
+        try:
+            await _refresh_reviewers(app)
+        except Exception:
+            log.exception("Не удалось обновить проверяющих")
         try:
             await process_decisions(app)
         except Exception:
             log.exception("Ошибка обработки решений")
         await asyncio.sleep(DECISIONS_INTERVAL)
+
+
+DEALER_COMMANDS = [BotCommand("start", "Начать"), BotCommand("new", "Новый проект"),
+                   BotCommand("cancel", "Отменить заявку"), BotCommand("time", "Время напоминаний")]
+ADMIN_COMMANDS = [BotCommand("admin", "Админ-меню"), BotCommand("inbox", "Заявки на проверке"),
+                  BotCommand("reminder", "Напоминание сейчас")]
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1077,16 +1115,11 @@ def build_app() -> Application:
 
     async def post_init(app: Application) -> None:
         # Подсказки «/»: дилерам — только свои команды, админу — ещё и админские
-        dealer_cmds = [BotCommand("start", "Начать"), BotCommand("new", "Новый проект"),
-                       BotCommand("cancel", "Отменить заявку"), BotCommand("time", "Время напоминаний")]
         try:
-            await app.bot.set_my_commands(dealer_cmds, scope=BotCommandScopeDefault())
+            await app.bot.set_my_commands(DEALER_COMMANDS, scope=BotCommandScopeDefault())
             if settings.admin_chat_id:
-                await app.bot.set_my_commands(
-                    [BotCommand("admin", "Админ-меню"), BotCommand("inbox", "Заявки на проверке"),
-                     BotCommand("reminder", "Напоминание сейчас")] + dealer_cmds,
-                    scope=BotCommandScopeChat(int(settings.admin_chat_id)),
-                )
+                await app.bot.set_my_commands(ADMIN_COMMANDS + DEALER_COMMANDS,
+                                              scope=BotCommandScopeChat(int(settings.admin_chat_id)))
         except Exception:
             log.exception("Не удалось задать список команд")
         app.bot_data["decisions_task"] = asyncio.create_task(_decisions_loop(app))

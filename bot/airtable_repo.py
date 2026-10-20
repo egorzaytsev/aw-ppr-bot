@@ -372,6 +372,15 @@ class AirtableRepo:
     def company_name(self, company_id: str) -> str:
         return self._company_names().get(company_id) or company_id
 
+    def company_types(self, company_ids: list[str]) -> list[str]:
+        """Companies.Type по id (для маршрутизации заявок); кэш как у названий."""
+        cached = getattr(self, "_types_cache", None)
+        if not cached or time.monotonic() - cached[0] >= self._DEDUP_TTL:
+            types = {r["id"]: r["fields"].get(Companies.TYPE)
+                     for r in self._companies.all(fields=[Companies.TYPE], use_field_ids=True)}
+            cached = self._types_cache = (time.monotonic(), types)
+        return [cached[1].get(c) for c in company_ids]
+
     # ---------- сводка для админа ----------
 
     def admin_stats(self) -> dict:
@@ -403,12 +412,13 @@ class AirtableRepo:
 
     AWAIT_TTL = 6 * 3600  # секунд: забытый ввод не подхватываем
 
-    def set_awaiting(self, reg_id: str, action: str, reply_id: str = "") -> None:
-        mark = f"await:{action}:{reply_id or '-'}:{int(time.time())}"
+    def set_awaiting(self, reg_id: str, action: str, reply_id: str = "", chat_id=None) -> None:
+        # Чат проверяющего в конце — у Егора и Лолы свои ожидания ввода
+        mark = f"await:{action}:{reply_id or '-'}:{int(time.time())}:{chat_id or '-'}"
         self._registrations.update(reg_id, {Registrations.BOT_PROCESSED: mark})
 
-    def find_awaiting(self) -> tuple | None:
-        """(действие, id заявки, id ответа) — последний незавершённый ввод админа."""
+    def find_awaiting(self, chat_id=None) -> tuple | None:
+        """(действие, id заявки, id ответа) — последний незавершённый ввод этого проверяющего."""
         recs = self._registrations.all(
             formula=f"LEFT({{{Registrations.BOT_PROCESSED}}}, 6)='await:'",
             fields=[Registrations.BOT_PROCESSED], use_field_ids=True,
@@ -420,6 +430,9 @@ class AirtableRepo:
                 continue
             ts = int(parts[3])
             if time.time() - ts > self.AWAIT_TTL:
+                continue
+            owner = parts[4] if len(parts) > 4 and parts[4] != "-" else None
+            if chat_id is not None and owner is not None and owner != str(chat_id):
                 continue
             if not best or ts > best[0]:
                 best = (ts, parts[1], r["id"], "" if parts[2] == "-" else parts[2])

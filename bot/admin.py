@@ -15,7 +15,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from . import dedup
+from . import dedup, routing
 from .scenarios.base import describe_items, format_value
 from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
 from .airtable_ids import Decision, Registrations
@@ -35,8 +35,21 @@ UPGRADE_REQUESTS = {"New — Pre-registration", "New — Registration",
 
 
 def is_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
-    admin = ctx.bot_data.get("admin_chat_id")
-    return bool(admin) and update.effective_chat is not None and str(update.effective_chat.id) == str(admin)
+    """Проверяющий: Егор (ADMIN_CHAT_ID) или Лола (@aw_eeu, когда она уже писала боту)."""
+    return update.effective_chat is not None and str(update.effective_chat.id) in routing.reviewer_chats(ctx.bot_data)
+
+
+def _mark_decider(ctx: ContextTypes.DEFAULT_TYPE, update: Update, reg_id: str) -> None:
+    """Кто нажал — ему полная карточка итога, второму проверяющему короткая строка."""
+    who = routing.who_by_chat(ctx.bot_data, update.effective_chat.id)
+    if who and reg_id:
+        ctx.bot_data.setdefault("decided_by", {})[reg_id] = who
+
+
+async def reviewer_of(ctx: ContextTypes.DEFAULT_TYPE, reg: dict) -> str:
+    """Кому по маршруту достаётся заявка (с учётом того, есть ли Лола в боте)."""
+    types = await asyncio.to_thread(ctx.bot_data["repo"].company_types, reg.get(Registrations.DEALER) or [])
+    return routing.resolve(ctx.bot_data, routing.route(types))[0]
 
 
 async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -46,7 +59,7 @@ async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     item = _pending(ctx).pop(update.effective_chat.id, None)
     repo = ctx.bot_data["repo"]
     if not item:
-        item = await asyncio.to_thread(repo.find_awaiting)
+        item = await asyncio.to_thread(repo.find_awaiting, update.effective_chat.id)
     if item and item[0] != ACTION_REMIND_USER:
         await asyncio.to_thread(repo.clear_awaiting, item[1])
 
@@ -225,6 +238,8 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     repo = ctx.bot_data["repo"]
     recs = await asyncio.to_thread(repo.pending_without_decision)
     recs = [rec for rec in recs if not await _close_if_orphan_reply(repo, rec)]
+    me = routing.who_by_chat(ctx.bot_data, update.effective_chat.id)
+    recs = [rec for rec in recs if await reviewer_of(ctx, rec["fields"]) == me]
     if not recs:
         await update.effective_chat.send_message("🛠 В Inbox нет заявок без решения.")
         return
@@ -323,6 +338,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
             await chat.send_message("Исходная заявка не найдена.")
             return
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+    _mark_decider(ctx, update, reg_id)
     decided = reg.get(Registrations.DECISION)
     if decided and decided != Decision.NEED_INFO and action not in (ACTION_PICK, ACTION_DPICK, ACTION_DNEW):
         if reply_id:
@@ -340,7 +356,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action in (ACTION_DECLINE, ACTION_INFO):
         pending[chat.id] = (action, reg_id, reply_id)
-        await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
         what = "отказа" if action == ACTION_DECLINE else "запроса"
         await chat.send_message(
             f"🛠 «{name}»: напиши текст {what} — он уйдёт дилеру как есть.",
@@ -379,7 +395,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action == ACTION_DNEW:
         pending[chat.id] = (ACTION_DNEW, reg_id, reply_id)
-        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DNEW, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DNEW, reply_id, chat.id)
         await chat.send_message(f"🛠 «{name}»: напиши название нового проекта латиницей. Передумал — нажми меню внизу.")
         return
 
@@ -392,7 +408,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action == ACTION_NEW:
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
-        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id, chat.id)
         await chat.send_message(
             f"🛠 «{name}»: напиши название нового проекта латиницей, как оно будет в Projects. "
             "Передумал — просто нажми меню внизу.",
@@ -408,11 +424,12 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     item = pending.pop(update.effective_chat.id, None)
     if not item and resume:
         # Бот мог перезапуститься, пока админ печатал, — берём ожидание из Airtable
-        item = await asyncio.to_thread(repo.find_awaiting)
+        item = await asyncio.to_thread(repo.find_awaiting, update.effective_chat.id)
     if not item:
         return False  # бот ничего не ждёт — текст идёт дальше, в обычный диалог
     action, reg_id, reply_id = item
     chat = update.effective_chat
+    _mark_decider(ctx, update, reg_id)
     if action != ACTION_REMIND_USER:
         await asyncio.to_thread(repo.clear_awaiting, reg_id)
     text = text.strip()
@@ -425,7 +442,7 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         return True
     if action == ACTION_DPICK:
         # Ждём выбор проекта кнопкой, а не текст
-        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id, chat.id)
         await chat.send_message("🛠 Выбери проект кнопкой под сообщением об отказе.")
         return True
     if action == ACTION_DNEW:
@@ -447,7 +464,7 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
                 and not reg.get(Registrations.TARGET_PROJECT)):
             # Отказ всё равно фиксирует плейсмент уведомлением — сначала выбрать проект
             await asyncio.to_thread(repo.set_decision, reg_id, decision, text)
-            await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id)
+            await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id, chat.id)
             found = await merge_candidates(repo, reg)
             rows = [[InlineKeyboardButton(f"🔗 В проект: {name[:40]}",
                                           callback_data=f"{CB_ADMIN}{ACTION_DPICK}:{reg_id}:{pid}")]
