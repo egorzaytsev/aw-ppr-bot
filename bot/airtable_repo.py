@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from pyairtable import Api
 
-from .airtable_ids import Companies, People, Projects, Registrations, RegStatus, RequestType
+from .airtable_ids import Companies, Decision, People, Projects, Registrations, RegStatus, RequestType
 from .state import DialogState
 
 log = logging.getLogger(__name__)
@@ -208,7 +208,9 @@ class AirtableRepo:
         if not reg_ids:
             return []
         recs = self._registrations.all(
-            formula=f"AND({_ids_formula(reg_ids)}, {{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)})",
+            # Принятые обновления остаются PENDING (статус не меняют) — на проверке только без решения
+            formula=(f"AND({_ids_formula(reg_ids)}, {{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)}, "
+                     f"OR({{{Registrations.DECISION}}}='', {{{Registrations.DECISION}}}={_quote(Decision.NEED_INFO)}))"),
             fields=[Registrations.DEALER_PROJECT_NAME, Registrations.REQUEST_TYPE, Registrations.SUBMITTED_AT],
             use_field_ids=True,
         )
