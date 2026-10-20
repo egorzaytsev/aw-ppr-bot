@@ -11,7 +11,8 @@ from dataclasses import replace
 from ..airtable_ids import Projects, RequestType
 from .base import DETAIL, Question, Scenario
 from .new_project import (
-    QUESTIONS, STAGE_ARCHITECT_SELECTION, current_pl, exw, location, project_log, specifier,
+    OWN_DESIGN, QUESTIONS, STAGE_ARCHITECT_SELECTION, current_pl, exw, location, project_log,
+    specifier,
 )
 
 CONFIRMED_BY_EGOR = "Принято, Егор подтвердит."
@@ -211,8 +212,21 @@ MATERIAL_KEYS = tuple(q.key for q in QUESTIONS if q.group == "Материалы
 EXTRA_FILES_KEY = "Extra Materials"
 
 
+# «Бюро ещё не выбрано» — только в «Дополнить»: формула пропусков требует бюро и на выборе архитектора
+NO_BUREAU_YET = "__no_bureau__"
+# Ответы предрегистрации без полей в Projects — живут в Project Log строкой «Заголовок: …»
+LOG_GAP_KEYS = ("AW Introduced By", "Decision Maker Company", "Influencers", "Competing Dealers")
+
+
 def _ask_only(q: Question) -> Question:
     """Вопрос сценария «Новый проект», который задаётся, только если поле пустое в проекте."""
+    if q.key == "Specifier":
+        return replace(q, choices=q.choices + (("Бюро ещё не выбрано", NO_BUREAU_YET),),
+                       ask_if=lambda a: "Specifier" in a.get("_ask", ()))
+    if q.key == "Lead Architect":
+        return replace(q, ask_if=lambda a: "Lead Architect" in a.get("_ask", ())
+                       and a.get("Specifier") not in (None, OWN_DESIGN, NO_BUREAU_YET))
+
     def ask_if(a: dict, q: Question = q) -> bool:
         return q.key in a.get("_ask", ()) and q.applies(a)
     return replace(q, ask_if=ask_if)
@@ -230,6 +244,7 @@ FILL_QUESTIONS = tuple(_ask_only(q) for q in QUESTIONS) + (
         ask_if=lambda a: bool(a.get("_files_only")),
     ),
 )
+_FILL_TITLES = {q.key: q.title for q in QUESTIONS}
 
 
 def _empty(v) -> bool:
@@ -290,7 +305,7 @@ def gaps_for(project_fields: dict, ppr_status: str) -> tuple[list[str], dict]:
         "EXW Potential": ("PL Volume",),
         "Expected Order Date": ("Order Month",),
         "Object Address": ("Object Address",),
-        "Specifier": ("Specifier", "Lead Architect") if stage != STAGE_ARCHITECT_SELECTION else (),
+        "Specifier": ("Specifier", "Lead Architect"),
         "Contact Level": ("Contact Level",),
         "AW Alternatives": ("AW Alternatives",),
         "Parallel Registrations": ("Parallel Registrations",),
@@ -299,6 +314,12 @@ def gaps_for(project_fields: dict, ppr_status: str) -> tuple[list[str], dict]:
     for name, qkeys in by_name.items():
         if name in missing_names:
             for k in qkeys:
+                need(k)
+    # Ответы предрегистрации из Project Log (Simplified до предрегистрации не доходит)
+    if f.get(Projects.PPR_TRACK) != "Simplified (<30k)":
+        log = f.get(Projects.PROJECT_LOG) or ""
+        for k in LOG_GAP_KEYS:
+            if f"{_FILL_TITLES[k]}:" not in log:
                 need(k)
     if ppr_status == "pre_registered" and _empty(f.get(Projects.QUOTATION)):
         need("Quotation / Proforma №")  # для регистрации нужна квотация
@@ -320,11 +341,15 @@ def _fill_derive(a: dict) -> dict:
     if "Object Location" in a:
         out.update(location(a))
     out.update(specifier(a))
+    if a.get("Specifier") == NO_BUREAU_YET:
+        out["Specifier"] = None
     pl = current_pl(a)
     if pl is not None:
         out["PL Volume"] = pl
         out["EXW Potential"] = exw(pl)
     log = project_log(a)
+    if a.get("Specifier") == NO_BUREAU_YET:
+        log.append("Архбюро: ещё не выбрано")
     if log:
         out["Project Log"] = "\n".join(log)
     return out

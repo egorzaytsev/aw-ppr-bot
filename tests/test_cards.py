@@ -129,3 +129,8 @@ def test_declined_upgrade_card():
     assert "📌 Плейсмент зафиксирован как уведомление." in lines and "💬 Причина: Нет документов" in lines
     assert plain(cards.admin_copy(cards.declined_upgrade_card(project(), D, "STATIO", {}, "предрегистрация", "", False),
                                   True)).startswith("🛠 ❌ Предрегистрация не подтверждена")
+
+
+def test_architect_selection_bureau_line():
+    p = project(**{P.PPR_NEXT_MISSING: "Specifier;", P.PROJECT_STAGE: "Architect selection"})
+    assert "🏛 Архитектурное бюро — как только клиент его выберет." in plain(cards.accept_card(p, D, "S", {}, False))

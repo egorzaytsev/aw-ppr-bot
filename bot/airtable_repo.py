@@ -36,7 +36,7 @@ _PROJECT_FIELDS = [
     Projects.OBJECT_ADDRESS, Projects.PROJECT_STAGE, Projects.SPECIFIER, Projects.EXW_POTENTIAL,
     Projects.AW_ALTERNATIVES, Projects.EXPECTED_ORDER_DATE, Projects.CONTACT_LEVEL,
     Projects.PARALLEL_REGISTRATIONS, Projects.DOSSIER_FILES, Projects.QUOTATION,
-    Projects.PPR_REF, Projects.PPR_NEXT_MISSING,
+    Projects.PPR_REF, Projects.PPR_NEXT_MISSING, Projects.PROJECT_LOG,
     # Только для проверки «есть ли регистрация на объекте» — имена дилерам не показываются
     Projects.REGISTERED,
 ]

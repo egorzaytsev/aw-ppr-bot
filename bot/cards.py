@@ -38,6 +38,7 @@ NEXT_STEP_LINES = (
     ("Parallel Registrations", "📋 Параллельные регистрации."),
     ("Quotation №", "🧾 Номер квотации."),
 )
+ARCHITECT_PENDING = "🏛 Архитектурное бюро — как только клиент его выберет."
 
 
 def dealer_status(project: dict, dealer: str) -> str | None:
@@ -97,6 +98,8 @@ def next_step_body(project: dict, dealer: str) -> list[str]:
     target = "регистрацию" if status == "pre_registered" else "предрегистрацию"
     contact = CONTACT_RU.get(project.get(Projects.CONTACT_LEVEL) or "", "не указано")
     lines = [line.format(contact=contact) for key, line in NEXT_STEP_LINES if key in raw]
+    if project.get(Projects.PROJECT_STAGE) == "Architect selection":
+        lines = [ARCHITECT_PENDING if ln == "🏛 Архитектурное бюро." else ln for ln in lines]
     if not lines:
         return ["✔️ Все данные для следующего этапа есть. Нажми «Обновить проект» → «Запросить следующий этап»."]
     return [f"➡️ Для перехода на {target} не хватает:", "", *lines, "",

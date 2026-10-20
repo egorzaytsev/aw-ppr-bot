@@ -554,6 +554,10 @@ def test_lost_reason_mapping_and_other():
     assert p["Project Log"] == "Причина проигрыша (со слов дилера): Клиент купил б/у мебель"
 
 
+FULL_LOG = ("Кто и когда предложил AW: бюро\nРешение по мебели принимает: клиент\n"
+            "Влияют на решение: ГП\nКонкурирующие дилеры: Нет")
+
+
 def test_fill_asks_only_gaps_in_phase_order():
     from bot.airtable_ids import Projects as P
     from bot.scenarios.update_project import fill_preset
@@ -561,7 +565,7 @@ def test_fill_asks_only_gaps_in_phase_order():
               P.COUNTRY: "Russia", P.CITY: "Moscow", P.OBJECT_ADDRESS: "Lesnaya 9", P.PROJECT_STAGE: "Design",
               P.SPECIFIER: ["rec2"], P.EXW_POTENTIAL: 50000, P.AW_ALTERNATIVES: "No — AW only",
               P.EXPECTED_ORDER_DATE: "2027-03-01", P.CONTACT_LEVEL: "Declared", P.PARALLEL_REGISTRATIONS: "нет",
-              P.DOSSIER_FILES: [{"id": "att1"}]}
+              P.DOSSIER_FILES: [{"id": "att1"}], P.PROJECT_LOG: FULL_LOG}
     # Уведомление, всё заполнено → только приём файлов
     r = engine.start("project_fill", fill_preset(dict(TARGET["_target"]), fields, "notified"))
     assert r.state.step == len(engine._qs(r.state)) - 1 and "Все данные" in r.screens[1].text
@@ -670,8 +674,35 @@ def test_fill_flat_numbering_across_phases():
     from bot.scenarios.update_project import fill_preset
     fields = {P.END_CLIENT: ["c"], P.OBJECT_NAME: "o", P.OBJECT_PART: "p", P.COUNTRY: "Russia", P.CITY: "Moscow",
               P.PROJECT_STAGE: "Design", P.SPECIFIER: ["s"], P.EXW_POTENTIAL: 1, P.AW_ALTERNATIVES: "No — AW only",
-              P.EXPECTED_ORDER_DATE: "2027-01-01", P.DOSSIER_FILES: [{"id": "a"}]}
+              P.EXPECTED_ORDER_DATE: "2027-01-01", P.DOSSIER_FILES: [{"id": "a"}], P.PROJECT_LOG: FULL_LOG}
     r = engine.start("project_fill", fill_preset({"id": "recP", "name": "X"}, fields, "notified"))
     assert "Дополнить · 1/3." in r.screens[1].text and "Адрес объекта" in r.screens[1].text
     r = engine.handle_callback(r.state, engine.CB_SKIP)
     assert "Дополнить · 2/3." in r.screens[-1].text
+
+
+def test_fill_asks_bureau_on_architect_selection_and_log_answers():
+    from bot.airtable_ids import Projects as P
+    from bot.scenarios.update_project import fill_preset
+    fields = {P.END_CLIENT: ["c"], P.OBJECT_NAME: "o", P.OBJECT_PART: "p", P.COUNTRY: "Russia", P.CITY: "Moscow",
+              P.OBJECT_ADDRESS: "a", P.PROJECT_STAGE: "Architect selection", P.EXW_POTENTIAL: 1,
+              P.AW_ALTERNATIVES: "No — AW only", P.EXPECTED_ORDER_DATE: "2027-01-01", P.CONTACT_LEVEL: "Declared",
+              P.PARALLEL_REGISTRATIONS: "нет", P.DOSSIER_FILES: [{"id": "a"}],
+              P.PROJECT_LOG: "Кто и когда предложил AW: бюро\nВлияют на решение: ГП"}
+    preset = fill_preset({"id": "recP", "name": "X"}, fields, "notified")
+    assert preset["_ask"] == ["Specifier", "Lead Architect", "Decision Maker Company", "Competing Dealers"]
+    r = engine.start("project_fill", preset)
+    assert engine._current_q(r.state).key == "Specifier"
+    assert ("Бюро ещё не выбрано", "ch:2") in [b for row in r.screens[-1].buttons for b in row]
+    r = engine.handle_callback(r.state, "ch:2")
+    assert engine._current_q(r.state).key == "Decision Maker Company"   # ГАП не спрашиваем
+    r = engine.handle_text(r.state, "Петрович")
+    r = engine.handle_callback(r.state, "ch:0")
+    assert r.state.awaiting == "confirm"
+    p = engine.build_payload(r.state)
+    assert "Specifier" not in p
+    assert p["Project Log"].splitlines() == [
+        "Решение по мебели принимает: Петрович", "Конкурирующие дилеры: Нет", "Архбюро: ещё не выбрано"]
+    # Simplified до предрегистрации не доходит — вопросов из лога нет
+    fields[P.PPR_TRACK] = "Simplified (<30k)"
+    assert "Decision Maker Company" not in fill_preset({"id": "recP", "name": "X"}, fields, "notified")["_ask"]

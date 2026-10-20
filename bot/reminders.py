@@ -13,7 +13,7 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from .scenarios.new_project import QUESTIONS
-from .scenarios.update_project import MATERIAL_KEYS, gaps_for
+from .scenarios.update_project import LOG_GAP_KEYS, MATERIAL_KEYS, gaps_for
 
 EXPIRY_DAYS = 14
 STALE_DAYS = 21
@@ -27,8 +27,8 @@ PERSON_TZ = {
     "Belarus": "Europe/Minsk", "Spain": "Europe/Madrid", "Italy": "Europe/Rome", "Poland": "Europe/Warsaw",
 }
 _TITLES = {q.key: q.title for q in QUESTIONS}
-# Необязательное в напоминаниях не требуем
-_SKIP_IN_REMINDERS = {"Object Part"}
+# Необязательное и ответы из Project Log в напоминаниях не требуем
+_SKIP_IN_REMINDERS = {"Object Part", *LOG_GAP_KEYS}
 _PHASE1 = {q.key for q in QUESTIONS if q.phase == 1}
 
 
