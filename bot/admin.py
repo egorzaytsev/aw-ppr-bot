@@ -213,7 +213,7 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
         lines += [""] + body
     if analysis:
         lines += ["", "🔎 " + escape(analysis)]
-    lines.append(f"<code>{reg_id}</code>")
+    # ID заявки в тексте не показываем — запись открывается кнопкой «Открыть в Airtable»
     return "\n".join(lines)
 
 

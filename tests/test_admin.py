@@ -11,7 +11,7 @@ def test_request_card_and_search_words():
     card = request_card(reg, "recX")
     assert "🛠 <b>📥 Новая заявка · уведомление</b>" in card and "🏗 <b>Пао — Символ</b>" in card
     assert "Объём по прайсу: 31 000 €" in card
-    assert "<code>recX</code>" in card
+    assert "recX" not in card
 
 
 def test_reply_card_shows_answer():
