@@ -11,11 +11,13 @@ from telegram import (
     BotCommand, BotCommandScopeChat, BotCommandScopeDefault, InlineKeyboardButton, InlineKeyboardMarkup,
     ReplyKeyboardMarkup, Update,
 )
+from telegram import LinkPreviewOptions
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationBuilder,
     CallbackQueryHandler,
+    Defaults,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -1098,6 +1100,8 @@ def build_app() -> Application:
 
     app = (
         ApplicationBuilder().token(settings.telegram_token)
+        # Ссылки дилеров (материалы) не разворачиваем в превью — сводка остаётся читаемой
+        .defaults(Defaults(link_preview_options=LinkPreviewOptions(is_disabled=True)))
         .post_init(post_init).post_shutdown(post_shutdown).build()
     )
     app.bot_data["repo"] = AirtableRepo(settings.airtable_token, settings.airtable_base_id)

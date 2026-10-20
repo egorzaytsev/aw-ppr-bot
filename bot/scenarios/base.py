@@ -21,6 +21,9 @@ def find_links(text: str) -> list[str]:
 Choice = tuple[str, str]
 
 
+PAST_MONTH = "Этот месяц уже прошёл — выбери текущий или будущий"
+
+
 class ParseError(ValueError):
     """Ответ не подходит — текст ошибки уходит пользователю."""
 
@@ -231,7 +234,10 @@ def parse_answer(q: Question, text: str) -> Value:
     if q.kind == "number":
         return parse_number(text)
     if q.kind == "month":
-        return parse_month(text)
+        value = parse_month(text)
+        if value < date.today().replace(day=1).isoformat():
+            raise ParseError(PAST_MONTH)
+        return value
     return text
 
 

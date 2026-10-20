@@ -723,3 +723,33 @@ def test_last_step_hint_only_on_last_material():
     assert texts[0].startswith("<b>Дополнить · 1/1 · Материалы 1/6</b>\nВизуализации проекта.")
     assert [("Последний вопрос" in t) for t in texts] == [False] * 5 + [True]
     assert ["Ещё два вопроса" in t for t in texts] == [False] * 4 + [True, False]
+
+
+def test_past_month_rejected_and_hidden():
+    from datetime import date
+    from bot.scenarios.base import PAST_MONTH, ParseError, parse_answer
+    from bot.scenarios.new_project import QUESTIONS
+    q = next(x for x in QUESTIONS if x.key == "Order Month")
+    try:
+        parse_answer(q, "01.2020")
+        raise AssertionError("прошлый месяц принят")
+    except ParseError as e:
+        assert str(e) == PAST_MONTH
+    state = engine.DialogState(scenario="new_project", pick_year=date.today().year)
+    labels = [b[0] for row in engine.month_screen(state).buttons for b in row]
+    assert labels[0] == engine.MONTHS[date.today().month - 1]
+
+
+def test_fill_summary_is_flat():
+    from bot.airtable_ids import Projects as P
+    from bot.scenarios.update_project import fill_preset
+    fields = {P.END_CLIENT: ["c"], P.OBJECT_NAME: "o", P.OBJECT_PART: "p", P.COUNTRY: "Russia", P.CITY: "Moscow",
+              P.PROJECT_STAGE: "Design", P.SPECIFIER: ["s"], P.EXW_POTENTIAL: 1, P.AW_ALTERNATIVES: "No — AW only",
+              P.EXPECTED_ORDER_DATE: "2027-01-01", P.CONTACT_LEVEL: "Declared", P.DOSSIER_FILES: [{"id": "a"}],
+              P.PROJECT_LOG: FULL_LOG}
+    r = engine.start("project_fill", fill_preset({"id": "recP", "name": "X"}, fields, "notified"))
+    r = engine.handle_text(r.state, "ул. Лесная, 9")
+    r = engine.handle_callback(r.state, "ch:0")
+    text = r.screens[-1].text
+    assert "1. Адрес: ул. Лесная, 9\n2. Заявлен другим производителям: Нет" in text
+    assert "<b>Уведомление</b>" not in text and "<b>Предрегистрация</b>" not in text

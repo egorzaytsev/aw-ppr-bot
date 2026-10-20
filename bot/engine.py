@@ -235,8 +235,15 @@ def _files_progress(state: DialogState) -> Screen:
     )
 
 
+def _first_month(year: int) -> int:
+    """Прошедшие месяцы не предлагаем: в текущем году — с текущего месяца."""
+    today = date.today()
+    return today.month if year == today.year else 1
+
+
 def month_screen(state: DialogState) -> Screen:
-    items = [(m, f"{CB_MONTH}{i}") for i, m in enumerate(MONTHS, 1)]
+    first = _first_month(state.pick_year)
+    items = [(m, f"{CB_MONTH}{i}") for i, m in enumerate(MONTHS, 1) if i >= first]
     buttons = _rows(items, 3) + [[("← Другой год", CB_YEAR_BACK)]]
     return Screen(f"{state.pick_year} — выбери месяц:", buttons)
 
@@ -309,7 +316,12 @@ def summary_screen(state: DialogState) -> Screen:
     target = state.answers.get("_target")
     if target:
         lines.append(f"Проект: <b>{escape(target['name'])}</b>")
-    for phase in range(1, state.phase + 1):
+    if sc.flat_numbering:
+        # Сквозной список без деления на этапы — как и нумерация вопросов
+        lines.append("")
+        for n, i in enumerate(applicable(state), 1):
+            lines.append(f"{n}. {escape(qs[i].title)}: {escape(_display(qs[i], state.answers))}")
+    for phase in range(1, state.phase + 1) if not sc.flat_numbering else ():
         if not applicable(state, phase):
             continue
         lines += ["", f"<b>{escape(sc.phase_titles.get(phase, ''))}</b>"]
@@ -615,7 +627,7 @@ def handle_callback(state: DialogState, data: str) -> Result:
             return Result(state, [question_screen(state)])
         if data.startswith(CB_MONTH):
             idx = _index(data, CB_MONTH, 13)
-            if idx:
+            if idx and idx >= _first_month(state.pick_year):
                 state.awaiting = AWAIT_ANSWER
                 return _accept(state, q, date(state.pick_year, idx, 1).isoformat())
         return Result(state, [month_screen(state)])
