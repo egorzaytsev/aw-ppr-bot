@@ -876,6 +876,7 @@ async def _process_decisions(app: Application) -> None:
                     RequestType.UPDATE_WON: "📝 Информацию приняли — итог по проекту подтвердит Егор.",
                     RequestType.UPDATE_LOST: "📝 Информацию приняли — итог по проекту подтвердит Егор.",
                     RequestType.QUOTE_SIMPLIFIED: "📝 Спецификацию передали на квотацию.",
+                    RequestType.UPDATE_NEWS: "📰 Новость записали в историю проекта.",
                 }.get(rtype, "📝 Информацию внесли в проект.")
                 card = cards.update_card(fresh, dealer_id, dealer_name, body, note)
             if pl.dealer_text:  # ответ на запрос принимается молча — у него dealer_text нет

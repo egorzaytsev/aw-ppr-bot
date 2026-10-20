@@ -105,7 +105,12 @@ class RequestType:
     NEW_REGISTRATION = "New — Registration"
     UPGRADE_PRE_REGISTRATION = "Upgrade — Pre-registration"
     UPGRADE_REGISTRATION = "Upgrade — Registration"
+    # Старый общий тип обновления — у ранних заявок; новые пишутся как fields / news
     UPDATE_INFO = "Update — info only"
+    UPDATE_FIELDS = "Update — fields"   # «Дополнить материалы»
+    UPDATE_NEWS = "Update — news"       # «Сообщить новость» и ответ на запрос
     UPDATE_WON = "Update — Won"
     UPDATE_LOST = "Update — Lost"
     QUOTE_SIMPLIFIED = "Quotation — Simplified"
+    UNKNOWN_USER = "Unknown user"
+    INFO_UPDATES = frozenset({UPDATE_INFO, UPDATE_FIELDS, UPDATE_NEWS})

@@ -148,9 +148,10 @@ def test_need_more_info_has_reply_button():
 
 
 def test_info_update_moves_fields_without_status():
-    r = _with_payload(reg(rtype="Update — info only"), {"Contact Level": "Joint meeting with AW"})
-    pl = plan(r, {P.NAME: "X"})
-    assert pl.project_updates == {P.CONTACT_LEVEL: "Joint meeting with AW"}
+    for rtype in ("Update — info only", "Update — fields", "Update — news"):
+        r = _with_payload(reg(rtype=rtype), {"Contact Level": "Joint meeting with AW"})
+        pl = plan(r, {P.NAME: "X"})
+        assert pl.project_updates == {P.CONTACT_LEVEL: "Joint meeting with AW"} and not pl.blocked
 
 
 def test_won_lost_do_not_touch_project():

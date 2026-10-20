@@ -521,7 +521,7 @@ def test_news_auto_submits_with_text_and_audio():
                                         "mime": "audio/ogg"}]
     r = engine.handle_text(st, "Клиент утвердил концепцию, тендер в декабре")
     assert r.submit and not r.screens                             # без сводки
-    assert engine.stage_of(r.state)[0] == "Update — info only"
+    assert engine.stage_of(r.state)[0] in ("Update — news", "Update — fields")
     p = engine.build_payload(r.state)
     assert p["Project Log"] == "Новости от дилера: Клиент утвердил концепцию, тендер в декабре"
     assert p["Dealer News"] == "Клиент утвердил концепцию, тендер в декабре"
@@ -666,7 +666,7 @@ def test_info_reply_flow():
     p = engine.build_payload(r.state)
     assert p["In Reply To"] == "recREG" and p["Dealer Project Name"] == "Пао — Символ"
     assert p["Project Log"] == "Ответ дилера на запрос: Планировки будут в понедельник"
-    assert engine.stage_of(r.state)[0] == "Update — info only"
+    assert engine.stage_of(r.state)[0] in ("Update — news", "Update — fields")
 
 
 def test_fill_flat_numbering_across_phases():

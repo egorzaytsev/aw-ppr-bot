@@ -284,8 +284,8 @@ class AirtableRepo:
             self._registrations.update(reg_id, {Registrations.REG_STATUS: "Cancelled"})
 
     def create_project(self, name: str) -> str:
-        # Новый проект из заявки — Prospecting, статус двигает Егор
-        rec = self._projects.create({Projects.NAME: name, Projects.STATUS: "Prospecting"})
+        # Новый проект из заявки — Prospecting, вероятность 0; дальше двигает Егор
+        rec = self._projects.create({Projects.NAME: name, Projects.STATUS: "Prospecting", Projects.PROBABILITY: "0"})
         return rec["id"]
 
     # ---------- напоминания ----------

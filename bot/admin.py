@@ -93,7 +93,9 @@ def _title(rtype: str, payload: dict) -> str:
     if payload.get("In Reply To"):
         return "💬 Ответ на твой запрос"
     special = {
-        "Update — info only": "📰 Новость по проекту",
+        "Update — info only": "📰 Обновление по проекту",
+        "Update — news": "📰 Новость по проекту",
+        "Update — fields": "📝 Дополнение по проекту",
         "Update — Won": "🏆 Дилер сообщает: выигран",
         "Update — Lost": "✖️ Дилер сообщает: проигран",
         "Quotation — Simplified": "💶 Запрос квотации · упрощённая схема",

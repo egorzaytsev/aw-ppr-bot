@@ -34,7 +34,7 @@ UPGRADE_TYPES = {
     RequestType.NEW_PRE_REGISTRATION, RequestType.UPGRADE_PRE_REGISTRATION,
     RequestType.NEW_REGISTRATION, RequestType.UPGRADE_REGISTRATION,
 }
-NO_STATUS_TYPES = {RequestType.UPDATE_INFO, RequestType.UPDATE_WON, RequestType.UPDATE_LOST}
+NO_STATUS_TYPES = {*RequestType.INFO_UPDATES, RequestType.UPDATE_WON, RequestType.UPDATE_LOST}
 
 # Те же поля, что в формуле PPR Missing: она считает только когда в проекте уже есть
 # пред/регистрация, поэтому для первой предрегистрации проверяем сами.
@@ -293,7 +293,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
     moved, provided = transfers(reg, project)
     dealers_ = reg.get(Registrations.DEALER) or []
     links = company_links(reg, project, dealers_[0] if dealers_ else None)
-    if request_type == RequestType.UPDATE_INFO:
+    if request_type in RequestType.INFO_UPDATES:
         return Plan(
             project_updates=moved,
             links=links,
