@@ -332,8 +332,9 @@ def _fill_derive(a: dict) -> dict:
 
 FILL = Scenario(
     code="project_fill",
-    title="Дополнить материалы",
+    title="Дополнить",
     questions=FILL_QUESTIONS,
+    flat_numbering=True,
     phase_titles={1: "Уведомление", 2: "Предрегистрация", 3: "Регистрация"},
     stage=lambda p, a, m: (RequestType.UPDATE_INFO, "дополнение по проекту"),
     derive=_fill_derive,

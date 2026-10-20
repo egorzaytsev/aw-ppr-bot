@@ -185,9 +185,14 @@ def _group_members(state: DialogState, q: Question) -> list[int]:
 def question_screen(state: DialogState) -> Screen:
     sc = scenario_of(state)
     q = _current_q(state)
-    units = _units(state, q.phase)
+    if sc.flat_numbering:
+        units = [u for ph in sorted({x.phase for x in sc.questions}) for u in _units(state, ph)]
+        title = sc.title
+    else:
+        units = _units(state, q.phase)
+        title = sc.phase_titles.get(q.phase, "")
     pos = next((n for n, u in enumerate(units, 1) if state.step in u), 1)
-    head = f"{sc.phase_titles.get(q.phase, '')} · {pos}/{len(units)}"
+    head = f"{title} · {pos}/{len(units)}"
     if q.group:
         members = units[pos - 1]
         head += f" · {q.group}: {q.title} ({members.index(state.step) + 1}/{len(members)})"

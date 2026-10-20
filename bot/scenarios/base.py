@@ -129,6 +129,8 @@ class Scenario:
     start_phase: int = 1
     # Без сводки: после последнего вопроса заявка уходит сразу (новость, выигран, проиграл)
     auto_submit: bool = False
+    # Одна сквозная нумерация с заголовком сценария («Дополнить · 2/5»), без фаз
+    flat_numbering: bool = False
     # Служебные ответы, которые derive уже перевёл в поля Projects, — в Payload не пишем
     payload_skip: tuple[str, ...] = ()
 

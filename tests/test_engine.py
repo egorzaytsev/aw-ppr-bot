@@ -663,3 +663,15 @@ def test_info_reply_flow():
     assert p["In Reply To"] == "recREG" and p["Dealer Project Name"] == "Пао — Символ"
     assert p["Project Log"] == "Ответ дилера на запрос: Планировки будут в понедельник"
     assert engine.stage_of(r.state)[0] == "Update — info only"
+
+
+def test_fill_flat_numbering_across_phases():
+    from bot.airtable_ids import Projects as P
+    from bot.scenarios.update_project import fill_preset
+    fields = {P.END_CLIENT: ["c"], P.OBJECT_NAME: "o", P.OBJECT_PART: "p", P.COUNTRY: "Russia", P.CITY: "Moscow",
+              P.PROJECT_STAGE: "Design", P.SPECIFIER: ["s"], P.EXW_POTENTIAL: 1, P.AW_ALTERNATIVES: "No — AW only",
+              P.EXPECTED_ORDER_DATE: "2027-01-01", P.DOSSIER_FILES: [{"id": "a"}]}
+    r = engine.start("project_fill", fill_preset({"id": "recP", "name": "X"}, fields, "notified"))
+    assert "Дополнить · 1/3." in r.screens[1].text and "Адрес объекта" in r.screens[1].text
+    r = engine.handle_callback(r.state, engine.CB_SKIP)
+    assert "Дополнить · 2/3." in r.screens[-1].text
