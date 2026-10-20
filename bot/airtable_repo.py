@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from pyairtable import Api
@@ -437,6 +438,37 @@ class AirtableRepo:
             if not best or ts > best[0]:
                 best = (ts, parts[1], r["id"], "" if parts[2] == "-" else parts[2])
         return best[1:] if best else None
+
+    # ---------- неизвестные пользователи ----------
+
+    def open_unknown_users(self, chat_id=None) -> list[dict]:
+        """Открытые записи «Unknown user» (бот ещё ждёт человека в People)."""
+        parts = [f"{{{Registrations.REQUEST_TYPE}}}={_quote(RequestType.UNKNOWN_USER)}",
+                 f"{{{Registrations.BOT_PROCESSED}}}=''", f"NOT({{{Registrations.PROCESSED}}})"]
+        if chat_id is not None:
+            needle = f'"chat_id": {int(chat_id)},'
+            parts.append(f"FIND({_quote(needle)}, {{{Registrations.PAYLOAD}}})")
+        return self._registrations.all(
+            formula=f"AND({', '.join(parts)})",
+            fields=[Registrations.NAME, Registrations.PAYLOAD, Registrations.SUBMITTED_AT],
+            use_field_ids=True,
+        )
+
+    def create_unknown_user(self, chat_id: int, username: str | None, full_name: str) -> str:
+        payload = {"chat_id": int(chat_id), "username": username, "name": full_name}
+        rec = self._registrations.create({
+            Registrations.NAME: f"@{username}" if username else (full_name or str(chat_id)),
+            Registrations.REQUEST_TYPE: RequestType.UNKNOWN_USER,
+            Registrations.PAYLOAD: json.dumps(payload, ensure_ascii=False, indent=2),
+        })
+        return rec["id"]
+
+    def mark_processed(self, reg_id: str, mark: str, closed: bool = True) -> None:
+        fields = {Registrations.BOT_PROCESSED: mark}
+        if closed:
+            fields[Registrations.PROCESSED] = True
+            fields[Registrations.PROCESSED_AT] = datetime.now(timezone.utc).isoformat()
+        self._registrations.update(reg_id, fields)
 
     def clear_awaiting(self, reg_id: str) -> None:
         self._registrations.update(reg_id, {Registrations.BOT_PROCESSED: ""})

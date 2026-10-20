@@ -81,6 +81,8 @@ class Registrations:
     QUOTE_TERMS = "fld2FPH6Neqps34Ca"
     QUOTE_NO = "fldrzhovqmXoGiEFp"
     QUOTE_VALID = "fldn9Rvq4Y5WufPwJ"
+    PROCESSED = "fldQFFIL7xmiTZ12a"      # checkbox: заявка закрыта
+    PROCESSED_AT = "fldQZsVVnaskL3BY9"
 
 
 class RegStatus:

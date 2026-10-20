@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 
 from telegram import (
@@ -26,7 +26,7 @@ from telegram.ext import (
 )
 
 from . import admin, cards, dedup, engine, phrases, reminders, routing
-from .airtable_ids import People, Projects, Registrations, RequestType
+from .airtable_ids import Decision, People, Projects, Registrations, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
     PPR_NOTIFIED, PPR_PRE_REGISTERED, PPR_REGISTERED, AirtableRepo, DealerProject, Person,
@@ -54,7 +54,11 @@ GREETING_TEXT = (
     "Привет, это Пепе — бот регистрации продакт плейсмента Andreu World. "
     "Через меня ты подаёшь уведомления и предрегистрацию. Выбери действие внизу."
 )
-NOT_FOUND_TEXT = "Тебя пока нет в базе партнёров. Напиши Егору."
+NOT_FOUND_TEXT = ("Ола! Я Пепе, бот Andreu World для регистрации плейсмента. Тебя пока нет в списке "
+                  "партнёров — я передал Егору. Как только он добавит, напишу сюда сам.")
+NOT_FOUND_AGAIN = "Тебя пока нет в списке партнёров — Егор уже знает. Как только добавит, напишу сюда сам."
+ONBOARDED_TEXT = "Ола! Егор добавил тебя в список партнёров — можно начинать. Нажми «Старт»."
+UNKNOWN_EXPIRY_DAYS = 7
 MENU_START = "Старт"
 # После отказа — одна кнопка, чтобы повторить вход, когда Егор добавит человека
 START_KEYBOARD = ReplyKeyboardMarkup([[MENU_START]], resize_keyboard=True, is_persistent=True)
@@ -135,6 +139,68 @@ async def _identify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Person | 
     return person
 
 
+async def _unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Человека нет в People: запись «Unknown user» в Inbox (одна на человека), ответ ему, сигнал Егору."""
+    chat_id = update.effective_chat.id
+    repo = _repo(ctx)
+    if await asyncio.to_thread(repo.open_unknown_users, chat_id):
+        await update.effective_chat.send_message(NOT_FOUND_AGAIN, reply_markup=START_KEYBOARD)
+        return
+    user = update.effective_user
+    username = user.username if user else None
+    full_name = (user.full_name if user else "") or ""
+    reg_id = await asyncio.to_thread(repo.create_unknown_user, chat_id, username, full_name)
+    await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+    admin_chat = ctx.bot_data.get("admin_chat_id")
+    if admin_chat:
+        who = f"@{escape(username)}" if username else "без username"
+        how = (f"Добавь в People с Telegram Username <code>{escape(username)}</code>" if username
+               else f"Username нет — впиши в People Telegram Chat ID <code>{chat_id}</code>")
+        await _send_html(ctx.bot, admin_chat,
+                         f"👋 <b>Новый человек в боте</b>: {escape(full_name) or '—'} · {who}\n"
+                         f"{how} — я сам замечу и напишу ему. Ждём {UNKNOWN_EXPIRY_DAYS} дней.",
+                         InlineKeyboardMarkup([[InlineKeyboardButton("Открыть в Airtable",
+                                                                     url=admin.record_url(ctx, reg_id))]]))
+
+
+async def _check_unknown_users(app: Application) -> None:
+    """Раз в минуту: человек появился в People — привязать, написать ему и Егору; 7 дней — закрыть."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    admin_chat = app.bot_data.get("admin_chat_id")
+    for rec in await asyncio.to_thread(repo.open_unknown_users):
+        f = rec["fields"]
+        try:
+            data = json.loads(f.get(Registrations.PAYLOAD) or "{}")
+        except ValueError:
+            data = {}
+        chat_id, username = data.get("chat_id"), data.get("username")
+        if not chat_id:
+            continue
+        label = f"@{username}" if username else (data.get("name") or str(chat_id))
+        person = await asyncio.to_thread(repo.find_by_chat_id, chat_id)
+        if not person and username:
+            person = await asyncio.to_thread(repo.find_by_username, username)
+        if person:
+            if str(person.chat_id or "") != str(chat_id):
+                await asyncio.to_thread(repo.bind_chat_id, person.record_id, chat_id)
+            await asyncio.to_thread(repo.mark_processed, rec["id"], "done:onboarded")
+            await _send_html(app.bot, chat_id, ONBOARDED_TEXT, START_KEYBOARD)
+            if admin_chat:
+                companies = ", ".join(repo.company_name(c) for c in person.company_ids) or "без компании"
+                await _send_html(app.bot, admin_chat,
+                                 f"✅ {escape(label)} теперь в боте: {escape(person.name)} ({escape(companies)}). "
+                                 "Ему отправлено приглашение.")
+            continue
+        created = f.get(Registrations.SUBMITTED_AT)
+        if created and datetime.now(timezone.utc) - datetime.fromisoformat(created.replace("Z", "+00:00")) \
+                > timedelta(days=UNKNOWN_EXPIRY_DAYS):
+            await asyncio.to_thread(repo.mark_processed, rec["id"], "expired", closed=False)
+            if admin_chat:
+                await _send_html(app.bot, admin_chat,
+                                 f"⏳ {escape(label)} ждал {UNKNOWN_EXPIRY_DAYS} дней, в People так и не появился — "
+                                 "запись закрыта. Напишет снова — придёт новая.")
+
+
 async def _save(ctx: ContextTypes.DEFAULT_TYPE, person: Person, state) -> None:
     await asyncio.to_thread(_repo(ctx).save_state, person.record_id, state)
     person.state = state
@@ -176,7 +242,7 @@ async def _blocked(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Perso
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     person = await _identify(update, ctx)
     if not person:
-        await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+        await _unknown(update, ctx)
         return
     if not person.reminder_slot:
         # Первое знакомство: рассказ о боте и время напоминаний
@@ -199,7 +265,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     person = await _identify(update, ctx)
     if not person:
-        await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+        await _unknown(update, ctx)
         return
     if await _blocked(update, ctx, person, CB_MENU_RESTART):
         return
@@ -209,7 +275,7 @@ async def cmd_new(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     person = await _identify(update, ctx)
     if not person:
-        await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+        await _unknown(update, ctx)
         return
     if person.state:
         await _save(ctx, person, None)
@@ -238,7 +304,7 @@ async def _apply(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person,
 async def _handle_answer_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     person = await _identify(update, ctx)
     if not person:
-        await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+        await _unknown(update, ctx)
         return
     if not person.state:
         if admin.is_admin(update, ctx):
@@ -273,7 +339,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if text in (MENU_UPDATE, MENU_MY):
         person = await _identify(update, ctx)
         if not person:
-            await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+            await _unknown(update, ctx)
         elif text == MENU_MY:
             await _show_project_list(update, ctx, person, MODE_MY, 0)
         else:
@@ -354,7 +420,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     person = await _identify(update, ctx)
     if not person:
-        await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+        await _unknown(update, ctx)
         return
 
     await _route(update, ctx, person, query.data or "")
@@ -634,7 +700,7 @@ async def _save_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person:
 async def cmd_time(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     person = await _identify(update, ctx)
     if not person:
-        await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+        await _unknown(update, ctx)
         return
     await _send(update, [_reminder_question()])
 
@@ -743,7 +809,7 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     person = await _identify(update, ctx)
     if not person:
-        await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
+        await _unknown(update, ctx)
         return
     if not person.state:
         await update.effective_chat.send_message("Выбери действие внизу.", reply_markup=MENU_KEYBOARD)
@@ -887,6 +953,11 @@ async def _process_decisions(app: Application) -> None:
                 card = cards.update_card(fresh, dealer_id, dealer_name, body, note)
             if pl.dealer_text:  # ответ на запрос принимается молча — у него dealer_text нет
                 pl.dealer_text = card
+        # Финальное решение закрывает заявку: Processed + время (запрос информации — ещё нет)
+        mark = str(pl.registration_updates.get(Registrations.BOT_PROCESSED) or "")
+        if mark.startswith("done:") and mark != f"done:{Decision.NEED_INFO}":
+            pl.registration_updates[Registrations.PROCESSED] = True
+            pl.registration_updates[Registrations.PROCESSED_AT] = datetime.now(timezone.utc).isoformat()
         # Отмечаем до рассылки — чтобы сбой отправки не повторил изменения
         await asyncio.to_thread(repo.update_registration, rec["id"], pl.registration_updates)
         log.info("Решение по %s: %s", rec["id"], pl.registration_updates.get(Registrations.BOT_PROCESSED))
@@ -1079,6 +1150,10 @@ async def _decisions_loop(app: Application) -> None:
             await _refresh_reviewers(app)
         except Exception:
             log.exception("Не удалось обновить проверяющих")
+        try:
+            await _check_unknown_users(app)
+        except Exception:
+            log.exception("Ошибка проверки новых людей")
         try:
             await process_decisions(app)
         except Exception:
