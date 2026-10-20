@@ -34,6 +34,7 @@ from .airtable_repo import (
 )
 from .config import load_settings
 from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, WON
+from .scenarios.new_project import SOLO_ARCHITECT
 from .scenarios.update_project import fill_preset
 from .slots import VALENCIA
 from .voice import Transcriber
@@ -871,6 +872,23 @@ async def _send_html(ctx_bot, chat_id, text: str, markup=None) -> None:
         log.exception("Не удалось отправить сообщение в чат %s", chat_id)
 
 
+async def _link_architect(repo: AirtableRepo, reg: dict, project: dict, project_id: str,
+                          new_specifier: list | None, dealers: list) -> str | None:
+    """ГАП из заявки → People (компания — бюро, роль «ГАП») и в участники проекта. Строка для итога."""
+    payload = payload_of(reg)
+    name = str(payload.get("Lead Architect") or "").strip()
+    if not name or payload.get("Specifier Type") == SOLO_ARCHITECT:
+        return None  # частный архитектор уже стал «бюро» своего имени
+    bureau = (new_specifier or project.get(Projects.SPECIFIER) or [None])[0]
+    if not bureau or bureau in dealers:
+        return None
+    person_id, created = await asyncio.to_thread(repo.find_or_create_person, name, bureau, "ГАП")
+    people = list(project.get(Projects.PEOPLE) or [])
+    if person_id not in people:
+        await asyncio.to_thread(repo.update_project, project_id, {Projects.PEOPLE: people + [person_id]})
+    return f"ГАП {name} ({'новый в People' if created else 'уже был в People'})"
+
+
 async def process_decisions(app: Application) -> None:
     # Минутный цикл и кнопки админа не должны обработать одну заявку дважды
     async with app.bot_data.setdefault("decisions_lock", asyncio.Lock()):
@@ -926,6 +944,7 @@ async def _process_decisions(app: Application) -> None:
         dealers = reg.get(Registrations.DEALER) or []
         dealer_name = ", ".join([await asyncio.to_thread(repo.company_name, c) for c in dealers]) or "дилер"
         company_notes: list[str] = []
+        new_specifier = None
         if pl.project_updates or pl.links:
             updates = {
                 k: (datetime.now(VALENCIA).date().isoformat() if v == "__today__" else v)
@@ -945,7 +964,14 @@ async def _process_decisions(app: Application) -> None:
                     updates[link["field"]] = [cid]
                 cname = await asyncio.to_thread(repo.company_name, cid)
                 company_notes.append(f"{cname} ({LINK_ROLE[link['field']]}{', новая' if created else ''})")
+            new_specifier = updates.get(Projects.SPECIFIER)
             await asyncio.to_thread(repo.update_project, target[0], updates)
+        # ГАП — человек бюро в People и участник проекта
+        if target and not pl.blocked and ((reg.get(Registrations.DECISION) or "").startswith("Accept")
+                                          or pl.declined_upgrade):
+            note = await _link_architect(repo, reg, project or {}, target[0], new_specifier, dealers)
+            if note:
+                company_notes.append(note)
         if pl.log_lines and target:
             header = f"{datetime.now(VALENCIA):%d.%m.%Y} · {dealer_name} (заявка бота):"
             await asyncio.to_thread(repo.append_project_log, target[0],
@@ -1008,7 +1034,7 @@ async def _process_decisions(app: Application) -> None:
             elif card and pl.dealer_text:
                 created = target[0] in created_projects
                 created_projects.discard(target[0])
-                extra = (["🆕 Проект создан"] if created else []) + (
+                extra = (["🆕 Проект создан"] if created else []) + [escape(c) for c in pl.changes] + (
                     ["🏢 Компании: " + escape(", ".join(company_notes))] if company_notes else [])
                 await _send_html(app.bot, admin_chat, cards.admin_copy(card, bool(dealer_chats), extra))
             elif pl.dealer_text and not pl.blocked:

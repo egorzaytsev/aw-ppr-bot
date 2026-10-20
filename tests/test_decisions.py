@@ -215,3 +215,35 @@ def test_declined_preregistration_records_notification():
     assert plan(r, None).blocked                      # без проекта — сначала выбрать проект
     plain_decline = plan(reg("Decline", note="Дубль"), None)
     assert not plain_decline.declined_upgrade and plain_decline.registration_updates[R.REG_STATUS] == "Declined"
+
+
+def test_volume_and_stage_overwrite_with_change_lines():
+    r = _with_payload(reg(rtype="Update — fields"), {"EXW Potential": 54000, "Project Stage": "Tender",
+                                                     "PPR Track": "Full"})
+    pl = plan(r, {**FULL, P.PROJECT_STAGE: "Design", P.PPR_TRACK: "Simplified (<30k)"})
+    assert pl.project_updates[P.EXW_POTENTIAL] == 54000 and pl.project_updates[P.PROJECT_STAGE] == "Tender"
+    assert pl.project_updates[P.PPR_TRACK] == "Full"
+    assert pl.changes == ["💶 Объём EXW: 45 000 € → 54 000 €", "🏗 Стадия: проектирование → тендер",
+                          "📈 Трек: Simplified → Full"]
+    assert "Объём EXW: 45 000 € → 54 000 €" in pl.log_lines
+
+
+def test_track_never_goes_down():
+    r = _with_payload(reg(rtype="Update — fields"), {"PPR Track": "Simplified (<30k)"})
+    assert P.PPR_TRACK not in plan(r, {**FULL, P.PPR_TRACK: "Full"}).project_updates
+
+
+def test_dossier_links_go_to_field_and_log_and_count_as_dossier():
+    link = {"kind": "link", "url": "https://disk.yandex.ru/d/x"}
+    r = _with_payload(reg(rtype="Upgrade — Pre-registration"), {"Visualizations": [link]})
+    project = {**FULL, P.DOSSIER_FILES: [], P.DOSSIER_LINKS: "https://old"}
+    pl = plan(r, project)
+    assert not pl.blocked
+    assert pl.project_updates[P.DOSSIER_LINKS] == "https://old\nhttps://disk.yandex.ru/d/x"
+    assert "Материалы (ссылка): https://disk.yandex.ru/d/x" in pl.log_lines
+
+
+def test_fourth_pre_registration_blocked():
+    project = {**FULL, P.PRE_REGISTERED: [OTHER1, OTHER2, "recOTHER3"]}
+    pl = plan(reg(rtype="Upgrade — Pre-registration"), project)
+    assert pl.blocked and "не больше трёх" in pl.admin_text

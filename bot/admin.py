@@ -167,6 +167,9 @@ _META_KEYS = {"Dealer Project Name", "Project Log", "PPR Track", "EXW Potential"
               "Specifier Type", "Dealer News Audio"}
 
 
+_EXTRA_TITLES = {"Bureau": "Архбюро (AW не закладывало)"}
+
+
 def _ru(key: str, value) -> str:
     """Значение поля по-русски: варианты Airtable → подписи, числа, даты, файлы."""
     if key == "Contact Level":
@@ -193,7 +196,7 @@ def _card_body(rtype: str, payload: dict) -> list[str]:
         if changes:
             body.append("📝 Изменения:")
             for k, v in changes:
-                title = _QUESTIONS[k].title if k in _QUESTIONS else k
+                title = _QUESTIONS[k].title if k in _QUESTIONS else _EXTRA_TITLES.get(k, k)
                 body.append(f"• {escape(title)}: {escape(_ru(k, v))[:300]}")
         return body
     pl = payload.get("PL Volume")
@@ -204,7 +207,7 @@ def _card_body(rtype: str, payload: dict) -> list[str]:
         _pair(("Клиент", _v(payload, "End Client"))),
         _pair(("Объект", obj)),
         _pair(("Город", _v(payload, "City")), ("Стадия", escape(stage))),
-        _pair(("Бюро", _v(payload, "Specifier")), ("ГАП", _v(payload, "Lead Architect"))),
+        _pair(("Бюро", _v(payload, "Bureau") or _v(payload, "Specifier")), ("ГАП", _v(payload, "Lead Architect"))),
         _pair(("AW в проекте бюро", _v(payload, "AW Origin"))),
         _pair(("Объём по прайсу", f"{pl:,.0f} €".replace(",", " ") if isinstance(pl, (int, float)) else "")),
         _pair(("Альтернативы AW", escape(_ru("AW Alternatives", payload["AW Alternatives"]))

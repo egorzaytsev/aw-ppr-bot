@@ -14,6 +14,7 @@ class People:
     REMINDER_SLOT = "fldspBKdbk8Ed9Ji5"
     LAST_REMINDER = "fldpIUrdICo7UusyN"
     COUNTRY = "fldKd7jlAKfey5xeD"
+    ROLE = "fldrG4pHBV6Fxo4Xf"
 
 
 class Companies:
@@ -50,6 +51,8 @@ class Projects:
     CONTACT_LEVEL = "fldQzxIA7iQx9M50m"
     PARALLEL_REGISTRATIONS = "fld8Nw4DWPyEDkcUs"
     DOSSIER_FILES = "fldlZAQm173wqC7hh"
+    DOSSIER_LINKS = "fldlFRIVYAOdjTAF0"   # ссылки на материалы, по одной на строку
+    PEOPLE = "fldLN8Lj9uqQpRzza"          # участники проекта (ГАП и др.)
     QUOTATION = "fld2eKHFMhU73fxS5"
     DEALER = "fldpdzk9bY1jFMPeJ"
     PROJECT_LOG = "fldC3PJr8sT9iZ8Rg"

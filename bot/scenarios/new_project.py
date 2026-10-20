@@ -23,6 +23,13 @@ SOLO = "__solo__"
 ORIGIN_BUREAU = "Да, заложен бюро"
 ORIGIN_DEALER = "Нет — AW предлагает дилер взамен продукта бюро"
 ORIGIN_OWN = "Бюро нет — проект ведёт дилер"
+CONTACT_BUREAU_DOCS = "Indirect (bureau docs)"
+CONTACT_CHOICES = (
+    ("Пока ничем — только моё слово", "Declared"),
+    ("Документы от бюро", CONTACT_BUREAU_DOCS),
+    ("Переписка или прямой контакт с клиентом", "Verifiable (email/contact)"),
+    ("Готов к встрече с клиентом вместе с AW", "Joint meeting with AW"),
+)
 WHOLE_OBJECT = "Весь объект"
 STAGE_ARCHITECT_SELECTION = "Architect selection"
 LOC_MOSCOW, LOC_SPB, LOC_OTHER = "moscow", "spb", "other"
@@ -246,12 +253,10 @@ PHASE_2 = (
         prompt="Чем подтверждён твой контакт с клиентом?",
         kind="choice",
         # Значения = варианты поля Contact Level в Projects
-        choices=(
-            ("Пока ничем — только моё слово", "Declared"),
-            ("Документы от бюро", "Indirect (bureau docs)"),
-            ("Переписка или прямой контакт с клиентом", "Verifiable (email/contact)"),
-            ("Готов к встрече с клиентом вместе с AW", "Joint meeting with AW"),
-        ),
+        choices=CONTACT_CHOICES,
+        # AW не заложен бюро (или бюро нет) — документы бюро его не подтверждают
+        choices_fn=lambda a: tuple(c for c in CONTACT_CHOICES if c[1] != CONTACT_BUREAU_DOCS
+                                   or a.get("AW Origin") not in (ORIGIN_DEALER, ORIGIN_OWN)),
         evidence_for=("Indirect (bureau docs)", "Verifiable (email/contact)", "Joint meeting with AW"),
         evidence_key="Contact Evidence",
         evidence_prompt="Пришли подтверждение — файл или ссылку.",
@@ -412,6 +417,9 @@ def specifier(a: dict) -> dict:
     """
     if a.get("AW Origin") == ORIGIN_OWN:
         return {"Specifier": OWN_DESIGN}
+    if a.get("AW Origin") == ORIGIN_DEALER:
+        # Specifier — тот, кто заложил AW: здесь сам дилер; бюро — только строкой в Project Log
+        return {"Specifier": OWN_DESIGN, "Specifier Type": None, "Bureau": bureau_name(a)}
     if a.get("Specifier") != SOLO:
         return {}
     # None — убрать служебное «__solo__», пока имя ещё не названо
@@ -463,8 +471,21 @@ LOG_KEYS = (
 )
 
 
+def bureau_name(a: dict) -> str | None:
+    """Бюро, которое AW не закладывало (дилер предлагает взамен) — для Project Log."""
+    if a.get("AW Origin") != ORIGIN_DEALER:
+        return None
+    name = a.get("Lead Architect") if a.get("Specifier") == SOLO else a.get("Specifier")
+    if not name or name == SOLO:
+        return None
+    return f"{SOLO_ARCHITECT} {name}" if a.get("Specifier") == SOLO else str(name)
+
+
 def project_log(a: dict) -> list[str]:
     lines = []
+    bureau = bureau_name(a)
+    if bureau:
+        lines.append(f"Архбюро (AW не закладывало): {bureau}")
     if a.get("Area m2") is not None:
         area = format_value(_BY_KEY["Area m2"], a["Area m2"])
         src = a.get("Area Source")

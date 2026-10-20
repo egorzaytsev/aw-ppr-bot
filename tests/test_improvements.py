@@ -89,3 +89,19 @@ def test_abandoned_dialog_nudged_once(monkeypatch):
     assert saved == [True] and "незаконченная заявка" in app.bot.sent[0][1]
     asyncio.run(main._check_abandoned(app))
     assert len(app.bot.sent) == 1
+
+
+def test_architect_linked_to_people_and_project():
+    import json
+    from bot.airtable_ids import Projects as P
+    calls = {}
+    repo = SimpleNamespace(
+        find_or_create_person=lambda name, company, role: calls.setdefault("person", (name, company, role)) and ("recG", True),
+        update_project=lambda pid, f: calls.setdefault("project", (pid, f)))
+    reg = {R.PAYLOAD: json.dumps({"Lead Architect": "Иван Петров", "Specifier": "UNK Project"})}
+    note = asyncio.run(main._link_architect(repo, reg, {P.PEOPLE: ["recX"]}, "recP", ["recBUREAU"], ["recDEALER"]))
+    assert calls["person"] == ("Иван Петров", "recBUREAU", "ГАП")
+    assert calls["project"] == ("recP", {P.PEOPLE: ["recX", "recG"]})
+    assert note == "ГАП Иван Петров (новый в People)"
+    # Бюро — сам дилер (проект ведёт дилер / AW предлагает дилер) — ГАП не заводим
+    assert asyncio.run(main._link_architect(repo, reg, {}, "recP", ["recDEALER"], ["recDEALER"])) is None

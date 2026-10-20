@@ -308,7 +308,9 @@ def gaps_for(project_fields: dict, ppr_status: str) -> tuple[list[str], dict]:
             (Projects.CONTACT_LEVEL, "Contact Level"), (Projects.AW_ALTERNATIVES, "AW Alternatives"),
             (Projects.PARALLEL_REGISTRATIONS, "Parallel Registrations"), (Projects.DOSSIER_FILES, "Dossier Files"),
         )
-        missing_names = "; ".join(name for field, name in checks if _empty(f.get(field)))
+        # Досье — файлы или ссылки
+        missing_names = "; ".join(name for field, name in checks if _empty(f.get(field))
+                                  and not (field == Projects.DOSSIER_FILES and f.get(Projects.DOSSIER_LINKS)))
     by_name = {
         "EXW Potential": ("PL Volume",),
         "Expected Order Date": ("Order Month",),

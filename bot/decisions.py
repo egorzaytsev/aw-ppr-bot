@@ -54,7 +54,8 @@ def _empty(v) -> bool:
     return v in (None, "", [], 0)
 
 
-# Ответы дилера из Payload → поля Projects (переносятся только в пустые поля)
+# Ответы дилера из Payload → поля Projects (переносятся только в пустые поля,
+# кроме _OVERWRITE: объём и стадию дилер уточняет по ходу — новое значение заменяет старое)
 _PAYLOAD_TO_PROJECT = (
     ("Object Name", Projects.OBJECT_NAME),
     ("Object Part", Projects.OBJECT_PART),
@@ -69,6 +70,11 @@ _PAYLOAD_TO_PROJECT = (
     ("Quotation / Proforma №", Projects.QUOTATION),
     ("PPR Track", Projects.PPR_TRACK),
 )
+_OVERWRITE = {Projects.EXW_POTENTIAL: "💶 Объём EXW", Projects.PROJECT_STAGE: "🏗 Стадия"}
+STAGE_RU = {"Architect selection": "выбор архитектора", "Concept": "концепция", "Design": "проектирование",
+            "Tender": "тендер", "Procurement": "закупка"}
+FULL_TRACK = "Full"
+MAX_PRE_REGISTERED = 3
 # Ключи Payload с материалами — это Dossier Files
 DOSSIER_KEYS = (
     "Visualizations", "Layouts", "Partner Presentation", "Bureau Documents", "Dealer Specification",
@@ -97,8 +103,20 @@ def transfers(reg: dict, project: dict) -> tuple[dict, set]:
     provided: set = set()
     for key, fid in _PAYLOAD_TO_PROJECT:
         value = payload.get(key)
-        if not _empty(value) and _empty(project.get(fid)):
+        if _empty(value):
+            continue
+        current = project.get(fid)
+        if _empty(current) or (fid in _OVERWRITE and value != current):
             updates[fid] = value
+        elif fid == Projects.PPR_TRACK and value == FULL_TRACK and current != FULL_TRACK:
+            updates[fid] = value  # трек только вверх: вырос объём — Full; вниз — никогда
+    links = dossier_links(payload)
+    have = str(project.get(Projects.DOSSIER_LINKS) or "").splitlines()
+    new_links = [u for u in links if u not in have]
+    if new_links:
+        updates[Projects.DOSSIER_LINKS] = "\n".join([*(h for h in have if h.strip()), *new_links])
+    if links or str(project.get(Projects.DOSSIER_LINKS) or "").strip():
+        provided.add(Projects.DOSSIER_FILES)  # ссылки на материалы засчитываются как досье
     order = payload.get("Order Month")
     if isinstance(order, str) and _ISO_DATE.fullmatch(order) and _empty(project.get(Projects.EXPECTED_ORDER_DATE)):
         updates[Projects.EXPECTED_ORDER_DATE] = order
@@ -142,6 +160,40 @@ def company_links(reg: dict, project: dict, dealer: str | None) -> list[dict]:
     return links
 
 
+def dossier_links(payload: dict) -> list[str]:
+    """Ссылки на материалы и подтверждения из заявки (файлы идут вложениями отдельно)."""
+    out: list[str] = []
+    for key in (*DOSSIER_KEYS, "Contact Evidence"):
+        items = payload.get(key)
+        for item in items if isinstance(items, list) else []:
+            url = item.get("url") if isinstance(item, dict) and item.get("kind") == "link" else None
+            if url and url not in out:
+                out.append(url)
+    return out
+
+
+def change_lines(project: dict, moved: dict) -> list[str]:
+    """«💶 Объём EXW: 18 000 → 24 750 €» — что заявка заменила в проекте (для проверяющего и лога)."""
+    lines = []
+    for fid, label in _OVERWRITE.items():
+        old = project.get(fid)
+        if fid in moved and not _empty(old):
+            new = moved[fid]
+            if fid == Projects.EXW_POTENTIAL:
+                fmt = lambda v: f"{float(v):,.0f} €".replace(",", " ")  # noqa: E731
+            else:
+                fmt = lambda v: STAGE_RU.get(v, v)  # noqa: E731
+            lines.append(f"{label}: {fmt(old)} → {fmt(new)}")
+    if Projects.PPR_TRACK in moved and not _empty(project.get(Projects.PPR_TRACK)):
+        lines.append("📈 Трек: Simplified → Full")
+    return lines
+
+
+def _log_extras(project: dict, moved: dict, payload: dict) -> list[str]:
+    links = [f"Материалы (ссылка): {u}" for u in dossier_links(payload)]
+    return [ln.split(" ", 1)[1] for ln in change_lines(project, moved)] + links
+
+
 def ppr_missing(project: dict, status: str, filled: dict | None = None, provided: set | None = None) -> list[str]:
     """Чего не хватает для Pre-registered / Registered — с учётом того, что дал дилер в заявке."""
     if status not in (PPR_PRE, PPR_REG):
@@ -150,6 +202,8 @@ def ppr_missing(project: dict, status: str, filled: dict | None = None, provided
     provided = provided or set()
 
     def has(fid: str) -> bool:
+        if fid == Projects.DOSSIER_FILES and not _empty(project.get(Projects.DOSSIER_LINKS)):
+            return True
         return not _empty(project.get(fid)) or not _empty(filled.get(fid)) or fid in provided
 
     missing = [name for fid, name in _PPR_REQUIRED if not has(fid)]
@@ -159,7 +213,8 @@ def ppr_missing(project: dict, status: str, filled: dict | None = None, provided
 
 
 _FIELD_NAMES = {fid: key for key, fid in _PAYLOAD_TO_PROJECT}
-_FIELD_NAMES.update({Projects.EXPECTED_ORDER_DATE: "Expected Order Date", Projects.DOSSIER_FILES: "Dossier Files"})
+_FIELD_NAMES.update({Projects.EXPECTED_ORDER_DATE: "Expected Order Date", Projects.DOSSIER_FILES: "Dossier Files",
+                     Projects.DOSSIER_LINKS: "Dossier Links"})
 
 
 def _names(updates: dict) -> list[str]:
@@ -183,6 +238,8 @@ class Plan:
     broadcast_text: str | None = None
     # Блокировка из-за недостающих данных: готовый текст запроса дилеру
     ask_text: str | None = None
+    # Что заявка заменила в проекте: «💶 Объём EXW: 18 000 → 24 750 €»
+    changes: list = field(default_factory=list)
     # Сообщать ли админу об этой блокировке (только первый раз)
     blocked: bool = False
     # Какие поля бот перенёс из заявки в проект — для сообщения админу
@@ -301,12 +358,13 @@ def plan(reg: dict, project: dict | None) -> Plan:
 
     # Запрос квотации по упрощённой схеме: статус не меняется, спецификация — в досье
     if request_type == RequestType.QUOTE_SIMPLIFIED:
-        moved, _ = transfers(reg, project)
+        moved, _ = transfers(reg, project or {})
         return Plan(
             project_updates=moved,
             registration_updates=done,
             dealer_text=f"По запросу {obj} спецификацию передали на квотацию.{_note(reg)}",
-            log_lines=log_lines, project_name=project_name, quote=True,
+            log_lines=log_lines + _log_extras(project or {}, moved, payload_of(reg)),
+            project_name=project_name, quote=True, changes=change_lines(project or {}, moved),
         )
 
     # Выигрыш и проигрыш одного дилера — не повод менять проект: только ответ
@@ -316,12 +374,15 @@ def plan(reg: dict, project: dict | None) -> Plan:
             dealer_text=f"По запросу {obj} информацию приняли.{_note(reg)}",
         )
     moved, provided = transfers(reg, project)
+    changes = change_lines(project, moved)
+    log_lines = log_lines + _log_extras(project, moved, payload_of(reg))
     dealers_ = reg.get(Registrations.DEALER) or []
     links = company_links(reg, project, dealers_[0] if dealers_ else None)
     if request_type in RequestType.INFO_UPDATES:
         return Plan(
             project_updates=moved,
             links=links,
+            changes=changes,
             log_lines=log_lines,
             project_name=project_name,
             registration_updates=done,
@@ -367,6 +428,12 @@ def plan(reg: dict, project: dict | None) -> Plan:
         if dealer not in notified + pre + registered:
             updates[Projects.NOTIFIED] = notified + [dealer]
     elif status == PPR_PRE:
+        if dealer not in pre and len(pre) >= MAX_PRE_REGISTERED:
+            return _blocked(
+                reg, decision,
+                f"в «{escape(project_name)}» уже {len(pre)} предрегистрации — по правилам не больше трёх. "
+                "Можно дать уведомление: Reg Status → Notification.",
+            )
         if dealer not in pre:
             pre = pre + [dealer]
             updates[Projects.PRE_REGISTERED] = pre
@@ -407,6 +474,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
         registration_updates=reg_updates,
         links=links,
         log_lines=log_lines,
+        changes=changes,
         status_label={PPR_NOTIFIED: "уведомление", PPR_PRE: "предрегистрация", PPR_REG: "регистрация"}[status],
         project_name=project_name,
         transferred=_names(moved),

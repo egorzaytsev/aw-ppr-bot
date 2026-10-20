@@ -17,8 +17,9 @@ def proj(status="pre_registered", expiry="2026-10-20", fields=None, track="Full"
 
 
 def test_expiry_soon_and_no_gaps():
-    it = reminders.project_item(proj(), TODAY, date(2026, 10, 1))
-    assert it.reasons == {"expiry": "предрегистрация до 20.10.2026, осталось 8 дн."}
+    it = reminders.project_item(proj(expiry="2026-10-18"), TODAY, date(2026, 10, 1))
+    assert it.reasons == {"expiry": "предрегистрация до 18.10.2026, осталось 6 дн."}
+    assert reminders.project_item(proj(), TODAY, date(2026, 10, 1)) is None   # 8 дней — ещё рано
 
 
 def test_nothing_to_remind():

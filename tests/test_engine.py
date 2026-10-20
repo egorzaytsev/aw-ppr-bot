@@ -83,7 +83,9 @@ def _run_phase2(r):
     r = engine.handle_callback(r.state, CH + "1")                 # заявлен другим — да
     assert r.state.awaiting == "detail"
     r = engine.handle_text(r.state, "Vitra, Arper")
-    r = engine.handle_callback(r.state, CH + "2")                 # переписка → нужен файл
+    # «Бюро нет» → варианта «Документы от бюро» нет: 0 моё слово, 1 переписка, 2 встреча
+    assert "Документы от бюро" not in str(r.screens[-1].buttons)
+    r = engine.handle_callback(r.state, CH + "1")                 # переписка → нужен файл
     assert r.state.awaiting == "evidence"
     r = engine.handle_text(r.state, "вот письмо")
     assert r.state.awaiting == "evidence"
@@ -670,7 +672,9 @@ def test_dealer_offers_aw_needs_bureau_not_architect():
     r = engine.handle_text(r.state, "UNK Project")
     assert r.state.awaiting == "confirm" and "ГАП" not in r.screens[0].text
     p = engine.build_payload(r.state)
-    assert p["Specifier"] == "UNK Project" and "Lead Architect" not in p
+    # Specifier — тот, кто заложил AW: дилер; бюро — строкой в логе
+    assert p["Specifier"] == "Собственная проработка" and "Lead Architect" not in p
+    assert "Архбюро (AW не закладывало): UNK Project" in p["Project Log"]
     assert "AW в проекте бюро: Нет — AW предлагаем мы взамен" in p["Project Log"]
 
 

@@ -37,7 +37,7 @@ _PROJECT_FIELDS = [
     Projects.OBJECT_ADDRESS, Projects.PROJECT_STAGE, Projects.SPECIFIER, Projects.EXW_POTENTIAL,
     Projects.AW_ALTERNATIVES, Projects.EXPECTED_ORDER_DATE, Projects.CONTACT_LEVEL,
     Projects.PARALLEL_REGISTRATIONS, Projects.DOSSIER_FILES, Projects.QUOTATION,
-    Projects.PPR_REF, Projects.PPR_NEXT_MISSING, Projects.PROJECT_LOG,
+    Projects.PPR_REF, Projects.PPR_NEXT_MISSING, Projects.PROJECT_LOG, Projects.DOSSIER_LINKS,
     # Только для проверки «есть ли регистрация на объекте» — имена дилерам не показываются
     Projects.REGISTERED,
 ]
@@ -382,6 +382,19 @@ class AirtableRepo:
             fields[Companies.COUNTRY] = [country]
         rec = self._companies.create(fields, typecast=True)
         self._company_names()[rec["id"]] = name.strip()
+        return rec["id"], True
+
+    def find_or_create_person(self, name: str, company_id: str, role: str) -> tuple[str, bool]:
+        """Человек этой компании по имени (транслитерация не мешает); нет — создаём. (id, создан ли)."""
+        from . import dedup  # без цикла импортов
+        comp = self._companies.get(company_id, use_field_ids=True)["fields"]
+        ids = comp.get(Companies.PEOPLE) or []
+        if ids:
+            recs = self._people.all(formula=_ids_formula(ids), fields=[People.NAME], use_field_ids=True)
+            found = dedup.match_company(name, {r["id"]: r["fields"].get(People.NAME, "") for r in recs})
+            if found:
+                return found, False
+        rec = self._people.create({People.NAME: name.strip(), People.COMPANY: [company_id], People.ROLE: role})
         return rec["id"], True
 
     def company_name(self, company_id: str) -> str:
