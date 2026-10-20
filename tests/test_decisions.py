@@ -196,3 +196,16 @@ def test_ppr_track_and_log_lines_transferred():
     pl = plan(r, {P.NAME: "X"})
     assert pl.project_updates[P.PPR_TRACK] == "Simplified (<30k)"
     assert pl.log_lines == ["Площадь: 100 м²", "Объём: 1 €"] and pl.status_label == "уведомление"
+
+
+def test_declined_preregistration_records_notification():
+    r = reg("Decline", rtype="New — Pre-registration", note="Нет документов от бюро")
+    pl = plan(r, {**FULL, P.NOTIFIED: []})
+    assert pl.declined_upgrade and not pl.blocked
+    assert pl.project_updates[P.NOTIFIED] == [DEALER]
+    assert P.PRE_REGISTERED not in pl.project_updates
+    assert pl.registration_updates[R.REG_STATUS] == "Notification"
+    assert pl.registration_updates[R.BOT_PROCESSED] == "done:Decline"
+    assert plan(r, None).blocked                      # без проекта — сначала выбрать проект
+    plain_decline = plan(reg("Decline", note="Дубль"), None)
+    assert not plain_decline.declined_upgrade and plain_decline.registration_updates[R.REG_STATUS] == "Declined"

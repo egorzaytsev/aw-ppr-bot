@@ -142,6 +142,23 @@ def accept_card(project: dict, dealer: str, dealer_name: str, payload: dict, fir
     return "\n".join(lines)
 
 
+def declined_upgrade_card(project: dict, dealer: str, dealer_name: str, payload: dict, asked: str,
+                          note: str, first_time: bool) -> str:
+    """Отказ в пред/регистрации: плейсмент всё равно зафиксирован уведомлением."""
+    lines = header(project, dealer, dealer_name, f"❌ {asked.capitalize()} не подтверждена")
+    lines += ["📌 Плейсмент зафиксирован как уведомление."]
+    if note:
+        lines.append(f"💬 Причина: {escape(note)}")
+    lines.append("")
+    if project.get(Projects.PPR_TRACK) == SIMPLIFIED:
+        lines += simplified_body(pl_volume_of(payload, project))
+    else:
+        lines += next_step_body(project, dealer)
+    if first_time and project.get(Projects.PPR_REF):
+        lines += ["", f"✉️ Указывай референс {escape(project[Projects.PPR_REF])} в теме писем по этому проекту."]
+    return "\n".join(lines)
+
+
 def update_card(project: dict, dealer: str, dealer_name: str, body: str, note: str = "",
                 title: str = "✅ Заявка принята") -> str:
     """Ответ на принятое обновление (данные, новость, выигран/проигран) — без смены статуса."""
@@ -154,6 +171,8 @@ def update_card(project: dict, dealer: str, dealer_name: str, body: str, note: s
 def admin_copy(card: str, sent: bool, extra: list[str] | None = None) -> str:
     """Та же карточка админу: «🛠 Взято в работу» вместо «✅ Заявка принята»."""
     text = card.replace("<b>✅ Заявка принята</b>", "🛠 <b>Взято в работу</b>", 1)
+    if text.startswith("<b>❌"):
+        text = "🛠 " + text
     tail = list(extra or [])
     tail.append("📨 Дилеру отправлено" if sent else "📨 Дилеру не отправлено — нет Telegram")
     return text + "\n\n" + "\n".join(tail)

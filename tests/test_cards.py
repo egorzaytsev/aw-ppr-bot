@@ -117,3 +117,13 @@ def test_decision_markup_merge_buttons():
     assert labels[:3] == ["🔗 Слить с: Petrovitch", "🔗 Слить с: Technodom", "🆕 Принять как новый"]
     assert rows[0][0].callback_data == "ad:pick:recR:recA"
     assert [b.text for b in decision_markup(ctx, "recR").inline_keyboard[0]] == ["Принять"]
+
+
+def test_declined_upgrade_card():
+    text = plain(cards.declined_upgrade_card(project(), D, "STATIO", {}, "предрегистрация", "Нет документов", True))
+    lines = text.splitlines()
+    assert lines[0] == "❌ Предрегистрация не подтверждена"
+    assert "👤 STATIO · статус уведомление" in lines
+    assert "📌 Плейсмент зафиксирован как уведомление." in lines and "💬 Причина: Нет документов" in lines
+    assert plain(cards.admin_copy(cards.declined_upgrade_card(project(), D, "STATIO", {}, "предрегистрация", "", False),
+                                  True)).startswith("🛠 ❌ Предрегистрация не подтверждена")

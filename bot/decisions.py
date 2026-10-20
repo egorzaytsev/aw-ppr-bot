@@ -30,6 +30,10 @@ REQUEST_STATUS = {
     RequestType.NEW_REGISTRATION: PPR_REG,
     RequestType.UPGRADE_REGISTRATION: PPR_REG,
 }
+UPGRADE_TYPES = {
+    RequestType.NEW_PRE_REGISTRATION, RequestType.UPGRADE_PRE_REGISTRATION,
+    RequestType.NEW_REGISTRATION, RequestType.UPGRADE_REGISTRATION,
+}
 NO_STATUS_TYPES = {RequestType.UPDATE_INFO, RequestType.UPDATE_WON, RequestType.UPDATE_LOST}
 
 # Те же поля, что в формуле PPR Missing: она считает только когда в проекте уже есть
@@ -192,6 +196,8 @@ class Plan:
     project_name: str | None = None
     # Запрос квотации по упрощённой схеме — условия считает применяющий код
     quote: bool = False
+    # Отказ в пред/регистрации, плейсмент зафиксирован уведомлением
+    declined_upgrade: bool = False
 
 
 def _note(reg: dict) -> str:
@@ -220,6 +226,24 @@ def plan(reg: dict, project: dict | None) -> Plan:
     if decision in (Decision.DECLINE, Decision.NEED_INFO):
         if not note:
             return _blocked(reg, decision, f"для «{decision}» заполни Decision Note — он уходит дилеру.")
+        if decision == Decision.DECLINE and request_type in UPGRADE_TYPES:
+            # Отказ в пред/регистрации: любое обращение всё равно фиксируется уведомлением
+            if project is None:
+                return _blocked(
+                    reg, decision,
+                    "отказ в пред/регистрации фиксирует плейсмент уведомлением — нужен проект: "
+                    "поставь Target Project или выбери проект на карточке.",
+                )
+            as_notice = {**reg, Registrations.DECISION: Decision.ACCEPT_MERGE,
+                         Registrations.REG_STATUS: RegStatus.NOTIFICATION, Registrations.DECISION_NOTE: ""}
+            pl = plan(as_notice, project)
+            if pl.blocked:
+                return pl
+            pl.registration_updates = {**done, Registrations.REG_STATUS: RegStatus.NOTIFICATION}
+            pl.declined_upgrade = True
+            pl.dealer_text = (f"По запросу «{escape(dealer_name)}» предрегистрация не подтверждена, "
+                              f"плейсмент зафиксирован как уведомление.{_note(reg)}")
+            return pl
         if decision == Decision.DECLINE:
             return Plan(
                 registration_updates={**done, Registrations.REG_STATUS: RegStatus.DECLINED},

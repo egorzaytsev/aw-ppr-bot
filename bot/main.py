@@ -829,7 +829,8 @@ async def _process_decisions(app: Application) -> None:
             await asyncio.to_thread(repo.append_project_log, target[0],
                                     (project or {}).get(Projects.PROJECT_LOG), header, pl.log_lines)
         # Карточка дилеру — по свежему состоянию проекта после записи
-        accepted = (reg.get(Registrations.DECISION) or "").startswith("Accept") and target and not pl.blocked
+        accepted = ((reg.get(Registrations.DECISION) or "").startswith("Accept") or pl.declined_upgrade) \
+            and target and not pl.blocked
         card = None
         if accepted:
             fresh = await asyncio.to_thread(repo.project_fields, target[0])
@@ -837,7 +838,12 @@ async def _process_decisions(app: Application) -> None:
             before = set((project or {}).get(Projects.NOTIFIED) or []) | set(
                 (project or {}).get(Projects.PRE_REGISTERED) or []) | set((project or {}).get(Projects.REGISTERED) or [])
             note = (reg.get(Registrations.DECISION_NOTE) or "").strip()
-            if pl.status_label:
+            if pl.declined_upgrade:
+                asked = "регистрация" if "Registration" in (reg.get(Registrations.REQUEST_TYPE) or "") \
+                    and "Pre" not in (reg.get(Registrations.REQUEST_TYPE) or "") else "предрегистрация"
+                card = cards.declined_upgrade_card(fresh, dealer_id, dealer_name, payload_of(reg), asked,
+                                                   note, dealer_id not in before)
+            elif pl.status_label:
                 card = cards.accept_card(fresh, dealer_id, dealer_name, payload_of(reg), dealer_id not in before, note)
             else:
                 rtype = reg.get(Registrations.REQUEST_TYPE)

@@ -28,6 +28,10 @@ BASE_URL = "https://airtable.com/{base}/{table}/{rec}"
 ACTION_ACCEPT, ACTION_DECLINE, ACTION_INFO = "acc", "dec", "inf"
 ACTION_PICK, ACTION_NEW, ACTION_CANCEL = "pick", "new", "cancel"
 ACTION_REMIND_USER = "remind_user"  # ждём username для предпросмотра напоминания
+# Отказ в пред/регистрации без проекта: куда зафиксировать уведомление
+ACTION_DPICK, ACTION_DNEW = "dpick", "dnew"
+UPGRADE_REQUESTS = {"New — Pre-registration", "New — Registration",
+                    "Upgrade — Pre-registration", "Upgrade — Registration"}
 
 
 def is_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -318,7 +322,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
             return
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
     decided = reg.get(Registrations.DECISION)
-    if decided and decided != Decision.NEED_INFO and action not in (ACTION_PICK,):
+    if decided and decided != Decision.NEED_INFO and action not in (ACTION_PICK, ACTION_DPICK, ACTION_DNEW):
         if reply_id:
             # Исходная заявка уже решена — ответ дилера закрываем, чтобы не висел в /inbox
             target = reg.get(Registrations.TARGET_PROJECT) or []
@@ -365,6 +369,18 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         await chat.send_message(f"🛠 «{name}»: в какой проект?\n{hint}", reply_markup=InlineKeyboardMarkup(rows))
         return
 
+    if action == ACTION_DPICK and project_id:
+        await asyncio.to_thread(repo.clear_awaiting, reg_id)
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id]})
+        await _apply_now(ctx)
+        return
+
+    if action == ACTION_DNEW:
+        pending[chat.id] = (ACTION_DNEW, reg_id, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DNEW, reply_id)
+        await chat.send_message(f"🛠 «{name}»: напиши название нового проекта латиницей. Передумал — нажми меню внизу.")
+        return
+
     if action == ACTION_PICK and project_id:
         await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, "", project_id)
         if reply_id:
@@ -405,6 +421,17 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     if action == ACTION_REMIND_USER:
         await ctx.bot_data["preview_reminder"](update, ctx, text)
         return True
+    if action == ACTION_DPICK:
+        # Ждём выбор проекта кнопкой, а не текст
+        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id)
+        await chat.send_message("🛠 Выбери проект кнопкой под сообщением об отказе.")
+        return True
+    if action == ACTION_DNEW:
+        project_id = await asyncio.to_thread(repo.create_project, text)
+        ctx.bot_data.setdefault("created_projects", set()).add(project_id)
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id]})
+        await _apply_now(ctx)
+        return True
     if action == ACTION_NEW:
         project_id = await asyncio.to_thread(repo.create_project, text)
         ctx.bot_data.setdefault("created_projects", set()).add(project_id)  # для итога «Проект создан»
@@ -413,6 +440,22 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
             await asyncio.to_thread(repo.close_reply, reply_id, project_id)
     else:
         decision = Decision.DECLINE if action == ACTION_DECLINE else Decision.NEED_INFO
+        reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+        if (decision == Decision.DECLINE and reg.get(Registrations.REQUEST_TYPE) in UPGRADE_REQUESTS
+                and not reg.get(Registrations.TARGET_PROJECT)):
+            # Отказ всё равно фиксирует плейсмент уведомлением — сначала выбрать проект
+            await asyncio.to_thread(repo.set_decision, reg_id, decision, text)
+            await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id)
+            found = await merge_candidates(repo, reg)
+            rows = [[InlineKeyboardButton(f"🔗 В проект: {name[:40]}",
+                                          callback_data=f"{CB_ADMIN}{ACTION_DPICK}:{reg_id}:{pid}")]
+                    for pid, name in found]
+            rows.append([InlineKeyboardButton("🆕 Новый проект", callback_data=f"{CB_ADMIN}{ACTION_DNEW}:{reg_id}:-")])
+            await chat.send_message(
+                "🛠 Отказ записан. Плейсмент фиксируется уведомлением — в какой проект?",
+                reply_markup=InlineKeyboardMarkup(rows),
+            )
+            return True
         if decision == Decision.NEED_INFO:
             # Повторный запрос: очищаем отметку, чтобы бот отправил новый текст
             await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.BOT_PROCESSED: ""})
