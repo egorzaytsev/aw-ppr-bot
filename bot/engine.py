@@ -193,14 +193,20 @@ def question_screen(state: DialogState) -> Screen:
         title = sc.phase_titles.get(q.phase, "")
     pos = next((n for n, u in enumerate(units, 1) if state.step in u), 1)
     head = f"{title} · {pos}/{len(units)}"
+    # Сколько экранов осталось, включая этот: шаги группы считаем по одному
+    left = sum(len(u) for u in units[pos:]) + 1
+    first = pos == 1
     if q.group:
         members = units[pos - 1]
-        head += f" · {q.group}: {q.title} ({members.index(state.step) + 1}/{len(members)})"
-    lines = [f"<b>{escape(head)}.</b> {escape(q.text(state.answers))}"]
+        idx = members.index(state.step)
+        head += f" · {q.group} {idx + 1}/{len(members)}"
+        left += len(members) - idx - 1
+        first = first and idx == 0
+    # Заголовок — отдельной строкой, вопрос — под ним
+    lines = [f"<b>{escape(head)}</b>", escape(q.text(state.answers))]
     if q.hint:
         lines.append(f"<i>{escape(q.hint)}</i>")
-    left = len(units) - pos + 1
-    if pos > 1 and left in phrases.LAST_STEPS and not state.editing and not state.filling:
+    if not first and left in phrases.LAST_STEPS and not state.editing and not state.filling:
         lines.append(f"<i>{phrases.LAST_STEPS[left]}</i>")
     choice_buttons = [(lbl, f"{CB_CHOICE}{i}") for i, (lbl, _) in enumerate(q.choices)]
     per_row = 1 if any(len(lbl) > 16 for lbl, _ in q.choices) else 2
@@ -412,7 +418,7 @@ def _advance(state: DialogState) -> Result:
     result = _ask(state, nxt[0])
     ack = phrases.maybe_ack()
     if ack and result.screens:
-        result.screens[0].text = f"{ack} {result.screens[0].text}"
+        result.screens[0].text = f"{ack}\n{result.screens[0].text}"
     return result
 
 
