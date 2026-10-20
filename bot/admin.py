@@ -407,8 +407,8 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     if not item and resume:
         # Бот мог перезапуститься, пока админ печатал, — берём ожидание из Airtable
         item = await asyncio.to_thread(repo.find_awaiting)
-        if not item:
-            return False
+    if not item:
+        return False  # бот ничего не ждёт — текст идёт дальше, в обычный диалог
     action, reg_id, reply_id = item
     chat = update.effective_chat
     if action != ACTION_REMIND_USER:

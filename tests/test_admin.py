@@ -38,3 +38,12 @@ def test_admin_summary_is_short_and_clear():
         "• Компании: ООО «Айкон Тайерс» (клиент, новая), HUBARCH (бюро)",
         "• Дилеру отправлено",
     ]
+
+
+def test_admin_text_without_pending_passes_through():
+    import asyncio
+    from types import SimpleNamespace
+    from bot.admin import on_admin_text
+    update = SimpleNamespace(effective_chat=SimpleNamespace(id=42))
+    ctx = SimpleNamespace(bot_data={"admin_chat_id": "42", "repo": object()})
+    assert asyncio.run(on_admin_text(update, ctx, "Петрович", resume=False)) is False
