@@ -29,13 +29,11 @@ MATERIALS_KEY = "Materials"
 
 def materials_prompt(a: dict) -> str:
     """Все материалы — одним экраном; документы бюро — только если AW заложен бюро (или ответа нет)."""
-    items = ["визуализации", "планировки",
-             "твоя презентация для клиента — серии и мебель, которые ты предлагаешь"]
+    items = ["визуализации", "планировки", "твоя презентация для клиента"]
     if a.get("AW Origin") not in (ORIGIN_DEALER, ORIGIN_OWN):
-        items.append("документы бюро: ведомость, спецификация бюро")
-    items += ["твоя спецификация (подтверждением плейсмента не считается)",
-              "квотация Andreu World, если уже есть"]
-    return "Материалы по проекту — пришли файлы или ссылки, всё, что есть:\n" + "\n".join(f"• {i}" for i in items)
+        items.append("ведомость или спецификация бюро")
+    items += ["твоя спецификация", "квотация Andreu World"]
+    return "Пришли материалы по проекту — всё, что есть:\n" + "\n".join(f"• {i}" for i in items)
 CONTACT_CHOICES = (
     ("Пока ничем — только моё слово", "Declared"),
     ("Документы от бюро", CONTACT_BUREAU_DOCS),
@@ -79,20 +77,20 @@ PHASE_1 = (
     Question(
         key="End Client",
         label="Конечный клиент",
-        prompt="Конечный клиент — компания, для которой делается объект.",
-        hint="Например: Сбербанк, Hyatt Regency",
+        prompt="Кто конечный клиент?",
+        hint="Компания, для которой делается объект. Например: Сбербанк, Hyatt Regency",
     ),
     Question(
         key="Object Name",
         label="Объект",
-        prompt="Название объекта — здание, комплекс или кодовое имя.",
-        hint="Например: офис на Лесной, ЖК Символ",
+        prompt="Как называется объект?",
+        hint="Здание, комплекс или кодовое имя. Например: офис на Лесной, ЖК Символ",
     ),
     Question(
         key="Object Part",
         label="Часть объекта / поставки",
-        prompt="Какая часть объекта или поставки: зоны, этажи, блок, очередь?",
-        hint="Например: 3–5 этажи, кафе и ресепшн; 1-я очередь",
+        prompt="Какая часть объекта?",
+        hint="Зоны, этажи, блок, очередь. Например: 3–5 этажи, кафе и ресепшн",
         choices=((WHOLE_OBJECT, WHOLE_OBJECT),),
         optional=True,
     ),
@@ -106,7 +104,7 @@ PHASE_1 = (
     Question(
         key="Country",
         label="Страна",
-        prompt="Страна объекта:",
+        prompt="В какой стране?",
         kind="choice",
         # Значения = варианты поля Country в Projects
         choices=(
@@ -125,7 +123,7 @@ PHASE_1 = (
     Question(
         key="City",
         label="Город",
-        prompt="Город объекта:",
+        prompt="В каком городе?",
         kind="choice",
         choices_fn=lambda a: CITIES.get(a.get("Country"), ()) + ((OTHER_CITY, DETAIL),),
         detail_prompt="Напиши город.",
@@ -134,7 +132,8 @@ PHASE_1 = (
     Question(
         key="Object Address",
         label="Адрес",
-        prompt="Адрес объекта — улица, дом, корпус.",
+        prompt="Адрес объекта?",
+        hint="Улица, дом, корпус",
         optional=True,
         missing_label="не указан",
     ),
@@ -153,7 +152,7 @@ PHASE_1 = (
     Question(
         key="PL Volume",
         label="Объём AW по прайсу",
-        prompt="Предполагаемый объём Andreu World по прайсу, €?",
+        prompt="Объём Andreu World по прайсу, €?",
         hint="Можно примерно: 45к, 120 000",
         kind="number",
         unit="€",
@@ -161,7 +160,7 @@ PHASE_1 = (
     Question(
         key="Project Stage",
         label="Стадия",
-        prompt="Стадия проекта:",
+        prompt="На какой стадии проект?",
         kind="choice",
         # Значения = варианты поля Project Stage в Projects
         choices=(
@@ -189,8 +188,8 @@ PHASE_1 = (
     Question(
         key="Specifier",
         label="Архбюро",
-        prompt="Архитектурное бюро — название.",
-        hint="Если архитектор работает сам, без бюро — «Частный архитектор».",
+        prompt="Как называется бюро?",
+        hint="Архитектор работает сам, без бюро — нажми «Частный архитектор»",
         choices=((SOLO_ARCHITECT, SOLO),),
         ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION
         and a.get("AW Origin") in (ORIGIN_BUREAU, ORIGIN_DEALER),
@@ -198,10 +197,10 @@ PHASE_1 = (
     Question(
         key="Lead Architect",
         label="ГАП",
-        prompt="ГАП — имя главного архитектора проекта.",
+        prompt="Кто ГАП проекта?",
+        hint="Имя главного архитектора",
         # Частный архитектор: имя — единственное, что о нём известно, поэтому обязательно
-        prompt_fn=lambda a: "Имя архитектора." if a.get("Specifier") == SOLO
-        else "ГАП — имя главного архитектора проекта.",
+        prompt_fn=lambda a: "Как зовут архитектора?" if a.get("Specifier") == SOLO else "Кто ГАП проекта?",
         optional_fn=lambda a: a.get("Specifier") != SOLO,
         skip_label="Пока не знаю",
         missing_label="пока не известен",
@@ -213,7 +212,8 @@ PHASE_1 = (
     Question(
         key="AW Alternatives",
         label="Альтернативы AW",
-        prompt="Предлагаешь ли клиенту альтернативы Andreu World в той же номенклатуре?",
+        prompt="Предлагаешь клиенту альтернативы Andreu World?",
+        hint="Другие бренды в той же номенклатуре",
         kind="choice",
         # Значения = варианты поля AW Alternatives в Projects
         choices=(
@@ -237,14 +237,15 @@ PHASE_2 = (
         phase=2,
         key="Influencers",
         label="Влияют на решение",
-        prompt="Компании, влияющие на решение: бюро, генподрядчик, технический заказчик, консультанты.",
+        prompt="Кто ещё влияет на решение?",
+        hint="Бюро, генподрядчик, технический заказчик, консультанты",
         optional=True,
     ),
     Question(
         phase=2,
         key="Competing Dealers",
         label="Конкурирующие дилеры",
-        prompt="Предлагают ли мебель на этот объект другие дилеры?",
+        prompt="Другие дилеры предлагают мебель на этот объект?",
         kind="choice",
         choices=(("Нет", "Нет"), ("Да — укажу, кто", DETAIL)),
         detail_prompt="Какие дилеры?",
@@ -278,11 +279,9 @@ PHASE_2 = (
         key="PL Volume Confirmed",
         label="Актуальный объём",
         prompt="Актуальный объём Andreu World по прайсу, €?",
-        prompt_fn=lambda a: (
-            f"Было указано {_money(a['PL Volume'])} по прайсу. Актуальный объём?"
-            if a.get("PL Volume") is not None else "Актуальный объём Andreu World по прайсу, €?"
-        ),
         hint="Числом, можно примерно: 45к, 120 000",
+        hint_fn=lambda a: (f"Было указано {_money(a['PL Volume'])}. Не изменился — нажми «Подтверждаю»"
+                           if a.get("PL Volume") is not None else "Числом, можно примерно: 45к, 120 000"),
         kind="number",
         unit="€",
         # «Подтверждаю» — только если объём уже называли в этом диалоге
@@ -293,7 +292,7 @@ PHASE_2 = (
         phase=2,
         key="Order Month",
         label="Месяц размещения заказа",
-        prompt="Месяц размещения заказа:",
+        prompt="В каком месяце размещение заказа?",
         kind="month",
     ),
     Question(
@@ -302,7 +301,7 @@ PHASE_2 = (
         label="Материалы",
         prompt=materials_prompt({}),
         prompt_fn=materials_prompt,
-        hint="Файлы по одному, больше 5 МБ — ссылкой. Когда закончишь — «Готово».",
+        hint="Файлы по одному, больше 5 МБ — ссылкой.",
         kind="files",
         optional=True,
         missing_label="не присланы",
@@ -311,7 +310,7 @@ PHASE_2 = (
         phase=2,
         key="Call Slot 15",
         label="Звонок 15 минут",
-        prompt="Звонок на 15 минут — выбери день:",
+        prompt="Когда удобен звонок на 15 минут?",
         kind="slot",
     ),
 )
@@ -323,13 +322,14 @@ PHASE_3 = (
         phase=3,
         key="Quotation / Proforma №",
         label="Квотация AW №",
-        prompt="Номер квотации Andreu World.",
+        prompt="Номер квотации Andreu World?",
     ),
     Question(
         phase=3,
         key="Decision Maker",
         label="Принимает решение",
-        prompt="Человек, принимающий решение по мебели: имя, компания, роль.",
+        prompt="Кто лично принимает решение по мебели?",
+        hint="Имя, компания, роль",
     ),
     *(
         Question(
@@ -338,32 +338,32 @@ PHASE_3 = (
             group_min_one=True,
             key=key,
             label=label,
-            prompt=prompt + " Пришли файлы или ссылку — или нажми «Нет».",
+            prompt=prompt,
             hint=hint,
             kind="files",
             choices=(("Нет", NONE),),
         )
         for key, label, prompt, hint in (
-            ("Third-party Statement", "Ведомость", "Ведомость с Andreu World внутри.",
-             "Документы третьей стороны с Andreu World спрошу по видам, по очереди. "
-             "Файлы по одному, больше 5 МБ — ссылкой."),
-            ("Tender Brief", "Тендерное задание", "Тендерное задание.", ""),
-            ("Purchase Request", "Запрос на закупку", "Запрос на закупку.", ""),
-            ("Other Third-party Document", "Прочее", "Другие документы третьей стороны.", ""),
+            ("Third-party Statement", "Ведомость", "Есть ведомость с Andreu World внутри?",
+             "Пришли файл или ссылку — или нажми «Нет». Документы третьей стороны спрошу по видам"),
+            ("Tender Brief", "Тендерное задание", "Есть тендерное задание?", "Файл или ссылка — или «Нет»"),
+            ("Purchase Request", "Запрос на закупку", "Есть запрос на закупку?", "Файл или ссылка — или «Нет»"),
+            ("Other Third-party Document", "Прочее", "Другие документы третьей стороны?",
+             "Файл или ссылка — или «Нет»"),
         )
     ),
     Question(
         phase=3,
         key="Shipment Month",
         label="Месяц отгрузки",
-        prompt="Требуемый месяц отгрузки:",
+        prompt="В каком месяце нужна отгрузка?",
         kind="month",
     ),
     Question(
         phase=3,
         key="Call Slot 30",
         label="Звонок 30 минут",
-        prompt="Звонок на 30 минут — выбери день:",
+        prompt="Когда удобен звонок на 30 минут?",
         kind="slot",
     ),
 )

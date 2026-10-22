@@ -70,6 +70,8 @@ class Question:
     missing_label: str = "пропущено"
     # Текст вопроса из ответов (например, «Вы указывали N €»)
     prompt_fn: Optional[Callable[[dict], str]] = None
+    # Пояснение из ответов (например, «Было указано N €»)
+    hint_fn: Optional[Callable[[dict], str]] = None
     # Превращение значения кнопки в итоговое (например, «Подтверждаю» → прежнее число)
     resolve: Optional[Callable[[Value, dict], Value]] = None
 
@@ -82,6 +84,8 @@ class Question:
             changes["optional"] = bool(self.optional_fn(answers))
         if self.prompt_fn is not None:
             changes["prompt"] = self.prompt_fn(answers)
+        if self.hint_fn is not None:
+            changes["hint"] = self.hint_fn(answers)
         return replace(self, **changes) if changes else self
 
     def text(self, answers: dict) -> str:

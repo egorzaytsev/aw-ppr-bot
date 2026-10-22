@@ -41,7 +41,6 @@ EGOR_CHANCE = 0.5
 # Конец близко
 LAST_STEPS = {1: "Последний вопрос — и готово.", 2: "Ещё два вопроса — и готово."}
 
-ACK_CHANCE = 0.5  # реакция не на каждый ответ — иначе приедается
 
 _last: dict = {}
 _rng = random.Random()
@@ -56,8 +55,9 @@ def pick(options: tuple, key: str | None = None) -> str:
     return choice
 
 
-def maybe_ack() -> str | None:
-    return pick(ACKS, "ack") if _rng.random() < ACK_CHANCE else None
+def ack() -> str:
+    """Короткая реакция на принятый ответ — после каждого ответа, отдельной строкой."""
+    return pick(ACKS, "ack")
 
 
 def maybe_egor() -> str | None:

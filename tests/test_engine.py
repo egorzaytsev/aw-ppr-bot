@@ -76,7 +76,7 @@ def _run_phase2(r):
     assert "ещё девять вопросов" in r.screens[0].text
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     assert r.state.phase == 2 and r.state.step == 14
-    assert "Предрегистрация · 1/9" in r.screens[0].text
+    assert r.screens[0].text == "<b>Какая компания принимает решение по мебели?</b>"
     r = engine.handle_text(r.state, "ПАО Сбербанк, АХО")
     r = engine.handle_callback(r.state, engine.CB_SKIP)           # влияющие
     r = engine.handle_callback(r.state, CH + "0")                 # конкурентов нет
@@ -96,8 +96,9 @@ def _run_phase2(r):
     # Материалы — одним экраном со списком
     assert r.state.step == 21
     text = r.screens[0].text
-    assert "Предрегистрация · 8/9</b>" in text and "• визуализации" in text and "• квотация Andreu World" in text
-    assert "документы бюро" not in text                           # «Бюро нет» — документов бюро не просим
+    assert "<b>Пришли материалы по проекту — всё, что есть:</b>\n• визуализации" in text
+    assert "• квотация Andreu World" in text
+    assert "спецификация бюро" not in text                        # «Бюро нет» — документов бюро не просим
     r = engine.handle_file(r.state, FILE)
     r = engine.handle_text(r.state, "https://drive.google.com/x")
     r = engine.handle_file(r.state, dict(FILE, file_id="F3", name="spec.xlsx"))
@@ -202,7 +203,7 @@ def test_prereg_then_registration_full_flow():
     assert r.state.phase == 3 and r.state.step == 23
     r = engine.handle_text(r.state, "Q-2026-1187")
     r = engine.handle_text(r.state, "Иванов И., ПАО Сбербанк, директор АХО")
-    assert "Регистрация · 3/5 · Документы третьей стороны 1/4" in r.screens[0].text
+    assert "<b>Есть ведомость с Andreu World внутри?</b>" in r.screens[0].text
     r = engine.handle_file(r.state, dict(FILE, file_id="F2", name="vedomost.pdf"))
     r = engine.handle_callback(r.state, engine.CB_DONE)
     r = engine.handle_callback(r.state, CH + "0")                 # тендерного задания нет
@@ -355,7 +356,7 @@ def test_materials_one_screen_can_skip():
     assert r.state.step == 22
     st.answers["AW Origin"] = "Да, заложен бюро"
     st.step = 21
-    assert "• документы бюро: ведомость, спецификация бюро" in engine.question_screen(st).text
+    assert "• ведомость или спецификация бюро" in engine.question_screen(st).text
 
 
 def test_slot_helpers_timezones():
@@ -628,7 +629,7 @@ def test_solo_architect_name_required():
     r = _to_specifier()
     r = engine.handle_callback(r.state, CH + "0")                 # Частный архитектор
     q = engine._current_q(r.state)
-    assert q.key == "Lead Architect" and q.prompt == "Имя архитектора." and not q.optional
+    assert q.key == "Lead Architect" and q.prompt == "Как зовут архитектора?" and not q.optional
     assert "Пока не знаю" not in str(r.screens[0].buttons)
     r = engine.handle_callback(r.state, engine.CB_SKIP)           # пропустить нельзя
     assert engine._current_q(r.state).key == "Lead Architect"
@@ -679,9 +680,9 @@ def test_fill_flat_numbering_across_phases():
               P.PROJECT_STAGE: "Design", P.SPECIFIER: ["s"], P.EXW_POTENTIAL: 1, P.AW_ALTERNATIVES: "No — AW only",
               P.EXPECTED_ORDER_DATE: "2027-01-01", P.DOSSIER_FILES: [{"id": "a"}], P.PROJECT_LOG: FULL_LOG}
     r = engine.start("project_fill", fill_preset({"id": "recP", "name": "X"}, fields, "notified"))
-    assert "Дополнить · 1/3</b>" in r.screens[1].text and "Адрес объекта" in r.screens[1].text
+    assert r.screens[1].text.startswith("<b>Адрес объекта?</b>")
     r = engine.handle_callback(r.state, engine.CB_SKIP)
-    assert "Дополнить · 2/3</b>" in r.screens[-1].text
+    assert "<b>Запрашиваемый объём заявлен тобой у других производителей мебели?</b>" in r.screens[-1].text
 
 
 def test_fill_asks_bureau_on_architect_selection_and_log_answers():
@@ -720,7 +721,7 @@ def test_last_step_hint_only_on_last_material():
               P.PARALLEL_REGISTRATIONS: "нет", P.PROJECT_LOG: FULL_LOG}
     r = engine.start("project_fill", fill_preset({"id": "recP", "name": "X"}, fields, "notified"))
     text = r.screens[-1].text
-    assert text.startswith("<b>Дополнить · 1/1</b>\nМатериалы по проекту")
+    assert text.startswith("<b>Пришли материалы по проекту — всё, что есть:</b>")
     assert "Последний вопрос" not in text                         # единственный вопрос — без подсказки
     r = engine.handle_callback(r.state, engine.CB_SKIP)
     assert r.state.awaiting == "confirm"

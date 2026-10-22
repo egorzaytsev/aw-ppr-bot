@@ -187,23 +187,20 @@ def question_screen(state: DialogState) -> Screen:
     q = _current_q(state)
     if sc.flat_numbering:
         units = [u for ph in sorted({x.phase for x in sc.questions}) for u in _units(state, ph)]
-        title = sc.title
     else:
         units = _units(state, q.phase)
-        title = sc.phase_titles.get(q.phase, "")
     pos = next((n for n, u in enumerate(units, 1) if state.step in u), 1)
-    head = f"{title} · {pos}/{len(units)}"
     # Сколько экранов осталось, включая этот: шаги группы считаем по одному
     left = sum(len(u) for u in units[pos:]) + 1
     first = pos == 1
     if q.group:
         members = units[pos - 1]
         idx = members.index(state.step)
-        head += f" · {q.group} {idx + 1}/{len(members)}"
         left += len(members) - idx - 1
         first = first and idx == 0
-    # Заголовок — отдельной строкой, вопрос — под ним
-    lines = [f"<b>{escape(head)}</b>", escape(q.text(state.answers))]
+    # Без заголовка «Фаза · N/M» — только вопрос (жирным) и пояснение курсивом под ним
+    head, _, rest = q.text(state.answers).partition("\n")
+    lines = [f"<b>{escape(head)}</b>"] + ([escape(rest)] if rest else [])  # список под вопросом — обычным
     if q.hint:
         lines.append(f"<i>{escape(q.hint)}</i>")
     if not first and left in phrases.LAST_STEPS and not state.editing and not state.filling:
@@ -428,7 +425,7 @@ def _advance(state: DialogState) -> Result:
     if not nxt:
         return _end_of_questions(state)
     result = _ask(state, nxt[0])
-    ack = phrases.maybe_ack()
+    ack = phrases.ack()
     if ack and result.screens:
         result.screens[0].text = f"{ack}\n{result.screens[0].text}"
     return result
