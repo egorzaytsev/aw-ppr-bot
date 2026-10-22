@@ -27,7 +27,7 @@ def test_parse_month():
 
 # Индексы: фаза 1 — 0 клиент, 1 объект, 2 часть, 3 где объект, 4 страна, 5 город, 6 адрес,
 # 7 площадь, 8 объём, 9 стадия, 10 AW в проекте бюро, 11 бюро, 12 ГАП, 13 альтернативы;
-# фаза 2 — 14…27 (материалы 20…25); фаза 3 — 28…35 (документы третьей стороны 30…33)
+# фаза 2 — 14…22 (материалы одним экраном — 21, звонок — 22); фаза 3 — 23…30 (документы третьей стороны 25…28)
 CH = engine.CB_CHOICE
 FILE = {"kind": "file", "file_id": "F1", "file_unique_id": "U1", "name": "plan.pdf", "size": 1000,
         "mime": "application/pdf"}
@@ -93,25 +93,17 @@ def _run_phase2(r):
     assert "120 000 €" in r.screens[0].text                       # «Вы указывали …»
     r = engine.handle_callback(r.state, CH + "0")                 # подтверждаю
     r = engine.handle_text(r.state, "март 2027")
-    # Материалы по шагам
+    # Материалы — одним экраном со списком
     assert r.state.step == 21
-    assert "Предрегистрация · 8/9 · Материалы 1/6" in r.screens[0].text
-    r = engine.handle_callback(r.state, engine.CB_DONE)           # без файлов «Готово» не работает
-    assert r.state.step == 21
+    text = r.screens[0].text
+    assert "Предрегистрация · 8/9</b>" in text and "• визуализации" in text and "• квотация Andreu World" in text
+    assert "документы бюро" not in text                           # «Бюро нет» — документов бюро не просим
     r = engine.handle_file(r.state, FILE)
     r = engine.handle_text(r.state, "https://drive.google.com/x")
-    assert len(r.state.answers["Visualizations"]) == 2
+    r = engine.handle_file(r.state, dict(FILE, file_id="F3", name="spec.xlsx"))
+    assert len(r.state.answers["Materials"]) == 3
     r = engine.handle_callback(r.state, engine.CB_DONE)
     assert r.state.step == 22
-    r = engine.handle_callback(r.state, CH + "0")                 # планировок нет
-    r = engine.handle_text(r.state, "нет")                        # списка серий нет — текстом
-    r = engine.handle_callback(r.state, CH + "0")                 # документов бюро нет
-    assert r.state.step == 25
-    r = engine.handle_file(r.state, dict(FILE, file_id="F3", name="spec.xlsx"))
-    r = engine.handle_callback(r.state, engine.CB_DONE)
-    assert r.state.step == 26                                     # вопроса про квотацию нет
-    r = engine.handle_callback(r.state, CH + "0")                 # квотации нет
-    assert r.state.step == 27
     r = engine.handle_text(r.state, "14.10, 11:00, Мск")
     return r
 
@@ -207,7 +199,7 @@ def test_prereg_then_registration_full_flow():
     assert "Подаётся как: <b>предрегистрация</b>" in r.screens[0].text
     assert engine.stage_of(r.state)[0] == "New — Pre-registration"
     r = engine.handle_callback(r.state, engine.CB_NEXT_PHASE)     # передумал — регистрация
-    assert r.state.phase == 3 and r.state.step == 28
+    assert r.state.phase == 3 and r.state.step == 23
     r = engine.handle_text(r.state, "Q-2026-1187")
     r = engine.handle_text(r.state, "Иванов И., ПАО Сбербанк, директор АХО")
     assert "Регистрация · 3/5 · Документы третьей стороны 1/4" in r.screens[0].text
@@ -216,7 +208,7 @@ def test_prereg_then_registration_full_flow():
     r = engine.handle_callback(r.state, CH + "0")                 # тендерного задания нет
     r = engine.handle_callback(r.state, CH + "0")                 # запроса на закупку нет
     r = engine.handle_callback(r.state, CH + "0")                 # прочего нет
-    assert r.state.step == 34
+    assert r.state.step == 29
     r = engine.handle_text(r.state, "июнь 2027")
     r = engine.handle_text(r.state, "16.10, 15:00, Мск")
     assert r.state.awaiting == "confirm"
@@ -236,7 +228,7 @@ def test_prereg_then_registration_full_flow():
     assert "Звонок 30 минут: 16.10, 15:00, Мск" in log
     names = [it["name"] for _, it in engine.collected_files(r.state)]
     assert names == ["plan.pdf", "spec.xlsx", "vedomost.pdf"]
-    assert p["Layouts"] == "нет" and "Specification For Quotation" not in p
+    assert "Layouts" not in p and "Specification For Quotation" not in p
 
 
 def test_confirmed_volume_change_logged():
@@ -352,26 +344,18 @@ def test_month_typed_while_grid_open():
     assert r.state.answers["Order Month"] == "2027-04-01"
 
 
-def test_materials_all_no_requires_one():
+def test_materials_one_screen_can_skip():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
     st.step = 21
-    for _ in range(6):
-        r = engine.handle_callback(st, CH + "0")
-        st = r.state
-    assert "нужен хотя бы один файл или ссылка" in r.screens[0].text
-    assert r.state.step == 21
-
-
-def test_spec_no_files_skips_quotation_question():
-    r = _run_phase1()
-    r = engine.handle_callback(r.state, engine.CB_GATE_YES)
-    st = r.state
-    st.answers["Visualizations"] = [{"kind": "link", "url": "https://x"}]
-    st.step = 25
-    r = engine.handle_callback(st, CH + "0")                      # своей спецификации нет
-    assert r.state.step == 26
+    labels = [b[0] for row in engine.question_screen(st).buttons for b in row]
+    assert labels == ["Пропустить"]
+    r = engine.handle_callback(st, engine.CB_SKIP)
+    assert r.state.step == 22
+    st.answers["AW Origin"] = "Да, заложен бюро"
+    st.step = 21
+    assert "• документы бюро: ведомость, спецификация бюро" in engine.question_screen(st).text
 
 
 def test_slot_helpers_timezones():
@@ -396,7 +380,7 @@ def test_slot_picker_day_then_window():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 27  # звонок 15 минут
+    st.step = 22  # звонок 15 минут
     screen = engine.question_screen(st)
     day = slots.next_workdays()[1]
     assert f"{engine.CB_DAY}{day.isoformat()}" in str(screen.buttons)
@@ -414,7 +398,7 @@ def test_slot_free_text_accepted():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 27
+    st.step = 22
     r = engine.handle_text(st, "Любой день после 20.10, утро")
     assert r.state.answers["Call Slot 15"] == "Любой день после 20.10, утро"
 
@@ -424,7 +408,7 @@ def test_slot_text_after_day_chosen():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 27
+    st.step = 22
     r = engine.handle_callback(st, f"{engine.CB_DAY}{slots.next_workdays()[0].isoformat()}")
     r = engine.handle_text(r.state, "лучше в пятницу после обеда")
     assert r.state.answers["Call Slot 15"] == "лучше в пятницу после обеда"
@@ -434,10 +418,9 @@ def test_stale_qualifier_state_heals():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.answers["Dealer Specification"] = [{"kind": "link", "url": "https://x"}]
-    st.step, st.awaiting = 26, "qualifier"  # вопрос про квотацию убрали
+    st.step, st.awaiting = 21, "qualifier"  # у материалов уточнения нет — состояние устарело
     r = engine.handle_callback(st, engine.CB_QUALIFIER + "0")
-    assert r.state.awaiting == "answer" and r.state.step == 26
+    assert r.state.awaiting == "answer" and r.state.step == 21
     assert r.screens and r.screens[-1].text
 
 
@@ -445,12 +428,12 @@ def test_third_party_docs_all_no_requires_one():
     r = _run_phase2(_run_phase1())
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 30
+    st.step = 25
     for _ in range(4):
         r = engine.handle_callback(st, CH + "0")
         st = r.state
     assert "Документы третьей стороны: нужен хотя бы один файл или ссылка" in r.screens[0].text
-    assert r.state.step == 30
+    assert r.state.step == 25
 
 
 def test_other_place_asks_country_and_city():
@@ -736,13 +719,11 @@ def test_last_step_hint_only_on_last_material():
               P.AW_ALTERNATIVES: "No — AW only", P.EXPECTED_ORDER_DATE: "2027-01-01", P.CONTACT_LEVEL: "Declared",
               P.PARALLEL_REGISTRATIONS: "нет", P.PROJECT_LOG: FULL_LOG}
     r = engine.start("project_fill", fill_preset({"id": "recP", "name": "X"}, fields, "notified"))
-    texts = [r.screens[-1].text]
-    for _ in range(5):
-        r = engine.handle_callback(r.state, "ch:0")
-        texts.append(r.screens[-1].text)
-    assert texts[0].startswith("<b>Дополнить · 1/1 · Материалы 1/6</b>\nВизуализации проекта.")
-    assert [("Последний вопрос" in t) for t in texts] == [False] * 5 + [True]
-    assert ["Ещё два вопроса" in t for t in texts] == [False] * 4 + [True, False]
+    text = r.screens[-1].text
+    assert text.startswith("<b>Дополнить · 1/1</b>\nМатериалы по проекту")
+    assert "Последний вопрос" not in text                         # единственный вопрос — без подсказки
+    r = engine.handle_callback(r.state, engine.CB_SKIP)
+    assert r.state.awaiting == "confirm"
 
 
 def test_past_month_rejected_and_hidden():

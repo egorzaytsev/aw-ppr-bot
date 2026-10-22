@@ -77,6 +77,7 @@ FULL_TRACK = "Full"
 MAX_PRE_REGISTERED = 3
 # Ключи Payload с материалами — это Dossier Files
 DOSSIER_KEYS = (
+    "Materials",  # все материалы одним вопросом; ключи ниже — у заявок до 22.10
     "Visualizations", "Layouts", "Partner Presentation", "Bureau Documents", "Dealer Specification",
     "AW Quotation File", "Third-party Statement", "Tender Brief", "Purchase Request",
     "Other Third-party Document", "Extra Materials",

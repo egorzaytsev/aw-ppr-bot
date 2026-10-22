@@ -209,7 +209,7 @@ LOST = Scenario(
 
 # ---------- Дополнить материалы ----------
 
-MATERIAL_KEYS = tuple(q.key for q in QUESTIONS if q.group == "Материалы")
+MATERIAL_KEYS = ("Materials",)
 EXTRA_FILES_KEY = "Extra Materials"
 
 

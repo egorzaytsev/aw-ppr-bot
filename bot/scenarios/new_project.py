@@ -24,6 +24,18 @@ ORIGIN_BUREAU = "Да, заложен бюро"
 ORIGIN_DEALER = "Нет — AW предлагает дилер взамен продукта бюро"
 ORIGIN_OWN = "Бюро нет — проект ведёт дилер"
 CONTACT_BUREAU_DOCS = "Indirect (bureau docs)"
+MATERIALS_KEY = "Materials"
+
+
+def materials_prompt(a: dict) -> str:
+    """Все материалы — одним экраном; документы бюро — только если AW заложен бюро (или ответа нет)."""
+    items = ["визуализации", "планировки",
+             "твоя презентация для клиента — серии и мебель, которые ты предлагаешь"]
+    if a.get("AW Origin") not in (ORIGIN_DEALER, ORIGIN_OWN):
+        items.append("документы бюро: ведомость, спецификация бюро")
+    items += ["твоя спецификация (подтверждением плейсмента не считается)",
+              "квотация Andreu World, если уже есть"]
+    return "Материалы по проекту — пришли файлы или ссылки, всё, что есть:\n" + "\n".join(f"• {i}" for i in items)
 CONTACT_CHOICES = (
     ("Пока ничем — только моё слово", "Declared"),
     ("Документы от бюро", CONTACT_BUREAU_DOCS),
@@ -241,7 +253,7 @@ PHASE_2 = (
         phase=2,
         key="Parallel Registrations",
         label="Заявлен другим производителям",
-        prompt="Этот проект уже заявлен у других производителей мебели?",
+        prompt="Запрашиваемый объём заявлен тобой у других производителей мебели?",
         kind="choice",
         choices=(("Нет", "Нет"), ("Да — укажу, у кого", DETAIL)),
         detail_prompt="У каких производителей?",
@@ -284,30 +296,16 @@ PHASE_2 = (
         prompt="Месяц размещения заказа:",
         kind="month",
     ),
-    *(
-        Question(
-            phase=2,
-            group="Материалы",
-            group_min_one=True,
-            key=key,
-            label=label,
-            prompt=prompt + " Пришли файлы или ссылку — или нажми «Нет».",
-            hint=hint,
-            kind="files",
-            choices=(("Нет", NONE),),
-            **extra,
-        )
-        for key, label, prompt, hint, extra in (
-            ("Visualizations", "Визуализации", "Визуализации проекта.",
-             "Материалы спрошу по видам, по очереди. Файлы — по одному, больше 5 МБ — ссылкой.", {}),
-            ("Layouts", "Планировки", "Планировки.", "", {}),
-            ("Partner Presentation", "Презентация партнёра",
-             "Твоя презентация для клиента — серии и мебель, которые ты предлагаешь.", "", {}),
-            ("Bureau Documents", "Документы бюро", "Документы бюро: ведомость, спецификация бюро.", "", {}),
-            ("Dealer Specification", "Твоя спецификация", "Твоя спецификация.",
-             "Подтверждением плейсмента она не считается.", {}),
-            ("AW Quotation File", "Квотация AW", "Квотация Andreu World, если уже есть.", "", {}),
-        )
+    Question(
+        phase=2,
+        key=MATERIALS_KEY,
+        label="Материалы",
+        prompt=materials_prompt({}),
+        prompt_fn=materials_prompt,
+        hint="Файлы по одному, больше 5 МБ — ссылкой. Когда закончишь — «Готово».",
+        kind="files",
+        optional=True,
+        missing_label="не присланы",
     ),
     Question(
         phase=2,
