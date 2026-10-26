@@ -101,42 +101,33 @@ INFO_REPLY = Scenario(
 )
 
 
-# ---------- Запрос квотации (упрощённая схема, до 30 000 €) ----------
+# ---------- Номер квотации (упрощённая схема, до 30 000 €) ----------
+# Дилер сам запрашивает квотацию в бэк-офисе (Егор в копии) и присылает номер — это и есть регистрация
 
 def _quote_derive(a: dict) -> dict:
     out: dict = {"Dealer Project Name": _target_name(a)}
-    line = "Запрос квотации по упрощённой схеме — спецификация во вложениях"
-    if a.get("Quote Comment"):
-        line += f". Комментарий дилера: {a['Quote Comment']}"
-    out["Project Log"] = line
+    if a.get("Quotation / Proforma №"):
+        out["Project Log"] = f"Квотация по упрощённой схеме: № {a['Quotation / Proforma №']}"
     return out
 
 
 QUOTE = Scenario(
     code="project_quote",
-    title="Запросить квотацию",
+    title="Номер квотации",
     questions=(
         Question(
-            key="Extra Materials",
-            label="Спецификация",
-            prompt="Пришли спецификацию для квотации.",
-            hint="Файлы по одному, больше 5 МБ — ссылкой. Когда закончишь — «Готово»",
-            kind="files",
-        ),
-        Question(
-            key="Quote Comment",
-            label="Комментарий",
-            prompt="Комментарий к запросу?",
-            hint="Сроки, количество, особые условия",
-            optional=True,
+            key="Quotation / Proforma №",
+            label="Квотация AW №",
+            prompt="Номер квотации?",
+            hint="Квотацию запрашивай в бэк-офисе, Егор в копии",
         ),
     ),
     phase_titles={1: "Квотация"},
-    stage=lambda p, a, m: (RequestType.QUOTE_SIMPLIFIED, "запрос квотации"),
+    stage=lambda p, a, m: (RequestType.QUOTE_SIMPLIFIED, "регистрация по упрощённой схеме (квотация)"),
     derive=_quote_derive,
     verdict=lambda a, s, m: _plain_verdict(s),
     project_name_key="Dealer Project Name",
-    done_text="Спецификацию получил — передал Егору на квотацию.",
+    done_text="Номер квотации получил — передал Егору.",
     auto_submit=True,
 )
 

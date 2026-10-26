@@ -34,7 +34,7 @@ from .airtable_repo import (
     PPR_NOTIFIED, PPR_PRE_REGISTERED, PPR_REGISTERED, AirtableRepo, DealerProject, Person,
 )
 from .config import load_settings
-from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, WON
+from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, QUOTE, WON
 from .scenarios.new_project import SOLO_ARCHITECT
 from .scenarios.update_project import fill_preset
 from .slots import VALENCIA
@@ -85,7 +85,7 @@ STAGE_LABELS = {
     "Architect selection": "выбор архитектора", "Concept": "концепция", "Design": "проектирование",
     "Tender": "тендер", "Procurement": "закупка",
 }
-CARD_ACTIONS = {"fill": FILL, "news": NEWS, "won": WON, "lost": LOST}
+CARD_ACTIONS = {"fill": FILL, "news": NEWS, "won": WON, "lost": LOST, "quote": QUOTE}
 # Следующий этап по текущему статусу дилера
 NEXT_REQUEST = {PPR_NOTIFIED: RequestType.UPGRADE_PRE_REGISTRATION, PPR_PRE_REGISTERED: RequestType.UPGRADE_REGISTRATION}
 NEXT_LABEL = {PPR_NOTIFIED: "предрегистрацию", PPR_PRE_REGISTERED: "регистрацию"}
@@ -619,6 +619,8 @@ async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Per
     pid = p.record_id
     buttons = [
         *([[("⏭ Запросить следующий этап", f"{CB_CARD}next:{pid}")]] if _next_request_type(p) else []),
+        # До 30 000 €: регистрация = номер квотации бэк-офиса
+        *([[("🧾 Прислать номер квотации", f"{CB_CARD}quote:{pid}")]] if p.track == SIMPLIFIED else []),
         [("Дополнить материалы", f"{CB_CARD}fill:{pid}")],
         [("Сообщить новость", f"{CB_CARD}news:{pid}")],
         [("Выигран", f"{CB_CARD}won:{pid}"), ("Проиграл", f"{CB_CARD}lost:{pid}")],
@@ -683,8 +685,10 @@ async def _request_next_stage(update: Update, ctx: ContextTypes.DEFAULT_TYPE, pe
     request_type = _next_request_type(p)
     if not request_type:
         if p.track == SIMPLIFIED:
-            why = "Для проектов до 30 000 € по прайсу следующего этапа нет — квотацию запрашивай в бэк-офисе."
-        elif p.fields.get(Projects.REGISTERED):
+            # До 30 000 € следующий этап — номер квотации
+            await _start_action(update, ctx, person, "quote", project_id)
+            return
+        if p.fields.get(Projects.REGISTERED):
             why = "Регистрация на объекте уже у партнёра — следующий этап сейчас недоступен."
         else:
             why = "\n".join(cards.next_step_body(dict(p.fields), ""))

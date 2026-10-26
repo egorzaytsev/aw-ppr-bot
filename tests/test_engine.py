@@ -812,3 +812,14 @@ def test_fill_asks_aw_origin_when_missing_in_log():
     r = engine.handle_callback(r.state, CH + "1")                 # нет — AW предлагаем мы взамен
     assert r.state.awaiting == "confirm"                          # бюро уже в проекте, ГАП не нужен
     assert engine.build_payload(r.state)["Project Log"] == "AW в проекте бюро: Нет — AW предлагаем мы взамен"
+
+
+def test_quote_number_for_simplified_project():
+    r = engine.start("project_quote", {"_target": {"id": "recP", "name": "MedallClinic SPB"}})
+    assert "<b>Номер квотации?</b>" in r.screens[-1].text
+    r = engine.handle_text(r.state, "QT-2026-77")
+    assert r.submit
+    assert engine.stage_of(r.state)[0] == "Quotation — Simplified"
+    p = engine.build_payload(r.state)
+    assert p["Quotation / Proforma №"] == "QT-2026-77"
+    assert p["Project Log"] == "Квотация по упрощённой схеме: № QT-2026-77"
