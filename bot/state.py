@@ -38,6 +38,9 @@ class DialogState:
     pick_date: str = ""
     # Напоминание о брошенной заявке уже отправлено
     nudged: bool = False
+    # Дилер выбрал следующий этап, но в текущей фазе есть пропуски: сначала дозаполняем их
+    # (без «Пропустить»), потом — вопросы следующей фазы
+    prefill: bool = False
     started_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )

@@ -219,7 +219,7 @@ def question_screen(state: DialogState) -> Screen:
         buttons += _rows([(slots.day_label(d), f"{CB_DAY}{d.isoformat()}") for d in days], 2)
     if q.kind == "files" and isinstance(state.answers.get(q.key), list) and state.answers[q.key]:
         buttons.append([("Готово", CB_DONE)])
-    if q.optional:
+    if q.optional and not _no_skip(state, q):
         buttons.append([(q.skip_label, CB_SKIP)])
     return Screen("\n".join(lines), buttons)
 
@@ -272,7 +272,30 @@ def evidence_screen(state: DialogState) -> Screen:
 
 def gate_screen(state: DialogState) -> Screen:
     gate = scenario_of(state).gates[state.phase]
-    return Screen(escape(gate.prompt), [[(gate.yes, CB_GATE_YES), (gate.no, CB_GATE_NO)]])
+    text = escape(gate.prompt)
+    gaps = _titles(state, missing(state, phase=state.phase)) if state.phase == PREFILL_PHASE else []
+    if gaps:
+        text += "\n<i>Сначала дополним: " + escape(", ".join(gaps)) + ".</i>"
+    return Screen(text, [[(gate.yes, CB_GATE_YES), (gate.no, CB_GATE_NO)]])
+
+
+# Пропуски дозаполняются перед предрегистрацией (фаза 1 → 2); дальше необязательное остаётся необязательным
+PREFILL_PHASE = 1
+
+
+def _to_next_phase(state: DialogState) -> Result:
+    """Дилер согласился на предрегистрацию: пропуски фазы 1 — сначала, обязательными."""
+    gaps = missing(state, phase=state.phase) if state.phase == PREFILL_PHASE else []
+    if gaps:
+        state.prefill = True
+        state.filling = True
+        state.editing = False
+        return _ask(state, gaps[0])
+    return _enter_next_phase(state)
+
+
+def _no_skip(state: DialogState, q: Question) -> bool:
+    return state.prefill and q.phase == state.phase
 
 
 def current_screen(state: DialogState) -> Screen:
@@ -410,6 +433,12 @@ def _advance(state: DialogState) -> Result:
     if state.filling:
         # Дозаполнение: только пропущенные, только вперёд — пропуск не зацикливается
         nxt = [i for i in missing(state) if i > state.step]
+        if state.prefill:
+            nxt = [i for i in missing(state, phase=state.phase) if i != state.step]
+            if not nxt:
+                state.prefill = False
+                state.filling = False
+                return _enter_next_phase(state)
         return _ask(state, nxt[0]) if nxt else _end_of_questions(state)
     if state.editing:
         # Исправленный ответ открыл зависимый вопрос сразу за ним (бюро → ГАП) — задаём его
@@ -569,7 +598,7 @@ def handle_callback(state: DialogState, data: str) -> Result:
 
     if state.awaiting == AWAIT_GATE:
         if data == CB_GATE_YES:
-            return _enter_next_phase(state)
+            return _to_next_phase(state)
         if data == CB_GATE_NO:
             state.declined_gate = state.phase
             return _to_summary(state)
@@ -577,7 +606,7 @@ def handle_callback(state: DialogState, data: str) -> Result:
 
     if state.awaiting == AWAIT_ANSWER:
         q = _current_q(state)
-        if data == CB_SKIP and q.optional:
+        if data == CB_SKIP and q.optional and not _no_skip(state, q):
             return _accept(state, q, None)
         if data == CB_DONE and q.kind == "files":
             if isinstance(state.answers.get(q.key), list) and state.answers[q.key]:
@@ -661,7 +690,7 @@ def handle_callback(state: DialogState, data: str) -> Result:
             return _ask(state, gaps[0])
         return _to_summary(state)
     if data == CB_NEXT_PHASE and _gate_open(state, state.phase):
-        return _enter_next_phase(state)
+        return _to_next_phase(state)
     if data == CB_EDIT:
         return Result(state, [edit_picker(state)])
     if data.startswith(CB_EDIT_STEP):

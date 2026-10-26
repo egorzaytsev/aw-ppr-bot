@@ -450,7 +450,7 @@ def gate_open(n: int, a: dict, missing_all: list, missing_required: list) -> boo
     if track(a) != TRACK_FULL:
         return False
     if n == 1:
-        return not missing_all  # предрегистрация — только при полностью заполненной фазе 1
+        return True  # пропуски фазы 1 дилер дозаполнит сразу после «Да» (engine: prefill)
     return not missing_required
 
 

@@ -146,21 +146,41 @@ def test_architect_selection_skips_specifier():
     assert engine.build_payload(r.state)["Project Stage"] == "Architect selection"
 
 
-def test_skips_listed_no_gate_and_address_label():
+def test_skips_listed_gate_still_offered_and_address_label():
     r = _run_phase1(skip_optional=True)
-    assert r.state.awaiting == "confirm"                          # без перехода к фазе 2
+    # Предрегистрацию предлагаем и с пропусками — с пометкой, что их сначала дополним
+    assert r.state.awaiting == "gate"
+    assert "Сначала дополним: Часть объекта / поставки, Адрес, Площадь." in r.screens[0].text
+    r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     text = r.screens[0].text
     assert "Адрес: не указан" in text
     assert "Пропущено: Часть объекта / поставки, Адрес, Площадь." in text
     assert engine.COMPLETENESS_NOTE in text
     assert "Для предрегистрации не хватает" in text
     assert engine.CB_FILL in str(r.screens[0].buttons)
-    assert engine.CB_NEXT_PHASE not in str(r.screens[0].buttons)
+    assert engine.CB_NEXT_PHASE in str(r.screens[0].buttons)
     assert engine.handle_callback(r.state, engine.CB_SUBMIT).submit
+
+
+def test_prereg_prefills_skipped_phase1_without_skip():
+    r = _run_phase1(skip_optional=True)
+    r = engine.handle_callback(r.state, engine.CB_GATE_YES)
+    assert r.state.step == 2 and r.state.phase == 1               # сначала пропущенное
+    assert "Пропустить" not in str(r.screens[-1].buttons)
+    r = engine.handle_callback(r.state, engine.CB_SKIP)           # пропустить нельзя
+    assert r.state.step == 2
+    r = engine.handle_text(r.state, "Лобби")
+    assert r.state.step == 6
+    r = engine.handle_text(r.state, "ул. Лесная, 9")
+    r = engine.handle_text(r.state, "4500")
+    r = engine.handle_callback(r.state, engine.CB_QUALIFIER + "0")
+    assert r.state.phase == 2 and r.state.step == 14 and not r.state.prefill
+    assert engine.stage_of(r.state)[0] == "New — Pre-registration"
 
 
 def test_fill_completes_and_offers_prereg():
     r = _run_phase1(skip_optional=True)
+    r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     r = engine.handle_callback(r.state, engine.CB_FILL)
     assert r.state.step == 2
     r = engine.handle_text(r.state, "Лобби")
@@ -168,11 +188,13 @@ def test_fill_completes_and_offers_prereg():
     r = engine.handle_text(r.state, "ул. Лесная, 9")
     r = engine.handle_text(r.state, "4500")
     r = engine.handle_callback(r.state, engine.CB_QUALIFIER + "0")
-    assert r.state.awaiting == "gate"
+    # От предрегистрации уже отказался — сводка, но с кнопкой «Подать на предрегистрацию»
+    assert r.state.awaiting == "confirm" and engine.CB_NEXT_PHASE in str(r.screens[0].buttons)
 
 
 def test_fill_skip_again_returns_to_summary():
     r = _run_phase1(skip_optional=True)
+    r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     r = engine.handle_callback(r.state, engine.CB_FILL)
     for _ in range(3):
         r = engine.handle_callback(r.state, engine.CB_SKIP)
