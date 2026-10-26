@@ -25,6 +25,9 @@ ORIGIN_DEALER = "Нет — AW предлагает дилер взамен пр
 ORIGIN_OWN = "Бюро нет — проект ведёт дилер"
 CONTACT_BUREAU_DOCS = "Indirect (bureau docs)"
 MATERIALS_KEY = "Materials"
+# Упрощённая схема (до 30 000 €): «зарегистрировать» = прислать номер квотации бэк-офиса
+SIMPLIFIED_QUOTE = "Simplified Quote №"
+WANTS_QUOTE = "_simplified_quote"
 
 
 def materials_prompt(a: dict) -> str:
@@ -65,6 +68,7 @@ NONE = "нет"  # «Нет» на вопросах-материалах
 STAGE_NOTIFICATION = "уведомление"
 STAGE_PRE_REGISTRATION = "предрегистрация"
 STAGE_REGISTRATION = "регистрация"
+STAGE_SIMPLIFIED = "регистрация по упрощённой схеме (квотация)"
 
 
 def _money(v) -> str:
@@ -368,7 +372,21 @@ PHASE_3 = (
     ),
 )
 
-QUESTIONS = PHASE_1 + PHASE_2 + PHASE_3
+# Номер квотации упрощённой схемы — вопрос фазы 1, но в конце списка: индексы остальных вопросов
+# (и состояние начатых диалогов) не сдвигаются
+SIMPLIFIED_EXTRA = (
+    Question(
+        phase=1,
+        key=SIMPLIFIED_QUOTE,
+        label="Квотация AW №",
+        prompt="Номер квотации?",
+        hint="Квотацию запрашивай в бэк-офисе, Егор в копии",
+        # Только после «Номер квотации есть» на предложении зарегистрировать
+        ask_if=lambda a: bool(a.get(WANTS_QUOTE)) and track(a) == TRACK_SIMPLIFIED,
+    ),
+)
+
+QUESTIONS = PHASE_1 + PHASE_2 + PHASE_3 + SIMPLIFIED_EXTRA
 _BY_KEY = {q.key: q for q in QUESTIONS}
 
 GATES = {
@@ -446,7 +464,22 @@ def track(a: dict) -> str | None:
     return TRACK_FULL if pl >= FULL_TRACK_THRESHOLD else TRACK_SIMPLIFIED
 
 
+SIMPLIFIED_GATE = Gate(
+    prompt="Давай зарегистрируем! Для этого отправь запрос на квотацию и пришли мне номер квотации.",
+    yes="Номер квотации есть",
+    no="Пока только уведомление",
+    summary_button="Прислать номер квотации",
+    on_yes={WANTS_QUOTE: True},
+)
+
+
+def gate_for(n: int, a: dict) -> Gate | None:
+    return SIMPLIFIED_GATE if n == 1 and track(a) == TRACK_SIMPLIFIED else None
+
+
 def gate_open(n: int, a: dict, missing_all: list, missing_required: list) -> bool:
+    if n == 1 and track(a) == TRACK_SIMPLIFIED:
+        return not a.get(SIMPLIFIED_QUOTE)  # номер квотации уже прислал — предлагать нечего
     if track(a) != TRACK_FULL:
         return False
     if n == 1:
@@ -455,6 +488,8 @@ def gate_open(n: int, a: dict, missing_all: list, missing_required: list) -> boo
 
 
 def stage(phase_reached: int, a: dict, missing_phase1: list) -> tuple[str, str]:
+    if track(a) == TRACK_SIMPLIFIED and a.get(SIMPLIFIED_QUOTE):
+        return RequestType.QUOTE_SIMPLIFIED, STAGE_SIMPLIFIED
     if track(a) != TRACK_FULL or missing_phase1 or phase_reached == 1:
         return RequestType.NEW_NOTIFICATION, STAGE_NOTIFICATION
     if phase_reached == 2:
@@ -512,6 +547,8 @@ def derive(a: dict) -> dict:
         out["EXW Potential"] = exw(pl)
     out.update(location(a))
     out.update(specifier(a))
+    if a.get(SIMPLIFIED_QUOTE):
+        out["Quotation / Proforma №"] = a[SIMPLIFIED_QUOTE]
     log = project_log(a)
     if log:
         out["Project Log"] = "\n".join(log)
@@ -535,12 +572,13 @@ SCENARIO = Scenario(
     questions=QUESTIONS,
     phase_titles={1: "Уведомление", 2: "Предрегистрация", 3: "Регистрация"},
     gates=GATES,
+    gate_for=gate_for,
     gate_open=gate_open,
     stage=stage,
     derive=derive,
     verdict=verdict,
     project_name_key="Dealer Project Name",
     # Где объект → Country/City; подтверждённый объём → PL Volume
-    payload_skip=("Object Location", "PL Volume Confirmed"),
+    payload_skip=("Object Location", "PL Volume Confirmed", SIMPLIFIED_QUOTE),
     done_text="Информацию по проекту получили. Ответ дадим в течение 72 часов — придёт сюда.",
 )

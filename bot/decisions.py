@@ -360,10 +360,24 @@ def plan(reg: dict, project: dict | None) -> Plan:
     # Запрос квотации по упрощённой схеме: статус не меняется, спецификация — в досье
     if request_type == RequestType.QUOTE_SIMPLIFIED:
         moved, _ = transfers(reg, project or {})
+        quote_no = str(payload_of(reg).get("Quotation / Proforma №") or "").strip()
+        reg_updates = dict(done)
+        if quote_no:
+            # Упрощённая схема: номер квотации от дилера = регистрация; дилер — в уведомлении проекта
+            reg_updates[Registrations.QUOTE_NO] = quote_no
+            reg_updates[Registrations.REG_STATUS] = RegStatus.NOTIFICATION
+            dealers_q = reg.get(Registrations.DEALER) or []
+            p = project or {}
+            on_project = set(p.get(Projects.NOTIFIED) or []) | set(p.get(Projects.PRE_REGISTERED) or []) \
+                | set(p.get(Projects.REGISTERED) or [])
+            if dealers_q and dealers_q[0] not in on_project:
+                moved[Projects.NOTIFIED] = list(p.get(Projects.NOTIFIED) or []) + [dealers_q[0]]
         return Plan(
             project_updates=moved,
-            registration_updates=done,
-            dealer_text=f"По запросу {obj} спецификацию передали на квотацию.{_note(reg)}",
+            registration_updates=reg_updates,
+            links=company_links(reg, project or {}, (reg.get(Registrations.DEALER) or [None])[0]) if quote_no else [],
+            dealer_text=(f"По запросу {obj} квотацию № {escape(quote_no)} зафиксировали.{_note(reg)}" if quote_no
+                         else f"По запросу {obj} спецификацию передали на квотацию.{_note(reg)}"),
             log_lines=log_lines + _log_extras(project or {}, moved, payload_of(reg)),
             project_name=project_name, quote=True, changes=change_lines(project or {}, moved),
         )

@@ -122,6 +122,8 @@ STAGE_LABELS = {
 def _title(rtype: str, payload: dict) -> str:
     if payload.get("In Reply To"):
         return "💬 Ответ на твой запрос"
+    if rtype == "Quotation — Simplified" and payload.get("Quotation / Proforma №"):
+        return f"🧾 Упрощённая схема · квотация № {escape(str(payload['Quotation / Proforma №']))}"
     special = {
         "Update — info only": "📰 Обновление по проекту",
         "Update — news": "📰 Новость по проекту",

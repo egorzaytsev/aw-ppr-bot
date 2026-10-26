@@ -113,6 +113,8 @@ class Gate:
     no: str
     # Кнопка в сводке, если от перехода отказались, а потом передумали
     summary_button: str
+    # Вместо перехода в следующую фазу: записать эти ответы и задать открывшиеся вопросы этой же фазы
+    on_yes: Optional[dict] = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,8 @@ class Scenario:
     phase_titles: dict[int, str]
     # gates[n] — переход из фазы n в n+1
     gates: dict[int, Gate] = field(default_factory=dict)
+    # Переход, зависящий от ответов (например, упрощённая схема под 30 000 €); None — gates[n]
+    gate_for: Optional[Callable[[int, dict], Optional[Gate]]] = None
     # Можно ли предложить переход из фазы n: (n, ответы, незаполненные индексы фазы n) → bool
     gate_open: Callable[[int, dict, list], bool] = lambda n, a, m: False
     # Этап заявки: (достигнутая фаза, ответы, полнота) → (Request Type, подпись этапа)

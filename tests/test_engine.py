@@ -206,12 +206,31 @@ def test_skip_only_on_three_phase1_questions():
     assert skippable == ["Object Part", "Object Address", "Area m2"]
 
 
-def test_simplified_track_no_gate():
+def test_simplified_track_notification_only():
     r = _run_phase1(exw="25 000")
+    assert r.state.awaiting == "gate"
+    assert r.screens[0].text.startswith(
+        "Давай зарегистрируем! Для этого отправь запрос на квотацию и пришли мне номер квотации.")
+    assert "Номер квотации есть" in str(r.screens[0].buttons)
+    r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     assert r.state.awaiting == "confirm"
     assert "Подаётся как: <b>уведомление</b>" in r.screens[0].text
     assert "Simplified" not in r.screens[0].text
+    assert engine.CB_NEXT_PHASE in str(r.screens[0].buttons)   # «Прислать номер квотации»
     assert engine.build_payload(r.state)["PPR Track"] == "Simplified (<30k)"
+
+
+def test_simplified_quote_number_registers():
+    r = _run_phase1(exw="25 000")
+    r = engine.handle_callback(r.state, engine.CB_GATE_YES)
+    assert r.state.phase == 1 and engine._current_q(r.state).key == "Simplified Quote №"
+    assert "<b>Номер квотации?</b>" in r.screens[-1].text
+    r = engine.handle_text(r.state, "QT-2026-5501")
+    assert r.state.awaiting == "confirm"                          # второй раз не предлагаем
+    assert engine.stage_of(r.state)[0] == "Quotation — Simplified"
+    assert "регистрация по упрощённой схеме" in r.screens[-1].text
+    p = engine.build_payload(r.state)
+    assert p["Quotation / Proforma №"] == "QT-2026-5501" and "Simplified Quote №" not in p
 
 
 def test_prereg_then_registration_full_flow():
@@ -478,8 +497,8 @@ def test_location_change_to_moscow_drops_country_city():
 
 def test_threshold_is_on_price_list():
     assert "трек" not in _run_phase1(exw="30 000").screens[0].text  # 30 000 по прайсу — Full, гейт
-    assert _run_phase1(exw="30 000").state.awaiting == "gate"
-    assert _run_phase1(exw="29 999").state.awaiting == "confirm"
+    assert "предрегистрацию" in _run_phase1(exw="30 000").screens[0].text
+    assert "номер квотации" in _run_phase1(exw="29 999").screens[0].text  # упрощённая схема
 
 
 def test_city_buttons_by_country():

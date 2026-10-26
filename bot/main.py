@@ -999,7 +999,10 @@ async def _process_decisions(app: Application) -> None:
                 body = {
                     RequestType.UPDATE_WON: "📝 Информацию приняли — итог по проекту подтвердит Егор.",
                     RequestType.UPDATE_LOST: "📝 Информацию приняли — итог по проекту подтвердит Егор.",
-                    RequestType.QUOTE_SIMPLIFIED: "📝 Спецификацию передали на квотацию.",
+                    RequestType.QUOTE_SIMPLIFIED: (
+                        f"🧾 Квотация № {escape(str(payload_of(reg).get('Quotation / Proforma №')))} зафиксирована — "
+                        "защита действует на срок квотации."
+                        if payload_of(reg).get("Quotation / Proforma №") else "📝 Спецификацию передали на квотацию."),
                     RequestType.UPDATE_NEWS: "📰 Новость записали в историю проекта.",
                 }.get(rtype, "📝 Информацию внесли в проект.")
                 card = cards.update_card(fresh, dealer_id, dealer_name, body, note)

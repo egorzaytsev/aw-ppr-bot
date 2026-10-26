@@ -13,7 +13,7 @@ from html import escape
 from . import phrases, slots
 from .scenarios import SCENARIOS
 from .scenarios.base import (
-    DETAIL, ParseError, Question, Scenario, describe_items, find_links, format_value,
+    DETAIL, Gate, ParseError, Question, Scenario, describe_items, find_links, format_value,
     match_choice, parse_answer,
 )
 from .state import (
@@ -271,7 +271,7 @@ def evidence_screen(state: DialogState) -> Screen:
 
 
 def gate_screen(state: DialogState) -> Screen:
-    gate = scenario_of(state).gates[state.phase]
+    gate = _gate(state)
     text = escape(gate.prompt)
     gaps = _titles(state, missing(state, phase=state.phase)) if state.phase == PREFILL_PHASE else []
     if gaps:
@@ -283,8 +283,20 @@ def gate_screen(state: DialogState) -> Screen:
 PREFILL_PHASE = 1
 
 
+def _gate(state: DialogState) -> Gate:
+    sc = scenario_of(state)
+    custom = sc.gate_for(state.phase, state.answers) if sc.gate_for else None
+    return custom or sc.gates[state.phase]
+
+
 def _to_next_phase(state: DialogState) -> Result:
     """Дилер согласился на предрегистрацию: пропуски фазы 1 — сначала, обязательными."""
+    gate = _gate(state)
+    if gate.on_yes:
+        # Остаёмся в фазе: ответ «да» открывает её дополнительные вопросы (номер квотации)
+        state.answers.update(gate.on_yes)
+        nxt = missing(state, phase=state.phase)
+        return _ask(state, nxt[0]) if nxt else _end_of_questions(state)
     gaps = missing(state, phase=state.phase) if state.phase == PREFILL_PHASE else []
     if gaps:
         state.prefill = True
@@ -362,7 +374,7 @@ def summary_screen(state: DialogState) -> Screen:
     if gaps:
         buttons.append([("Дозаполнить", CB_FILL)])
     if _gate_open(state, state.phase):
-        buttons.append([(sc.gates[state.phase].summary_button, CB_NEXT_PHASE)])
+        buttons.append([(_gate(state).summary_button, CB_NEXT_PHASE)])
     buttons.append([("Исправить", CB_EDIT), ("Отменить", CB_CANCEL)])
     return Screen("\n".join(lines), buttons)
 

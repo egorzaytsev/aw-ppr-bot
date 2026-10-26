@@ -247,3 +247,12 @@ def test_fourth_pre_registration_blocked():
     project = {**FULL, P.PRE_REGISTERED: [OTHER1, OTHER2, "recOTHER3"]}
     pl = plan(reg(rtype="Upgrade — Pre-registration"), project)
     assert pl.blocked and "не больше трёх" in pl.admin_text
+
+
+def test_simplified_quote_number_notifies_dealer_and_records_number():
+    from bot.airtable_ids import Registrations as R
+    r = _with_payload(reg(rtype="Quotation — Simplified"), {"Quotation / Proforma №": "QT-1", "PPR Track": "Simplified (<30k)"})
+    pl = plan(r, {P.NAME: "X"})
+    assert pl.project_updates[P.NOTIFIED] == [DEALER] and pl.project_updates[P.QUOTATION] == "QT-1"
+    assert pl.registration_updates[R.QUOTE_NO] == "QT-1" and pl.registration_updates[R.REG_STATUS] == "Notification"
+    assert "квотацию № QT-1 зафиксировали" in pl.dealer_text
