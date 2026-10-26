@@ -14,6 +14,7 @@ from telegram import (
 )
 from telegram import LinkPreviewOptions
 from telegram.constants import ParseMode
+from telegram.error import Conflict, NetworkError
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -1318,6 +1319,11 @@ ADMIN_COMMANDS = [BotCommand("admin", "Админ-меню"), BotCommand("inbox"
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    # Сеть и Conflict при выкладке (старая и новая версии пару секунд опрашивают Telegram вместе) —
+    # не ошибки бота: в лог предупреждением, Егору не шлём
+    if isinstance(ctx.error, (Conflict, NetworkError)):
+        log.warning("Telegram: %s", ctx.error)
+        return
     log.exception("Необработанная ошибка", exc_info=ctx.error)
     if isinstance(update, Update) and update.effective_chat:
         try:
@@ -1370,6 +1376,10 @@ def build_app() -> Application:
     alert_handler = alerts.AlertHandler()
     logging.getLogger().addHandler(alert_handler)
     app.bot_data["alerts"] = alert_handler
+    now = datetime.now(VALENCIA)
+    if now.hour == alerts.SUMMARY_HOUR:
+        # Запуск в час сводки (выкладка) — сегодняшняя, скорее всего, уже ушла: второй раз не шлём
+        app.bot_data["summary_day"] = now.date().isoformat()
     app.bot_data["base_id"] = settings.airtable_base_id
     app.bot_data["process_decisions"] = process_decisions
     app.bot_data["preview_reminder"] = preview_reminder
