@@ -1375,7 +1375,9 @@ def build_app() -> Application:
     app.bot_data["preview_reminder"] = preview_reminder
 
     app.add_handler(TypeHandler(Update, log_update), group=-1)
-    private = filters.ChatType.PRIVATE
+    # Только новые сообщения: правку уже отправленного ответа бот не обрабатывает
+    # (у edited_message нет update.message — раньше падало с AttributeError)
+    private = filters.ChatType.PRIVATE & filters.UpdateType.MESSAGE
     app.add_handler(CommandHandler("start", cmd_start, filters=private))
     app.add_handler(CommandHandler("new", cmd_new, filters=private))
     app.add_handler(CommandHandler("cancel", cmd_cancel, filters=private))
