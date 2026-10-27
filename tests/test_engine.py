@@ -750,7 +750,7 @@ def test_fill_asks_bureau_on_architect_selection_and_log_answers():
         "Решение по мебели принимает: Петрович", "Конкурирующие дилеры: Нет", "Архбюро: ещё не выбрано"]
     # Simplified до предрегистрации не доходит — вопросов из лога нет
     fields[P.PPR_TRACK] = "Simplified (<30k)"
-    assert "Decision Maker Company" not in fill_preset({"id": "recP", "name": "X"}, fields, "notified")["_ask"]
+    assert "Decision Maker Company" not in fill_preset({"id": "recP", "name": "X"}, fields, "notified").get("_ask", [])
 
 
 def test_last_step_hint_only_on_last_material():
