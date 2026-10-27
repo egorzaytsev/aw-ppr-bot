@@ -235,7 +235,8 @@ class Plan:
     dealer_text: str | None = None
     admin_text: str | None = None
     # Компании, которым разослать «появилась предрегистрация другого партнёра»
-    broadcast_companies: list[str] = field(default_factory=list)
+    # Менеджеры (People), которым сигнал о новой предрегистрации на объекте
+    broadcast_people: list[str] = field(default_factory=list)
     broadcast_text: str | None = None
     # Блокировка из-за недостающих данных: готовый текст запроса дилеру
     ask_text: str | None = None
@@ -366,12 +367,12 @@ def plan(reg: dict, project: dict | None) -> Plan:
             # Упрощённая схема: номер квотации от дилера = регистрация; дилер — в уведомлении проекта
             reg_updates[Registrations.QUOTE_NO] = quote_no
             reg_updates[Registrations.REG_STATUS] = RegStatus.NOTIFICATION
-            dealers_q = reg.get(Registrations.DEALER) or []
+            managers_q = reg.get(Registrations.SUBMITTED_BY) or []
             p = project or {}
             on_project = set(p.get(Projects.NOTIFIED) or []) | set(p.get(Projects.PRE_REGISTERED) or []) \
                 | set(p.get(Projects.REGISTERED) or [])
-            if dealers_q and dealers_q[0] not in on_project:
-                moved[Projects.NOTIFIED] = list(p.get(Projects.NOTIFIED) or []) + [dealers_q[0]]
+            if managers_q and managers_q[0] not in on_project:
+                moved[Projects.NOTIFIED] = list(p.get(Projects.NOTIFIED) or []) + [managers_q[0]]
         return Plan(
             project_updates=moved,
             registration_updates=reg_updates,
@@ -410,10 +411,11 @@ def plan(reg: dict, project: dict | None) -> Plan:
     if status is None:
         return _blocked(reg, decision, "не понятно, какой статус дать — выставь Reg Status.")
 
-    dealers = reg.get(Registrations.DEALER) or []
-    if not dealers:
-        return _blocked(reg, decision, "в заявке не указан Dealer.")
-    dealer = dealers[0]
+    # Статус — менеджеру (People из Submitted By), компания получает скидку через него
+    managers = reg.get(Registrations.SUBMITTED_BY) or []
+    if not managers:
+        return _blocked(reg, decision, "в заявке не указан Submitted By — некому ставить статус.")
+    dealer = managers[0]
 
     missing = ppr_missing(project, status, moved, provided)
     if missing:
@@ -494,7 +496,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
         project_name=project_name,
         transferred=_names(moved),
         dealer_text=text + _note(reg),
-        broadcast_companies=broadcast,
+        broadcast_people=broadcast,
         broadcast_text=(f"🔎 По объекту «{escape(project_name)}» появилась предрегистрация другого партнёра.\n"
                         "Чтобы не потерять приоритет — дополни данные по проекту или запроси предрегистрацию."
                         if broadcast else None),

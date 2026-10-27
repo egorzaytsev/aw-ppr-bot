@@ -15,6 +15,11 @@ class People:
     LAST_REMINDER = "fldpIUrdICo7UusyN"
     COUNTRY = "fldKd7jlAKfey5xeD"
     ROLE = "fldrG4pHBV6Fxo4Xf"
+    REGISTRATIONS = "fldWLjaQBXmtoT5xX"   # ← Registrations.Submitted By
+    # Обратные стороны Manager-полей Projects
+    AS_NOTIFIED = "flddsYlUWQ3xAeZg7"
+    AS_PRE_REGISTERED = "fld7ZUpWY67F2Cr7L"
+    AS_REGISTERED = "fld7LlH74M7m7XgTb"
 
 
 class Companies:
@@ -59,9 +64,12 @@ class Projects:
     PPR_REF = "fld9H3DLTtTOTluOb"            # формула AW-YY-####
     PPR_NEXT_MISSING = "fldVIAWgivyBeKX4a"   # формула: чего не хватает для следующего этапа
     PROBABILITY = "fldHldhYLswedJe8s"
-    NOTIFIED = "fldiKRdTlngI6AXK8"
-    PRE_REGISTERED = "fldSXoNH5rwWCYaWT"
-    REGISTERED = "fld75C5ApwGwVCT5N"
+    # Статусы PPR — у менеджера дилера (ссылки на People); компания получает скидку через него.
+    # Старые поля по компаниям (Notified fldiKRdTlngI6AXK8, Pre-registered fldSXoNH5rwWCYaWT,
+    # Registered fld75C5ApwGwVCT5N) не читаем и не пишем
+    NOTIFIED = "fldJRkBhuJzyg7QIX"        # Notified (Manager)
+    PRE_REGISTERED = "fldr4KkTqqgDZm7u6"  # Pre-registered (Manager)
+    REGISTERED = "fldGaXBjJetxthhqv"      # Registered (Manager)
     STATUS_CONFIRMED = "fldtmomY3vt087h7I"
 
 

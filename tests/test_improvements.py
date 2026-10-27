@@ -105,3 +105,16 @@ def test_architect_linked_to_people_and_project():
     assert note == "ГАП Иван Петров (новый в People)"
     # Бюро — сам дилер (проект ведёт дилер / AW предлагает дилер) — ГАП не заводим
     assert asyncio.run(main._link_architect(repo, reg, {}, "recP", ["recDEALER"], ["recDEALER"])) is None
+
+
+def test_same_alert_at_most_once_per_hour():
+    h = alerts.AlertHandler()
+    t0 = datetime(2026, 10, 27, 10, 0, tzinfo=VALENCIA)
+    for _ in range(3):
+        h.queue.append((t0, "Необработанная ошибка — AttributeError: x"))
+    text = h.drain(t0)
+    assert "ошибки (3)" in text and "(×3)" in text
+    h.queue.append((t0, "Необработанная ошибка — AttributeError: x"))
+    assert h.drain(t0 + timedelta(minutes=30)) is None             # тот же текст — молчим час
+    h.queue.append((t0, "Необработанная ошибка — AttributeError: x"))
+    assert h.drain(t0 + timedelta(minutes=61)) is not None

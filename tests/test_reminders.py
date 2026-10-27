@@ -26,23 +26,18 @@ def test_nothing_to_remind():
     assert reminders.project_item(proj(expiry="2026-12-31"), TODAY, date(2026, 10, 1)) is None
 
 
-def test_stale_news_and_gaps_titles():
-    f = dict(FULL)
-    for k in (P.OBJECT_ADDRESS, P.CONTACT_LEVEL, P.DOSSIER_FILES):
-        del f[k]
+def test_stale_news_and_gaps_from_next_step_missing():
+    f = dict(FULL, **{P.PPR_NEXT_MISSING: "Object Address; Contact Level (needs proof); Dossier Files;"})
     it = reminders.project_item(proj("notified", None, f), TODAY, date(2026, 9, 15))
-    assert it.reasons["gaps"] == "Адрес, Уровень контакта, Материалы"
-    f2 = dict(f)
-    del f2[P.SPECIFIER]
-    del f2[P.EXPECTED_ORDER_DATE]
-    it2 = reminders.project_item(proj("notified", None, f2), TODAY, date(2026, 10, 1))
-    assert it2.reasons["gaps"] == "Адрес, Архбюро, ГАП и ещё 3"
+    assert it.reasons["gaps"] == "адрес, подтверждение контакта, материалы"   # без «и ещё N»
     assert it.reasons["stale"] == "последняя 15.09"
+    # Пустые поля анкеты, которых формула не требует, — не повод напоминать
+    bare = {P.NAME: "Old project", P.PPR_NEXT_MISSING: ""}
+    assert reminders.project_item(proj("notified", None, bare), TODAY, date(2026, 10, 1)) is None
 
 
-def test_simplified_only_phase1_gaps():
-    f = dict(FULL)
-    del f[P.CONTACT_LEVEL]
+def test_simplified_no_gaps():
+    f = dict(FULL, **{P.PPR_NEXT_MISSING: "Simplified track — no next stage"})
     assert reminders.project_item(proj("notified", None, f, "Simplified (<30k)"), TODAY, date(2026, 10, 1)) is None
 
 

@@ -8,7 +8,8 @@ FULL = {P.NAME: "Petrovitch Office", P.EXW_POTENTIAL: 45000, P.EXPECTED_ORDER_DA
 
 
 def reg(decision="Accept", rtype="New — Notification", note=None, status="PENDING", processed=None):
-    r = {R.DECISION: decision, R.REQUEST_TYPE: rtype, R.REG_STATUS: status, R.DEALER: [DEALER],
+    # DEALER — и компания (поле Dealer), и менеджер (Submitted By): статусы теперь у менеджера
+    r = {R.DECISION: decision, R.REQUEST_TYPE: rtype, R.REG_STATUS: status, R.DEALER: [DEALER], R.SUBMITTED_BY: [DEALER],
          R.DEALER_PROJECT_NAME: "Петрович — офис", R.TARGET_PROJECT: ["recP"]}
     if note:
         r[R.DECISION_NOTE] = note
@@ -39,7 +40,7 @@ def test_pre_registration_position_and_broadcast():
     assert pl.project_updates[P.NOTIFIED] == [OTHER2]               # перешёл из уведомления
     assert pl.project_updates[P.STATUS_CONFIRMED] == "__today__"
     assert "Ты на 2-м месте из 2 в предрегистрации." in pl.dealer_text
-    assert sorted(pl.broadcast_companies) == [OTHER1, OTHER2]
+    assert sorted(pl.broadcast_people) == [OTHER1, OTHER2]
     assert pl.broadcast_text.splitlines() == [
         "🔎 По объекту «Petrovitch Office» появилась предрегистрация другого партнёра.",
         "Чтобы не потерять приоритет — дополни данные по проекту или запроси предрегистрацию.",
@@ -99,7 +100,7 @@ def test_position_from_actual_order_when_already_listed():
     # Егор заранее поставил дилера первым — пишем фактическое место, не «последний»
     project = {**FULL, P.PRE_REGISTERED: [DEALER, OTHER1, OTHER2]}
     pl = plan(reg(rtype="New — Pre-registration"), project)
-    assert P.PRE_REGISTERED not in pl.project_updates and not pl.broadcast_companies
+    assert P.PRE_REGISTERED not in pl.project_updates and not pl.broadcast_people
     assert "Ты на 1-м месте из 3 в предрегистрации." in pl.dealer_text
 
 
@@ -256,3 +257,13 @@ def test_simplified_quote_number_notifies_dealer_and_records_number():
     assert pl.project_updates[P.NOTIFIED] == [DEALER] and pl.project_updates[P.QUOTATION] == "QT-1"
     assert pl.registration_updates[R.QUOTE_NO] == "QT-1" and pl.registration_updates[R.REG_STATUS] == "Notification"
     assert "квотацию № QT-1 зафиксировали" in pl.dealer_text
+
+
+def test_status_goes_to_manager_not_company():
+    r = reg()
+    r[R.SUBMITTED_BY] = ["recMARINA"]
+    pl = plan(r, {P.NAME: "X"})
+    assert pl.project_updates[P.NOTIFIED] == ["recMARINA"]        # Notified (Manager)
+    assert P.NOTIFIED == "fldJRkBhuJzyg7QIX"
+    pre = plan(dict(r, **{R.REQUEST_TYPE: "Upgrade — Pre-registration"}), {**FULL, P.NOTIFIED: ["recMARINA"]})
+    assert pre.project_updates[P.PRE_REGISTERED] == ["recMARINA"] and pre.project_updates[P.NOTIFIED] == []

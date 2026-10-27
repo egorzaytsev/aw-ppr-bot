@@ -22,10 +22,11 @@ def _quote(value: str) -> str:
 
 # Статус дилера в проекте по программе, от старшего к младшему
 PPR_REGISTERED, PPR_PRE_REGISTERED, PPR_NOTIFIED = "registered", "pre_registered", "notified"
+# Статус — у менеджера (People), не у компании: обратные стороны Manager-полей Projects
 _ROLE_FIELDS = (
-    (PPR_REGISTERED, Companies.AS_REGISTERED),
-    (PPR_PRE_REGISTERED, Companies.AS_PRE_REGISTERED),
-    (PPR_NOTIFIED, Companies.AS_NOTIFIED),
+    (PPR_REGISTERED, People.AS_REGISTERED),
+    (PPR_PRE_REGISTERED, People.AS_PRE_REGISTERED),
+    (PPR_NOTIFIED, People.AS_NOTIFIED),
 )
 # Закрытые проекты дилеру не показываем
 _HIDDEN_PROJECT_STATUSES = {"Lost", "Won"}
@@ -165,17 +166,20 @@ class AirtableRepo:
 
     # ---------- проекты дилера ----------
 
-    def _company_fields(self, company_ids: list[str]) -> list[dict]:
-        if not company_ids:
-            return []
-        fields = [f for _, f in _ROLE_FIELDS] + [Companies.REGISTRATIONS]
-        recs = self._companies.all(formula=_ids_formula(company_ids), fields=fields, use_field_ids=True)
-        return [r["fields"] for r in recs]
+    def _person_fields(self, person_id: str) -> dict:
+        """Статусы и заявки менеджера: обратные стороны Manager-полей и Registrations."""
+        if not person_id:
+            return {}
+        # get одной записи не принимает fields — берём запись целиком
+        return self._people.get(person_id, use_field_ids=True)["fields"]
 
-    def dealer_projects(self, company_ids: list[str]) -> list[DealerProject]:
-        """Проекты, где компания дилера стоит в Notified / Pre-registered / Registered."""
+    def _person_regs(self, person_id: str) -> list[str]:
+        return list(self._person_fields(person_id).get(People.REGISTRATIONS) or [])
+
+    def dealer_projects(self, person_id: str) -> list[DealerProject]:
+        """Проекты, где менеджер стоит в Notified / Pre-registered / Registered (Manager). Без фильтра по компании."""
         status_by_project: dict[str, str] = {}
-        for f in self._company_fields(company_ids):
+        for f in [self._person_fields(person_id)]:
             for status, field in _ROLE_FIELDS:
                 for pid in f.get(field, []):
                     status_by_project.setdefault(pid, status)  # старший статус побеждает
@@ -202,9 +206,9 @@ class AirtableRepo:
         out.sort(key=lambda p: p.name.lower())
         return out
 
-    def pending_requests(self, company_ids: list[str]) -> list[PendingRequest]:
-        """Заявки компании дилера, которые ещё на проверке."""
-        reg_ids = [rid for f in self._company_fields(company_ids) for rid in f.get(Companies.REGISTRATIONS, [])]
+    def pending_requests(self, person_id: str) -> list[PendingRequest]:
+        """Заявки менеджера, которые ещё на проверке."""
+        reg_ids = self._person_regs(person_id)
         if not reg_ids:
             return []
         recs = self._registrations.all(
@@ -315,9 +319,9 @@ class AirtableRepo:
     def set_last_reminder(self, person_id: str, day: str) -> None:
         self._people.update(person_id, {People.LAST_REMINDER: day})
 
-    def last_news_by_project(self, company_ids: list[str]) -> dict:
-        """Последняя заявка компании по каждому проекту (Target Project) — дата YYYY-MM-DD."""
-        reg_ids = [rid for f in self._company_fields(company_ids) for rid in f.get(Companies.REGISTRATIONS, [])]
+    def last_news_by_project(self, person_id: str) -> dict:
+        """Последняя заявка менеджера по каждому проекту (Target Project) — дата YYYY-MM-DD."""
+        reg_ids = self._person_regs(person_id)
         if not reg_ids:
             return {}
         out: dict = {}
@@ -519,9 +523,9 @@ class AirtableRepo:
         } for r in recs if project_id in (r["fields"].get(Registrations.TARGET_PROJECT) or [])]
         return sorted(out, key=lambda q: q["at"])
 
-    def dealer_quotes(self, company_ids: list[str]) -> dict:
-        """Последний принятый запрос квотации компании по каждому проекту: {project: {...}}."""
-        reg_ids = [rid for f in self._company_fields(company_ids) for rid in f.get(Companies.REGISTRATIONS, [])]
+    def dealer_quotes(self, person_id: str) -> dict:
+        """Последний принятый запрос квотации менеджера по каждому проекту: {project: {...}}."""
+        reg_ids = self._person_regs(person_id)
         out: dict = {}
         for i in range(0, len(reg_ids), 50):
             recs = self._registrations.all(

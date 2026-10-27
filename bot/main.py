@@ -323,7 +323,10 @@ async def _handle_answer_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, te
 
 
 async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    text = update.message.text.strip()
+    msg = update.effective_message
+    if msg is None or msg.text is None:
+        return
+    text = msg.text.strip()
     if text in (MENU_NEW, MENU_UPDATE, MENU_MY, MENU_START):
         await admin.drop_pending(update, ctx)  # нажал меню — ввод для админа отменён
     elif await admin.on_admin_text(update, ctx, text, resume=False):
@@ -356,7 +359,10 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_voice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    media = update.message.voice or update.message.audio
+    msg = update.effective_message
+    media = (msg.voice or msg.audio) if msg is not None else None
+    if media is None:
+        return
     tg_file = await media.get_file()
     audio = bytes(await tg_file.download_as_bytearray())
     try:
@@ -380,7 +386,7 @@ async def _keep_news_audio(update: Update, ctx: ContextTypes.DEFAULT_TYPE, media
         return
     if (media.file_size or 0) > MAX_FILE_BYTES:
         return  # больше лимита Airtable — останется только расшифровка
-    ext = "ogg" if update.message.voice else "mp3"
+    ext = "ogg" if update.effective_message and update.effective_message.voice else "mp3"
     person.state.answers["Dealer News Audio"] = [{
         "kind": "file", "file_id": media.file_id, "file_unique_id": media.file_unique_id,
         "name": f"voice_{media.file_unique_id}.{ext}", "size": media.file_size,
@@ -411,6 +417,8 @@ async def _mark_choice(query) -> None:
 
 async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
+    if query is None:
+        return
     await query.answer()
     # Убираем кнопки у нажатого сообщения (защита от двойных нажатий) и оставляем выбранный ответ
     try:
@@ -518,7 +526,7 @@ def _button_label(p: DealerProject) -> str:
 
 
 async def _projects(ctx: ContextTypes.DEFAULT_TYPE, person: Person) -> list[DealerProject]:
-    return _sorted(await asyncio.to_thread(_repo(ctx).dealer_projects, person.company_ids))
+    return _sorted(await asyncio.to_thread(_repo(ctx).dealer_projects, person.record_id))
 
 
 async def _show_project_list(
@@ -527,9 +535,9 @@ async def _show_project_list(
     if mode != MODE_MY and await _blocked(update, ctx, person, f"{CB_LIST}{mode}:{page}"):
         return
     projects = await _projects(ctx, person)
-    pending = await asyncio.to_thread(_repo(ctx).pending_requests, person.company_ids) if mode == MODE_MY else []
+    pending = await asyncio.to_thread(_repo(ctx).pending_requests, person.record_id) if mode == MODE_MY else []
     if not projects:
-        text = "Пока нет проектов с твоим плейсментом в программе. Подать новый — кнопка «Новый проект» внизу."
+        text = "У тебя пока нет проектов в программе. Нажми «Новый проект»."
         if pending:
             text = pending_text(pending) + "\n\n" + text
         await update.effective_chat.send_message(text, parse_mode=ParseMode.HTML, reply_markup=MENU_KEYBOARD)
@@ -581,7 +589,7 @@ def pending_text(pending: list) -> str:
 
 async def _own_project(ctx: ContextTypes.DEFAULT_TYPE, person: Person, project_id: str) -> DealerProject | None:
     """Проект из списка дилера — кнопки не дают открыть чужой проект."""
-    projects = await asyncio.to_thread(_repo(ctx).dealer_projects, person.company_ids)
+    projects = await asyncio.to_thread(_repo(ctx).dealer_projects, person.record_id)
     return next((p for p in projects if p.record_id == project_id), None)
 
 
@@ -607,7 +615,7 @@ async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Per
         lines.append(f"Квотация: {escape(str(quotation))}")
     if p.track == SIMPLIFIED:
         lines.append("Схема: упрощённая — объём до 30 000 € по прайсу")
-        q = (await asyncio.to_thread(_repo(ctx).dealer_quotes, person.company_ids)).get(p.record_id)
+        q = (await asyncio.to_thread(_repo(ctx).dealer_quotes, person.record_id)).get(p.record_id)
         if q and q.get("valid"):
             no = f"№ {escape(str(q['no']))}, " if q.get("no") else ""
             lines.append(f"Квотация: {no}действует до {_date(q['valid'])}")
@@ -827,7 +835,9 @@ async def _upload_files(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str, files: list
 # ---------- файлы ----------
 
 async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    msg = update.message
+    msg = update.effective_message
+    if msg is None or not (msg.document or msg.photo):
+        return
     if msg.document:
         doc = msg.document
         item = {"kind": "file", "file_id": doc.file_id, "file_unique_id": doc.file_unique_id,
@@ -987,7 +997,9 @@ async def _process_decisions(app: Application) -> None:
         card = None
         if accepted:
             fresh = await asyncio.to_thread(repo.project_fields, target[0])
-            dealer_id = dealers[0] if dealers else ""
+            # Статус на проекте — у менеджера, отправившего заявку; в тексте — компания
+            managers = reg.get(Registrations.SUBMITTED_BY) or []
+            dealer_id = managers[0] if managers else ""
             before = set((project or {}).get(Projects.NOTIFIED) or []) | set(
                 (project or {}).get(Projects.PRE_REGISTERED) or []) | set((project or {}).get(Projects.REGISTERED) or [])
             note = (reg.get(Registrations.DECISION_NOTE) or "").strip()
@@ -1030,9 +1042,9 @@ async def _process_decisions(app: Application) -> None:
             markup = _markup([[("Ответить", f"{CB_REPLY}{rec['id']}")]]) if pl.reply_button else None
             for chat in dealer_chats:
                 await _send_html(app.bot, chat, pl.dealer_text, markup)
-        if pl.broadcast_companies and pl.broadcast_text:
+        if pl.broadcast_people and pl.broadcast_text:
             open_btn = _markup([[("Открыть проект", f"{CB_PICK}{MODE_MY}:{target[0]}")]]) if target else None
-            for chat in await asyncio.to_thread(repo.chat_ids_for_companies, pl.broadcast_companies):
+            for chat in await asyncio.to_thread(repo.chat_ids_for_people, pl.broadcast_people):
                 if chat not in dealer_chats:
                     await _send_html(app.bot, chat, pl.broadcast_text, open_btn)
         if admin_chat:
@@ -1065,13 +1077,13 @@ async def _process_decisions(app: Application) -> None:
 REMINDERS_INTERVAL = 600  # секунд между проверками
 
 
-async def _build_digest(repo: AirtableRepo, companies: list[str], today: date, name: str = ""):
-    """(текст, кнопки, пункты) напоминания для компаний человека; None — напоминать нечего."""
-    projects = _sorted(await asyncio.to_thread(repo.dealer_projects, companies))
+async def _build_digest(repo: AirtableRepo, person_id: str, today: date, name: str = ""):
+    """(текст, кнопки, пункты) напоминания по проектам менеджера; None — напоминать нечего."""
+    projects = _sorted(await asyncio.to_thread(repo.dealer_projects, person_id))
     if not projects:
         return None
-    news = await asyncio.to_thread(repo.last_news_by_project, companies)
-    quotes = await asyncio.to_thread(repo.dealer_quotes, companies)
+    news = await asyncio.to_thread(repo.last_news_by_project, person_id)
+    quotes = await asyncio.to_thread(repo.dealer_quotes, person_id)
     items = [
         it for p in projects
         if (it := reminders.project_item(
@@ -1081,10 +1093,9 @@ async def _build_digest(repo: AirtableRepo, companies: list[str], today: date, n
     if not items:
         return None
     buttons = [[(f"Открыть: {it.name[:40]}", f"{CB_PICK}{MODE_MY}:{it.project_id}")] for it in items[:PAGE_SIZE]]
-    intro = phrases.pick(phrases.REMINDER_INTRO)
+    # Без «Ола»: «Marina, напоминание по твоим проектам»
     first = phrases.first_name(name)
-    if first:
-        intro = intro.replace("Ола!", f"Ола, {first}!")
+    intro = f"{first}, напоминание по твоим проектам" if first else "Напоминание по твоим проектам"
     return reminders.digest_text(items, intro), buttons, items
 
 
@@ -1108,7 +1119,7 @@ async def preview_reminder(update: Update, ctx: ContextTypes.DEFAULT_TYPE, usern
         header = ""
     if not person:
         return
-    digest = await _build_digest(repo, person.company_ids, datetime.now(VALENCIA).date(), person.name)
+    digest = await _build_digest(repo, person.record_id, datetime.now(VALENCIA).date(), person.name)
     if not digest:
         await update.effective_chat.send_message("🛠 Напоминать нечего: по проектам всё в порядке.")
         return
@@ -1173,7 +1184,7 @@ async def process_reminders(app: Application) -> None:
         checked[rec["id"]] = today
         if not reminders.due(f.get(People.LAST_REMINDER), today):
             continue
-        digest = await _build_digest(repo, f.get(People.COMPANY) or [], today, f.get(People.NAME, ""))
+        digest = await _build_digest(repo, rec["id"], today, f.get(People.NAME, ""))
         if not digest:
             continue
         text, buttons, items = digest

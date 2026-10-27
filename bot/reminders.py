@@ -2,7 +2,7 @@
 
 Поводы (по каждому проекту):
 - до конца срока предрегистрации/регистрации или квотации 7 дней или меньше;
-- не хватает данных для следующего этапа (и пропуски уведомления);
+- не хватает данных для следующего этапа — ровно то, что в PPR Next Step Missing;
 - по проекту нет новостей от дилера 21 день и больше (или не было вовсе).
 """
 from __future__ import annotations
@@ -12,13 +12,11 @@ from datetime import date, datetime, time
 from html import escape
 from zoneinfo import ZoneInfo
 
-from .scenarios.new_project import QUESTIONS
-from .scenarios.update_project import LOG_GAP_KEYS, MATERIAL_KEYS, gaps_for
+from .airtable_ids import Projects
 
 EXPIRY_DAYS = 7  # до конца статуса или квотации — напоминаем за неделю
 STALE_DAYS = 21
 REMIND_EVERY_DAYS = 7
-MAX_GAPS = 3
 
 # Страна человека (People.Country) → часовой пояс; по умолчанию — Москва
 PERSON_TZ = {
@@ -26,10 +24,6 @@ PERSON_TZ = {
     "Georgia": "Asia/Tbilisi", "Armenia": "Asia/Yerevan", "Kyrgyzstan": "Asia/Bishkek",
     "Belarus": "Europe/Minsk", "Spain": "Europe/Madrid", "Italy": "Europe/Rome", "Poland": "Europe/Warsaw",
 }
-_TITLES = {q.key: q.title for q in QUESTIONS}
-# Необязательное и ответы из Project Log в напоминаниях не требуем
-_SKIP_IN_REMINDERS = {"Object Part", "AW Origin", *LOG_GAP_KEYS}
-_PHASE1 = {q.key for q in QUESTIONS if q.phase == 1}
 
 
 def person_now(country: str | None) -> datetime:
@@ -71,15 +65,26 @@ class Item:
     reasons: dict
 
 
-def _gap_titles(keys: list[str]) -> list[str]:
-    out: list[str] = []
-    for k in keys:
-        if k in _SKIP_IN_REMINDERS:
-            continue
-        title = "Материалы" if k in MATERIAL_KEYS else _TITLES.get(k, k)
-        if title not in out:
-            out.append(title)
-    return out
+# PPR Next Step Missing → коротко по-русски (порядок — как в формуле)
+NEXT_STEP_RU = (
+    ("EXW Potential", "объём"),
+    ("Expected Order Date", "месяц заказа"),
+    ("Object Address", "адрес"),
+    ("Specifier", "бюро"),
+    ("Contact Level", "подтверждение контакта"),
+    ("AW Alternatives", "альтернативы AW"),
+    ("Parallel Registrations", "заявлено ли у других производителей"),
+    ("Dossier Files", "материалы"),
+    ("Quotation №", "номер квотации"),
+)
+
+
+def next_step_gaps(raw: str | None) -> list[str]:
+    """«Object Address; Dossier Files;» → ["адрес", "материалы"]; упрощённый трек и пусто — ничего."""
+    raw = raw or ""
+    if raw.startswith("Simplified"):
+        return []
+    return [ru for key, ru in NEXT_STEP_RU if key in raw]
 
 
 def project_item(project, today: date, last_news: date | None, quote_valid: str | None = None) -> Item | None:
@@ -98,13 +103,10 @@ def project_item(project, today: date, last_news: date | None, quote_valid: str 
             left = f"осталось {days} дн." if days >= 0 else "срок истёк"
             status_line = f"{STATUS_NAME[project.ppr_status]} до {expiry:%d.%m.%Y}, {left}"
             reasons[EXPIRY] = f"{status_line}; {reasons[EXPIRY]}" if EXPIRY in reasons else status_line
-    keys, _ = gaps_for(project.fields, project.ppr_status)
-    if project.track == "Simplified (<30k)":
-        keys = [k for k in keys if k in _PHASE1]  # Simplified: дальше уведомления не идут
-    gaps = _gap_titles(keys)
+    # Только то, что считает PPR Next Step Missing: старые проекты законно не имеют многих полей анкеты
+    gaps = next_step_gaps(project.fields.get(Projects.PPR_NEXT_MISSING))
     if gaps:
-        more = f" и ещё {len(gaps) - MAX_GAPS}" if len(gaps) > MAX_GAPS else ""
-        reasons[GAPS] = ", ".join(gaps[:MAX_GAPS]) + more
+        reasons[GAPS] = ", ".join(gaps)
     if last_news is None:
         reasons[STALE] = "новостей ещё не было"
     elif (today - last_news).days >= STALE_DAYS:
