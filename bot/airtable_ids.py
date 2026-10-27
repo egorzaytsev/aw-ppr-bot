@@ -24,10 +24,6 @@ class People:
 
 class Companies:
     TABLE = "tblUnWupN3QzpaWnj"
-    # Обратные стороны ролевых полей Projects
-    AS_NOTIFIED = "fldRgtKpFgKW5HDZX"        # ← Projects.Notified
-    AS_PRE_REGISTERED = "fldc3vmxjQnXoboi6"  # ← Projects.Pre-registered
-    AS_REGISTERED = "flds1nP0HoRHISZeu"      # ← Projects.Registered
     REGISTRATIONS = "fldkMDN9qrMlcKQzi"      # ← Registrations.Dealer
     PEOPLE = "fld9kyOncMPx5R5GC"
     NAME = "flddHSCWNh1RDWy9e"
