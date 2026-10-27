@@ -72,6 +72,8 @@ class Question:
     prompt_fn: Optional[Callable[[dict], str]] = None
     # Пояснение из ответов (например, «Было указано N €»)
     hint_fn: Optional[Callable[[dict], str]] = None
+    # Проверка текстового ответа (и уточнения «Другое»): текст ошибки — переспросить, None — принять
+    validate: Optional[Callable[[str], Optional[str]]] = None
     # Превращение значения кнопки в итоговое (например, «Подтверждаю» → прежнее число)
     resolve: Optional[Callable[[Value, dict], Value]] = None
 
@@ -227,6 +229,15 @@ def parse_answer(q: Question, text: str) -> Value:
     text = (text or "").strip()
     if not text:
         raise ParseError("Пустой ответ")
+    value = _parse_answer(q, text)
+    if q.validate is not None and isinstance(value, str) and value == text:
+        problem = q.validate(text)
+        if problem:
+            raise ParseError(problem)
+    return value
+
+
+def _parse_answer(q: Question, text: str) -> Value:
     if q.kind == "choice":
         value = match_choice(text, q.choices)
         if value is None:

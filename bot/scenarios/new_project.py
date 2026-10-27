@@ -30,6 +30,27 @@ SIMPLIFIED_QUOTE = "Simplified Quote №"
 WANTS_QUOTE = "_simplified_quote"
 
 
+_REGION_WORDS = ("област", "обл.", "край", "район", "республик", "округ")
+_COMMENT_WORDS = ("возможно", "будет", "так как", "уточн", "но ", "пока ", "примерно")
+MAX_ADDRESS_LEN = 80
+
+
+def check_city(text: str) -> str | None:
+    """Регион вместо города — переспросить."""
+    if any(w in text.lower() for w in _REGION_WORDS):
+        return "Это регион. Напиши город — например, Всеволожск."
+    return None
+
+
+def check_address(text: str) -> str | None:
+    """Только адрес, без пояснений: длинный текст или слова-оговорки — переспросить."""
+    low = f" {text.lower()} "
+    if len(text) > MAX_ADDRESS_LEN or any(w in low for w in _COMMENT_WORDS):
+        return ("Здесь только адрес — улица, дом, корпус. "
+                "Пояснения напиши потом в «Обновить проект» → «Сообщить новость».")
+    return None
+
+
 def materials_prompt(a: dict) -> str:
     """Все материалы — одним экраном; документы бюро — только если AW заложен бюро (или ответа нет)."""
     items = ["визуализации", "планировки", "твоя презентация для клиента"]
@@ -131,6 +152,7 @@ PHASE_1 = (
         kind="choice",
         choices_fn=lambda a: CITIES.get(a.get("Country"), ()) + ((OTHER_CITY, DETAIL),),
         detail_prompt="Напиши город.",
+        validate=check_city,
         ask_if=lambda a: a.get("Object Location") == LOC_OTHER,
     ),
     Question(
@@ -138,6 +160,7 @@ PHASE_1 = (
         label="Адрес",
         prompt="Адрес объекта?",
         hint="Улица, дом, корпус",
+        validate=check_address,
         optional=True,
         missing_label="не указан",
     ),
@@ -418,12 +441,25 @@ def exw(pl) -> int:
 
 
 def location(a: dict) -> dict:
-    """Country/City для Payload: с кнопки Москва/Петербург или из ответов «Другое»."""
+    """Country/City для Payload: с кнопки Москва/Петербург или из ответов «Другое».
+    Город в Projects — латиницей (описание поля City): «Всеволожск» → «Vsevolozhsk»."""
     loc = a.get("Object Location")
     if loc in LOCATIONS:
         country, city = LOCATIONS[loc]
         return {"Country": country, "City": city}
-    return {k: a[k] for k in ("Country", "City") if k in a}
+    out = {k: a[k] for k in ("Country", "City") if k in a}
+    if out.get("City"):
+        out["City"] = latin(str(out["City"]))
+    return out
+
+
+def latin(text: str) -> str:
+    """Транслит кириллицы, каждое слово с заглавной; латиница остаётся как есть."""
+    from ..dedup import _TRANSLIT  # без цикла импортов
+    words = "".join(_TRANSLIT.get(ch.lower(), ch) if ch.lower() in _TRANSLIT else ch for ch in text).split()
+    return " ".join(w[:1].upper() + w[1:] for w in words)
+
+
 
 
 def specifier(a: dict) -> dict:

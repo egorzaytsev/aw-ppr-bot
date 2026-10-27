@@ -582,6 +582,9 @@ def handle_text(state: DialogState, text: str) -> Result:
     if state.awaiting == AWAIT_DETAIL:
         if not text.strip():
             return Result(state, [detail_screen(state)])
+        problem = q.validate(text.strip()) if q.validate else None
+        if problem:
+            return Result(state, [Screen(f"⚠️ {escape(problem)}"), detail_screen(state)])
         state.answers[q.key] = text.strip()
         return _advance(state)
     try:

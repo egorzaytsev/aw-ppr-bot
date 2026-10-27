@@ -823,3 +823,26 @@ def test_quote_number_for_simplified_project():
     p = engine.build_payload(r.state)
     assert p["Quotation / Proforma №"] == "QT-2026-77"
     assert p["Project Log"] == "Квотация по упрощённой схеме: № QT-2026-77"
+
+
+def test_address_without_comments_and_city_not_region():
+    from bot.scenarios.new_project import check_address, check_city, latin
+    medall = ("Левашовский проспект, 24. Возможно дополнение адреса, так как будет новое здание клиники. "
+              "Но локация не изменится - Петроградка, метро Чкаловская")
+    assert check_address(medall) and not check_address("ул. Лесная, 9, корп. 2")
+    assert check_city("Ленинградская область") and not check_city("Всеволожск")
+    assert latin("Всеволожск") == "Vsevolozhsk" and latin("Almaty") == "Almaty"
+    # В диалоге: адрес с пояснением — переспрос; регион вместо города — переспрос
+    r = engine.start(NEW_PROJECT.code)
+    st = r.state
+    st.answers.update({"End Client": "x", "Object Name": "y", "Object Part": "z", "Object Location": "other",
+                       "Country": "Russia"})
+    st.step = 6
+    r = engine.handle_text(st, medall)
+    assert r.state.step == 6 and "только адрес" in r.screens[0].text
+    st.step = 5
+    r = engine.handle_callback(st, CH + str(len(engine._current_q(st).choices) - 1))   # Другой город
+    r = engine.handle_text(r.state, "Ленинградская область")
+    assert "Это регион" in r.screens[0].text
+    r = engine.handle_text(r.state, "Всеволожск")
+    assert engine.build_payload(r.state)["City"] == "Vsevolozhsk"
