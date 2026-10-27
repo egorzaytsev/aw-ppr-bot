@@ -290,8 +290,8 @@ def gaps_for(project_fields: dict, ppr_status: str) -> tuple[list[str], dict]:
         need("Specifier")
         need("Lead Architect")  # ГАП в Projects отдельного поля нет — спрашиваем вместе с бюро
 
-    # Следующая фаза
-    if ppr_status == "registered":
+    # Следующая фаза; упрощённой схеме (до 30 000 €) предрегистрация не нужна — только фаза 1
+    if ppr_status == "registered" or f.get(Projects.PPR_TRACK) == "Simplified (<30k)":
         return keys, known
     missing_names = f.get(Projects.PPR_MISSING) or ""
     if not missing_names:

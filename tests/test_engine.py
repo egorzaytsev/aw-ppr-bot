@@ -846,3 +846,12 @@ def test_address_without_comments_and_city_not_region():
     assert "Это регион" in r.screens[0].text
     r = engine.handle_text(r.state, "Всеволожск")
     assert engine.build_payload(r.state)["City"] == "Vsevolozhsk"
+
+
+def test_fill_simplified_asks_only_phase1():
+    from bot.airtable_ids import Projects as P
+    from bot.scenarios.update_project import gaps_for
+    fields = {P.END_CLIENT: ["c"], P.OBJECT_NAME: "o", P.OBJECT_PART: "p", P.COUNTRY: "Russia", P.CITY: "Moscow",
+              P.OBJECT_ADDRESS: "a", P.PROJECT_STAGE: "Concept", P.SPECIFIER: ["s"], P.EXW_POTENTIAL: 9000,
+              P.AW_ALTERNATIVES: "No — AW only", P.PPR_TRACK: "Simplified (<30k)"}
+    assert gaps_for(fields, "notified")[0] == ["AW Origin"]
