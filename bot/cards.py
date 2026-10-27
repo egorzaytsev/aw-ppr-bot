@@ -83,6 +83,10 @@ def header(project: dict, dealer: str, dealer_name: str, title: str = "✅ За�
     status_text = f" · статус {STATUS_RU[status]}" if status else ""
     lines.append(f"👤 {escape(dealer_name)}{status_text}")
     lines += others_line(project, dealer, status)
+    expiry = project.get(Projects.STATUS_EXPIRY)
+    if status in ("pre_registered", "registered") and expiry:
+        d = str(expiry)[:10]
+        lines.append(f"⏳ Статус действует до {d[8:10]}.{d[5:7]}.{d[:4]}")
     lines.append(SEPARATOR)
     return lines
 

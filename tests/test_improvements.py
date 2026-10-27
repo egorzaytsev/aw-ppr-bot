@@ -118,3 +118,47 @@ def test_same_alert_at_most_once_per_hour():
     assert h.drain(t0 + timedelta(minutes=30)) is None             # тот же текст — молчим час
     h.queue.append((t0, "Необработанная ошибка — AttributeError: x"))
     assert h.drain(t0 + timedelta(minutes=61)) is not None
+
+
+def test_upgrade_resets_status_date_and_card_shows_expiry():
+    from bot import cards
+    from bot.airtable_ids import Projects as P
+    from bot.decisions import plan
+    reg = {R.DECISION: "Accept — merge into Target Project", R.REQUEST_TYPE: "Upgrade — Pre-registration",
+           R.REG_STATUS: "Pre-registration", R.SUBMITTED_BY: ["recM"], R.DEALER: ["recC"],
+           R.TARGET_PROJECT: ["recP"], R.DEALER_PROJECT_NAME: "X", R.PAYLOAD: "{}"}
+    full = {P.NAME: "X", P.EXW_POTENTIAL: 45000, P.EXPECTED_ORDER_DATE: "2027-03-01", P.OBJECT_ADDRESS: "a",
+            P.SPECIFIER: ["s"], P.CONTACT_LEVEL: "Verifiable (email/contact)", P.AW_ALTERNATIVES: "No — AW only",
+            P.PARALLEL_REGISTRATIONS: "нет", P.DOSSIER_FILES: [{"id": "f"}], P.NOTIFIED: ["recM"],
+            P.STATUS_CONFIRMED: "2026-01-01"}
+    pl = plan(reg, full)
+    assert pl.project_updates[P.PRE_REGISTERED] == ["recM"] and pl.project_updates[P.NOTIFIED] == []
+    assert pl.project_updates[P.STATUS_CONFIRMED] == "__today__"   # новый статус — новый срок
+    card = cards.accept_card({**full, P.NOTIFIED: [], P.PRE_REGISTERED: ["recM"], P.STATUS_EXPIRY: "2026-11-27"},
+                             "recM", "STATIO", {}, False)
+    assert "⏳ Статус действует до 27.11.2026" in card
+
+
+def test_offer_upgrade_only_when_next_step_complete():
+    from bot.airtable_ids import Projects as P
+    app = SimpleNamespace(bot=Bot(), bot_data={})
+    ready = {P.NAME: "Raiffeisen Private", P.PPR_REF: "AW-26-0094", P.NOTIFIED: ["recM"], P.PPR_TRACK: "Full"}
+    asyncio.run(main._offer_upgrade(app, "1", ready, "recP", "recM"))
+    assert "Условия для предрегистрации выполнены</b> · AW-26-0094 · Raiffeisen Private" in app.bot.sent[0][1]
+    asyncio.run(main._offer_upgrade(app, "1", dict(ready, **{P.PPR_NEXT_MISSING: "Dossier Files;"}), "recP", "recM"))
+    asyncio.run(main._offer_upgrade(app, "1", dict(ready, **{P.REGISTERED: ["recX"]}), "recP", "recM"))
+    assert len(app.bot.sent) == 1
+    pre = {**ready, P.NOTIFIED: [], P.PRE_REGISTERED: ["recM"]}
+    asyncio.run(main._offer_upgrade(app, "1", pre, "recP", "recM"))
+    assert "Условия для регистрации выполнены" in app.bot.sent[1][1]
+
+
+def test_reg_status_event_non_status_just_consumed():
+    updates = []
+    repo = SimpleNamespace(update_registration=lambda rid, f: updates.append((rid, f)))
+    app = SimpleNamespace(bot=Bot(), bot_data={"repo": repo, "admin_chat_id": "1"})
+    asyncio.run(main._handle_reg_status_event(app, "recR", {R.REG_STATUS: "PENDING"}))
+    assert updates == [("recR", {R.BOT_REG_STATUS: "PENDING"})] and app.bot.sent == []
+    asyncio.run(main._handle_reg_status_event(app, "recR", {R.REG_STATUS: "Pre-registration",
+                                                            R.DEALER_PROJECT_NAME: "X"}))
+    assert "нет Target Project" in app.bot.sent[0][1]

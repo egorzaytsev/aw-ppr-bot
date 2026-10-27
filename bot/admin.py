@@ -17,10 +17,11 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from . import dedup, routing
+from .cards import dealer_status
 from .decisions import plan as decision_plan
 from .scenarios.base import describe_items, format_value
 from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
-from .airtable_ids import Decision, Registrations
+from .airtable_ids import Decision, Projects, Registrations
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +39,10 @@ ACTION_ASK = "ask"
 ACTION_NAME = "name"
 # Принять с комментарием: сначала текст, потом обычный выбор проекта
 ACTION_ACCEPT_NOTE = "accn"
+# Повышение статуса без заявки: ad:up:<проект>:<менеджер>:pre|reg; список /upgrade и выбор пары
+ACTION_UP, ACTION_UP_NO, ACTION_UP_LIST, ACTION_UP_PICK = "up", "upno", "upl", "ups"
+UPGRADE_PAGE = 8
+_TARGET_RU = {"pre": "предрегистрацию", "reg": "регистрацию"}
 UPGRADE_REQUESTS = {"New — Pre-registration", "New — Registration",
                     "Upgrade — Pre-registration", "Upgrade — Registration"}
 
@@ -74,6 +79,61 @@ async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _pending(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
     return ctx.bot_data.setdefault("admin_pending", {})
+
+
+def upgrade_markup(project_id: str, person_id: str, target: str) -> InlineKeyboardMarkup:
+    what = "предрегистрации" if target == "pre" else "регистрации"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"⬆️ Повысить до {what}", callback_data=f"{CB_ADMIN}{ACTION_UP}:{project_id}:{person_id}:{target}")],
+        [InlineKeyboardButton("Пока оставить", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")],
+    ])
+
+
+async def _upgrade_pairs(ctx: ContextTypes.DEFAULT_TYPE) -> list[tuple]:
+    """(проект, менеджер, статус, подпись) — кого можно повысить: уведомление / предрегистрация, не Simplified."""
+    repo = ctx.bot_data["repo"]
+    names: dict = ctx.bot_data.setdefault("person_names", {})
+    out = []
+    for r in await asyncio.to_thread(repo.projects_with_managers):
+        f = r["fields"]
+        if f.get(Projects.PPR_TRACK) == "Simplified (<30k)":
+            continue
+        ref, pname = f.get(Projects.PPR_REF) or "", (f.get(Projects.NAME) or "")[:24]
+        rows = [(p, "pre") for p in f.get(Projects.PRE_REGISTERED) or []] if not f.get(Projects.REGISTERED) else []
+        rows += [(p, "notified") for p in f.get(Projects.NOTIFIED) or []]
+        for person, status in rows:
+            if person not in names:
+                names[person] = (await asyncio.to_thread(repo.person_name, person)) or person
+            short = names[person].split()[0] if names[person] else "?"
+            label = f"{ref} · {pname} · {short} · {'предрег.' if status == 'pre' else 'увед.'}"
+            out.append((r["id"], person, status, label))
+    return out
+
+
+async def cmd_upgrade(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/upgrade — повысить менеджера в проекте: проект → статус → проверка → перестановка и карточка дилеру."""
+    if not is_admin(update, ctx):
+        return
+    await _show_upgrade_list(update.effective_chat, ctx, 0)
+
+
+async def _show_upgrade_list(chat, ctx: ContextTypes.DEFAULT_TYPE, page: int) -> None:
+    pairs = await _upgrade_pairs(ctx)
+    if not pairs:
+        await chat.send_message("🛠 Повышать некого: нет менеджеров в уведомлении или предрегистрации.")
+        return
+    pages = (len(pairs) + UPGRADE_PAGE - 1) // UPGRADE_PAGE
+    page = max(0, min(page, pages - 1))
+    rows = [[InlineKeyboardButton(label[:60], callback_data=f"{CB_ADMIN}{ACTION_UP_PICK}:{pid}:{person}")]
+            for pid, person, _, label in pairs[page * UPGRADE_PAGE:(page + 1) * UPGRADE_PAGE]]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("← Назад", callback_data=f"{CB_ADMIN}{ACTION_UP_LIST}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton("Дальше →", callback_data=f"{CB_ADMIN}{ACTION_UP_LIST}:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    await chat.send_message(f"🛠 Кого повысить? ({page + 1}/{pages})", reply_markup=InlineKeyboardMarkup(rows))
 
 
 def ask_markup(reg_id: str) -> InlineKeyboardMarkup:
@@ -365,6 +425,36 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     if action == ACTION_CANCEL:
         await drop_pending(update, ctx)
         await chat.send_message("🛠 Отменено.")
+        return
+
+    # Повышение статуса без заявки — по проекту и менеджеру, не по записи Inbox
+    if action == ACTION_UP_NO:
+        await chat.send_message("🛠 Оставил как есть. Повысить позже — /upgrade.")
+        return
+    if action == ACTION_UP_LIST:
+        await _show_upgrade_list(chat, ctx, int(parts[0]) if parts and parts[0].isdigit() else 0)
+        return
+    if action == ACTION_UP_PICK and len(parts) >= 2:
+        project = await asyncio.to_thread(repo.project_fields, parts[0])
+        status = dealer_status(project, parts[1])
+        targets = ["pre", "reg"] if status == "notified" else ["reg"] if status == "pre_registered" else []
+        if project.get(Projects.REGISTERED):
+            targets = [t for t in targets if t != "reg"]
+        if not targets:
+            await chat.send_message("🛠 Повышать некуда: статус уже максимальный или регистрация занята.")
+            return
+        rows = [[InlineKeyboardButton(f"⬆️ На {_TARGET_RU[t]}",
+                                      callback_data=f"{CB_ADMIN}{ACTION_UP}:{parts[0]}:{parts[1]}:{t}")] for t in targets]
+        rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")])
+        missing = project.get(Projects.PPR_NEXT_MISSING) or ""
+        hint = f"\nДля следующего этапа не хватает: {escape(missing)}" if missing else ""
+        await chat.send_message(f"🛠 {escape(project.get(Projects.PPR_REF) or '')} · "
+                                f"{escape(project.get(Projects.NAME) or '')}: на какой статус?{hint}",
+                                reply_markup=InlineKeyboardMarkup(rows))
+        return
+    if action == ACTION_UP and len(parts) >= 3 and parts[2] in _TARGET_RU:
+        who = routing.who_by_chat(ctx.bot_data, chat.id)
+        await ctx.bot_data["upgrade_status"](ctx.application, parts[0], parts[1], parts[2], who)
         return
 
     try:

@@ -465,7 +465,10 @@ def plan(reg: dict, project: dict | None) -> Plan:
         if dealer in notified:
             updates[Projects.NOTIFIED] = [c for c in notified if c != dealer]
 
-    if status in (PPR_PRE, PPR_REG) and _empty(project.get(Projects.STATUS_CONFIRMED)):
+    # Новый статус (дилер впервые в этом поле) — срок отсчитывается заново с сегодняшнего дня
+    entered = (status == PPR_PRE and dealer not in (project.get(Projects.PRE_REGISTERED) or [])) or \
+        (status == PPR_REG and dealer not in (project.get(Projects.REGISTERED) or []))
+    if status in (PPR_PRE, PPR_REG) and (entered or _empty(project.get(Projects.STATUS_CONFIRMED))):
         updates[Projects.STATUS_CONFIRMED] = "__today__"  # дату подставит apply_plan
 
     # Ответ дилеру — без имён других партнёров

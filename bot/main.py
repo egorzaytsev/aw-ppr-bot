@@ -28,7 +28,7 @@ from telegram.ext import (
 )
 
 from . import admin, alerts, cards, dedup, engine, phrases, reminders, routing
-from .airtable_ids import Decision, People, Projects, Registrations, RequestType
+from .airtable_ids import Decision, People, Projects, Registrations, RegStatus, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
     PPR_NOTIFIED, PPR_PRE_REGISTERED, PPR_REGISTERED, AirtableRepo, DealerProject, Person,
@@ -943,133 +943,235 @@ def _admin_summary(reg: dict, pl, project_name: str, created: bool, dealer: str,
 
 async def _process_decisions(app: Application) -> None:
     repo: AirtableRepo = app.bot_data["repo"]
+    for rec in await asyncio.to_thread(repo.decisions_to_process):
+        await _handle_registration(app, rec["id"], rec["fields"])
+    for rec in await asyncio.to_thread(repo.reg_status_events):
+        await _handle_reg_status_event(app, rec["id"], rec["fields"])
+
+
+# Reg Status → (Request Type для плана, ключ статуса менеджера в проекте)
+STATUS_EVENTS = {
+    RegStatus.NOTIFICATION: (RequestType.NEW_NOTIFICATION, PPR_NOTIFIED),
+    RegStatus.PRE_REGISTRATION: (RequestType.UPGRADE_PRE_REGISTRATION, PPR_PRE_REGISTERED),
+    RegStatus.REGISTRATION: (RequestType.UPGRADE_REGISTRATION, PPR_REGISTERED),
+}
+UPGRADE_TARGETS = {"pre": RegStatus.PRE_REGISTRATION, "reg": RegStatus.REGISTRATION}
+
+
+def _manager_status(project: dict, person: str) -> str | None:
+    return cards.dealer_status(project, person)
+
+
+async def _handle_reg_status_event(app: Application, rec_id: str, reg: dict) -> None:
+    """Reg Status сменили руками (в Airtable) — это событие, независимо от Request Type и Processed."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    status = reg.get(Registrations.REG_STATUS)
+    consume = {Registrations.BOT_REG_STATUS: status}
+    name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+    target = reg.get(Registrations.TARGET_PROJECT) or []
+    managers = reg.get(Registrations.SUBMITTED_BY) or []
+    admin_chat = app.bot_data.get("admin_chat_id")
+    if status not in STATUS_EVENTS:
+        await asyncio.to_thread(repo.update_registration, rec_id, consume)
+        if status in (RegStatus.DECLINED, "Cancelled") and admin_chat:
+            await _send_html(app.bot, admin_chat, f"🛠 ℹ️ Reg Status → {escape(status)} по «{escape(name)}». "
+                             "Дилеру не писал: отказ с текстом — Decision → Decline и Decision Note.")
+        return
+    if not target or not managers:
+        await asyncio.to_thread(repo.update_registration, rec_id, consume)
+        if admin_chat:
+            why = "нет Target Project" if not target else "нет Submitted By"
+            await _send_html(app.bot, admin_chat, f"🛠 ⚠️ Reg Status → {escape(status)} по «{escape(name)}», "
+                             f"но {why} — статус ставить некуда.")
+        return
+    request_type, key = STATUS_EVENTS[status]
+    project = await asyncio.to_thread(repo.project_fields, target[0])
+    if _manager_status(project, managers[0]) == key:
+        await asyncio.to_thread(repo.update_registration, rec_id, consume)  # уже стоит — без повторной карточки
+        return
+    synthetic = dict(reg, **{Registrations.DECISION: Decision.ACCEPT_MERGE, Registrations.REQUEST_TYPE: request_type,
+                             Registrations.DECISION_NOTE: ""})
+    await _handle_registration(app, rec_id, synthetic, event=True)
+
+
+async def upgrade_status(app: Application, project_id: str, person_id: str, target: str,
+                         who: str | None = None) -> None:
+    """Повысить менеджера в проекте без заявки дилера (кнопка «Повысить», /upgrade)."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    project = await asyncio.to_thread(repo.project_fields, project_id)
+    status = UPGRADE_TARGETS[target]
+    synthetic = {
+        Registrations.DECISION: Decision.ACCEPT_MERGE, Registrations.REQUEST_TYPE: STATUS_EVENTS[status][0],
+        Registrations.REG_STATUS: status, Registrations.SUBMITTED_BY: [person_id],
+        Registrations.DEALER: await asyncio.to_thread(repo.person_companies, person_id),
+        Registrations.TARGET_PROJECT: [project_id],
+        Registrations.DEALER_PROJECT_NAME: project.get(Projects.NAME) or "", Registrations.PAYLOAD: "{}",
+    }
+    async with app.bot_data.setdefault("decisions_lock", asyncio.Lock()):
+        await _handle_registration(app, None, synthetic, event=True, who=who)
+
+
+async def _offer_upgrade(app: Application, admin_chat, fresh: dict, project_id: str, person_id: str) -> None:
+    """После «Дополнить»: условия следующего этапа выполнены — предложить проверяющему повысить."""
+    if not admin_chat or fresh.get(Projects.PPR_NEXT_MISSING) or fresh.get(Projects.REGISTERED) \
+            or fresh.get(Projects.PPR_TRACK) == SIMPLIFIED:
+        return
+    status = _manager_status(fresh, person_id)
+    target = {PPR_NOTIFIED: "pre", PPR_PRE_REGISTERED: "reg"}.get(status)
+    if not target:
+        return
+    what = "предрегистрации" if target == "pre" else "регистрации"
+    text = (f"✔️ <b>Условия для {what} выполнены</b> · {escape(fresh.get(Projects.PPR_REF) or '')} · "
+            f"{escape(fresh.get(Projects.NAME) or '')}")
+    await _send_html(app.bot, admin_chat, text, admin.upgrade_markup(project_id, person_id, target))
+
+
+async def _handle_registration(app: Application, rec_id: str | None, reg: dict, event: bool = False,
+                               who: str | None = None) -> None:
+    """Решение по заявке. event — смена Reg Status или повышение без заявки (rec_id None):
+    Decision и Bot Processed не трогаем, отмечаем только Bot Reg Status."""
+    repo: AirtableRepo = app.bot_data["repo"]
     created_projects: set = app.bot_data.setdefault("created_projects", set())
     decided_by: dict = app.bot_data.setdefault("decided_by", {})
-    for rec in await asyncio.to_thread(repo.decisions_to_process):
-        reg = rec["fields"]
-        # Полный итог — тому, кто решал (по кнопке), иначе по маршруту; Егору при решении Лолы — строка
-        routed = routing.resolve(app.bot_data, routing.route(
-            await asyncio.to_thread(repo.company_types, reg.get(Registrations.DEALER) or [])))[0]
-        decider, admin_chat = routing.resolve(app.bot_data, decided_by.get(rec["id"]) or routed)
-        target = reg.get(Registrations.TARGET_PROJECT) or []
-        project = await asyncio.to_thread(repo.project_fields, target[0]) if target else None
-        pl = decision_plan(reg, project)
-        if not pl.registration_updates:
-            continue
-        dealers = reg.get(Registrations.DEALER) or []
-        dealer_name = ", ".join([await asyncio.to_thread(repo.company_name, c) for c in dealers]) or "дилер"
-        company_notes: list[str] = []
-        new_specifier = None
-        if pl.project_updates or pl.links:
-            updates = {
-                k: (datetime.now(VALENCIA).date().isoformat() if v == "__today__" else v)
-                for k, v in pl.project_updates.items()
-            }
-            # Связи с Companies: найти или создать по названию из заявки
-            country = (project or {}).get(Projects.COUNTRY) or updates.get(Projects.COUNTRY)
-            for link in pl.links:
-                if link.get("company_id"):
-                    cid, created = link["company_id"], False
-                else:
-                    cid, created = await asyncio.to_thread(
-                        repo.find_or_create_company, link["name"], link["type"], country)
-                if link.get("append"):
-                    updates[link["field"]] = list((project or {}).get(link["field"]) or []) + [cid]
-                else:
-                    updates[link["field"]] = [cid]
-                cname = await asyncio.to_thread(repo.company_name, cid)
-                company_notes.append(f"{cname} ({LINK_ROLE[link['field']]}{', новая' if created else ''})")
-            new_specifier = updates.get(Projects.SPECIFIER)
-            await asyncio.to_thread(repo.update_project, target[0], updates)
-        # ГАП — человек бюро в People и участник проекта
-        if target and not pl.blocked and ((reg.get(Registrations.DECISION) or "").startswith("Accept")
-                                          or pl.declined_upgrade):
-            note = await _link_architect(repo, reg, project or {}, target[0], new_specifier, dealers)
-            if note:
-                company_notes.append(note)
-        if pl.log_lines and target:
-            header = f"{datetime.now(VALENCIA):%d.%m.%Y} · {dealer_name} (заявка бота):"
-            await asyncio.to_thread(repo.append_project_log, target[0],
-                                    (project or {}).get(Projects.PROJECT_LOG), header, pl.log_lines)
-        # Карточка дилеру — по свежему состоянию проекта после записи
-        accepted = ((reg.get(Registrations.DECISION) or "").startswith("Accept") or pl.declined_upgrade) \
-            and target and not pl.blocked
-        card = None
-        if accepted:
-            fresh = await asyncio.to_thread(repo.project_fields, target[0])
-            # Статус на проекте — у менеджера, отправившего заявку; в тексте — компания
-            managers = reg.get(Registrations.SUBMITTED_BY) or []
-            dealer_id = managers[0] if managers else ""
-            before = set((project or {}).get(Projects.NOTIFIED) or []) | set(
-                (project or {}).get(Projects.PRE_REGISTERED) or []) | set((project or {}).get(Projects.REGISTERED) or [])
-            note = (reg.get(Registrations.DECISION_NOTE) or "").strip()
-            if pl.declined_upgrade:
-                asked = "регистрация" if "Registration" in (reg.get(Registrations.REQUEST_TYPE) or "") \
-                    and "Pre" not in (reg.get(Registrations.REQUEST_TYPE) or "") else "предрегистрация"
-                card = cards.declined_upgrade_card(fresh, dealer_id, dealer_name, payload_of(reg), asked,
-                                                   note, dealer_id not in before)
-            elif pl.status_label:
-                card = cards.accept_card(fresh, dealer_id, dealer_name, payload_of(reg), dealer_id not in before, note)
+    # Полный итог — тому, кто решал (по кнопке), иначе по маршруту; Егору при решении Лолы — строка
+    routed = routing.resolve(app.bot_data, routing.route(
+        await asyncio.to_thread(repo.company_types, reg.get(Registrations.DEALER) or [])))[0]
+    decider, admin_chat = routing.resolve(app.bot_data, who or decided_by.get(rec_id) or routed)
+    target = reg.get(Registrations.TARGET_PROJECT) or []
+    project = await asyncio.to_thread(repo.project_fields, target[0]) if target else None
+    pl = decision_plan(reg, project)
+    if not pl.registration_updates:
+        return
+    if event:
+        # Событие не закрывает заявку и не меняет её Decision: только «увидел этот Reg Status»
+        for k in (Registrations.BOT_PROCESSED, Registrations.REG_STATUS):
+            pl.registration_updates.pop(k, None)
+        if pl.admin_text:
+            if not rec_id:  # повышение без заявки: кнопок «Запросить у дилера» нет — заявки нет
+                pl.admin_text = pl.admin_text.replace("🛠 ⚠️ Заявка", "🛠 ⚠️ Повышение").replace(
+                    "\nЗапросить у дилера — кнопкой ниже: готовый текст или свой.", "")
+            pl.admin_text += "\nИсправь данные и поставь статус снова (Reg Status или /upgrade)."
+    final_status = pl.registration_updates.get(Registrations.REG_STATUS, reg.get(Registrations.REG_STATUS))
+    if final_status:
+        pl.registration_updates[Registrations.BOT_REG_STATUS] = final_status
+    dealers = reg.get(Registrations.DEALER) or []
+    dealer_name = ", ".join([await asyncio.to_thread(repo.company_name, c) for c in dealers]) or "дилер"
+    company_notes: list[str] = []
+    new_specifier = None
+    if pl.project_updates or pl.links:
+        updates = {
+            k: (datetime.now(VALENCIA).date().isoformat() if v == "__today__" else v)
+            for k, v in pl.project_updates.items()
+        }
+        # Связи с Companies: найти или создать по названию из заявки
+        country = (project or {}).get(Projects.COUNTRY) or updates.get(Projects.COUNTRY)
+        for link in pl.links:
+            if link.get("company_id"):
+                cid, created = link["company_id"], False
             else:
-                rtype = reg.get(Registrations.REQUEST_TYPE)
-                body = {
-                    RequestType.UPDATE_WON: "📝 Информацию приняли — итог по проекту подтвердит Егор.",
-                    RequestType.UPDATE_LOST: "📝 Информацию приняли — итог по проекту подтвердит Егор.",
-                    RequestType.QUOTE_SIMPLIFIED: (
-                        f"🧾 Квотация № {escape(str(payload_of(reg).get('Quotation / Proforma №')))} зафиксирована — "
-                        "защита действует на срок квотации."
-                        if payload_of(reg).get("Quotation / Proforma №") else "📝 Спецификацию передали на квотацию."),
-                    RequestType.UPDATE_NEWS: "📰 Новость записали в историю проекта.",
-                }.get(rtype, "📝 Информацию внесли в проект.")
-                card = cards.update_card(fresh, dealer_id, dealer_name, body, note)
-            if pl.dealer_text:  # ответ на запрос принимается молча — у него dealer_text нет
-                pl.dealer_text = card
-        # Финальное решение закрывает заявку: Processed + время (запрос информации — ещё нет)
-        mark = str(pl.registration_updates.get(Registrations.BOT_PROCESSED) or "")
-        if mark.startswith("done:") and mark != f"done:{Decision.NEED_INFO}":
-            pl.registration_updates[Registrations.PROCESSED] = True
-            pl.registration_updates[Registrations.PROCESSED_AT] = datetime.now(timezone.utc).isoformat()
-        # Отмечаем до рассылки — чтобы сбой отправки не повторил изменения
-        await asyncio.to_thread(repo.update_registration, rec["id"], pl.registration_updates)
-        log.info("Решение по %s: %s", rec["id"], pl.registration_updates.get(Registrations.BOT_PROCESSED))
+                cid, created = await asyncio.to_thread(
+                    repo.find_or_create_company, link["name"], link["type"], country)
+            if link.get("append"):
+                updates[link["field"]] = list((project or {}).get(link["field"]) or []) + [cid]
+            else:
+                updates[link["field"]] = [cid]
+            cname = await asyncio.to_thread(repo.company_name, cid)
+            company_notes.append(f"{cname} ({LINK_ROLE[link['field']]}{', новая' if created else ''})")
+        new_specifier = updates.get(Projects.SPECIFIER)
+        await asyncio.to_thread(repo.update_project, target[0], updates)
+    # ГАП — человек бюро в People и участник проекта
+    if target and not pl.blocked and ((reg.get(Registrations.DECISION) or "").startswith("Accept")
+                                      or pl.declined_upgrade):
+        note = await _link_architect(repo, reg, project or {}, target[0], new_specifier, dealers)
+        if note:
+            company_notes.append(note)
+    if pl.log_lines and target:
+        header = f"{datetime.now(VALENCIA):%d.%m.%Y} · {dealer_name} (заявка бота):"
+        await asyncio.to_thread(repo.append_project_log, target[0],
+                                (project or {}).get(Projects.PROJECT_LOG), header, pl.log_lines)
+    # Карточка дилеру — по свежему состоянию проекта после записи
+    accepted = ((reg.get(Registrations.DECISION) or "").startswith("Accept") or pl.declined_upgrade) \
+        and target and not pl.blocked
+    card = None
+    if accepted:
+        fresh = await asyncio.to_thread(repo.project_fields, target[0])
+        # Статус на проекте — у менеджера, отправившего заявку; в тексте — компания
+        managers = reg.get(Registrations.SUBMITTED_BY) or []
+        dealer_id = managers[0] if managers else ""
+        before = set((project or {}).get(Projects.NOTIFIED) or []) | set(
+            (project or {}).get(Projects.PRE_REGISTERED) or []) | set((project or {}).get(Projects.REGISTERED) or [])
+        note = (reg.get(Registrations.DECISION_NOTE) or "").strip()
+        if pl.declined_upgrade:
+            asked = "регистрация" if "Registration" in (reg.get(Registrations.REQUEST_TYPE) or "") \
+                and "Pre" not in (reg.get(Registrations.REQUEST_TYPE) or "") else "предрегистрация"
+            card = cards.declined_upgrade_card(fresh, dealer_id, dealer_name, payload_of(reg), asked,
+                                               note, dealer_id not in before)
+        elif pl.status_label:
+            card = cards.accept_card(fresh, dealer_id, dealer_name, payload_of(reg), dealer_id not in before, note)
+        else:
+            rtype = reg.get(Registrations.REQUEST_TYPE)
+            body = {
+                RequestType.UPDATE_WON: "📝 Информацию приняли — итог по проекту подтвердит Егор.",
+                RequestType.UPDATE_LOST: "📝 Информацию приняли — итог по проекту подтвердит Егор.",
+                RequestType.QUOTE_SIMPLIFIED: (
+                    f"🧾 Квотация № {escape(str(payload_of(reg).get('Quotation / Proforma №')))} зафиксирована — "
+                    "защита действует на срок квотации."
+                    if payload_of(reg).get("Quotation / Proforma №") else "📝 Спецификацию передали на квотацию."),
+                RequestType.UPDATE_NEWS: "📰 Новость записали в историю проекта.",
+            }.get(rtype, "📝 Информацию внесли в проект.")
+            card = cards.update_card(fresh, dealer_id, dealer_name, body, note)
+        if pl.dealer_text:  # ответ на запрос принимается молча — у него dealer_text нет
+            pl.dealer_text = card
+        # «Дополнить» закрыл пропуски — предложить проверяющему следующий этап
+        if not event and reg.get(Registrations.REQUEST_TYPE) in RequestType.INFO_UPDATES and dealer_id:
+            await _offer_upgrade(app, admin_chat, fresh, target[0], dealer_id)
+    # Финальное решение закрывает заявку: Processed + время (запрос информации — ещё нет)
+    mark = str(pl.registration_updates.get(Registrations.BOT_PROCESSED) or "")
+    if not event and mark.startswith("done:") and mark != f"done:{Decision.NEED_INFO}":
+        pl.registration_updates[Registrations.PROCESSED] = True
+        pl.registration_updates[Registrations.PROCESSED_AT] = datetime.now(timezone.utc).isoformat()
+    # Отмечаем до рассылки — чтобы сбой отправки не повторил изменения
+    if rec_id:
+        await asyncio.to_thread(repo.update_registration, rec_id, pl.registration_updates)
+    log.info("Решение по %s (событие: %s): %s", rec_id, event, pl.registration_updates.get(Registrations.BOT_PROCESSED))
 
-        # Карточку решения видят все люди компании дилера, автор — первым
-        dealer_chats = await asyncio.to_thread(repo.chat_ids_for_people, reg.get(Registrations.SUBMITTED_BY) or [])
-        for chat in await asyncio.to_thread(repo.chat_ids_for_companies, dealers):
+    # Карточку решения видят все люди компании дилера, автор — первым
+    dealer_chats = await asyncio.to_thread(repo.chat_ids_for_people, reg.get(Registrations.SUBMITTED_BY) or [])
+    for chat in await asyncio.to_thread(repo.chat_ids_for_companies, dealers):
+        if chat not in dealer_chats:
+            dealer_chats.append(chat)
+    if pl.dealer_text:
+        markup = _markup([[("Ответить", f"{CB_REPLY}{rec_id}")]]) if pl.reply_button and rec_id else None
+        for chat in dealer_chats:
+            await _send_html(app.bot, chat, pl.dealer_text, markup)
+    if pl.broadcast_people and pl.broadcast_text:
+        open_btn = _markup([[("Открыть проект", f"{CB_PICK}{MODE_MY}:{target[0]}")]]) if target else None
+        for chat in await asyncio.to_thread(repo.chat_ids_for_people, pl.broadcast_people):
             if chat not in dealer_chats:
-                dealer_chats.append(chat)
-        if pl.dealer_text:
-            markup = _markup([[("Ответить", f"{CB_REPLY}{rec['id']}")]]) if pl.reply_button else None
-            for chat in dealer_chats:
-                await _send_html(app.bot, chat, pl.dealer_text, markup)
-        if pl.broadcast_people and pl.broadcast_text:
-            open_btn = _markup([[("Открыть проект", f"{CB_PICK}{MODE_MY}:{target[0]}")]]) if target else None
-            for chat in await asyncio.to_thread(repo.chat_ids_for_people, pl.broadcast_people):
-                if chat not in dealer_chats:
-                    await _send_html(app.bot, chat, pl.broadcast_text, open_btn)
-        if admin_chat:
-            if pl.admin_text:
-                await _send_html(app.bot, admin_chat, pl.admin_text,
-                                 admin.ask_markup(rec["id"]) if pl.ask_text else None)
-            elif card and pl.dealer_text:
-                created = target[0] in created_projects
-                created_projects.discard(target[0])
-                extra = (["🆕 Проект создан"] if created else []) + [escape(c) for c in pl.changes] + (
-                    ["🏢 Компании: " + escape(", ".join(company_notes))] if company_notes else [])
-                await _send_html(app.bot, admin_chat, cards.admin_copy(card, bool(dealer_chats), extra))
-            elif pl.dealer_text and not pl.blocked:
-                await _send_html(app.bot, admin_chat, _admin_summary(
-                    reg, pl, pl.project_name or "", False, dealer_name, bool(dealer_chats), [], None))
-        if not pl.blocked:
-            decided_by.pop(rec["id"], None)
-            other = routing.EGOR if decider != routing.EGOR else (routing.LOLA if routed == routing.LOLA else None)
-            other_chat = routing.chats(app.bot_data).get(other) if other else None
-            if other_chat and other_chat != admin_chat:
-                fresh_ref = ((await asyncio.to_thread(repo.project_fields, target[0])) if target else {}) or {}
-                await _send_html(app.bot, other_chat, routing.summary_line(
-                    decider, reg.get(Registrations.DECISION) or "", fresh_ref.get(Projects.PPR_REF) or "",
-                    fresh_ref.get(Projects.NAME) or reg.get(Registrations.DEALER_PROJECT_NAME) or "",
-                    pl.status_label or "", pl.declined_upgrade))
+                await _send_html(app.bot, chat, pl.broadcast_text, open_btn)
+    if admin_chat:
+        if pl.admin_text:
+            await _send_html(app.bot, admin_chat, pl.admin_text,
+                             admin.ask_markup(rec_id) if pl.ask_text and rec_id else None)
+        elif card and pl.dealer_text:
+            created = target[0] in created_projects
+            created_projects.discard(target[0])
+            extra = (["🆕 Проект создан"] if created else []) + [escape(c) for c in pl.changes] + (
+                ["🏢 Компании: " + escape(", ".join(company_notes))] if company_notes else [])
+            await _send_html(app.bot, admin_chat, cards.admin_copy(card, bool(dealer_chats), extra))
+        elif pl.dealer_text and not pl.blocked:
+            await _send_html(app.bot, admin_chat, _admin_summary(
+                reg, pl, pl.project_name or "", False, dealer_name, bool(dealer_chats), [], None))
+    if not pl.blocked:
+        decided_by.pop(rec_id, None)
+        other = routing.EGOR if decider != routing.EGOR else (routing.LOLA if routed == routing.LOLA else None)
+        other_chat = routing.chats(app.bot_data).get(other) if other else None
+        if other_chat and other_chat != admin_chat:
+            fresh_ref = ((await asyncio.to_thread(repo.project_fields, target[0])) if target else {}) or {}
+            await _send_html(app.bot, other_chat, routing.summary_line(
+                decider, reg.get(Registrations.DECISION) or "", fresh_ref.get(Projects.PPR_REF) or "",
+                fresh_ref.get(Projects.NAME) or reg.get(Registrations.DEALER_PROJECT_NAME) or "",
+                pl.status_label or "", pl.declined_upgrade))
 
 
 # ---------- напоминания ----------
@@ -1333,7 +1435,7 @@ async def _decisions_loop(app: Application) -> None:
 DEALER_COMMANDS = [BotCommand("start", "Начать"), BotCommand("new", "Новый проект"),
                    BotCommand("cancel", "Отменить заявку"), BotCommand("time", "Время напоминаний")]
 ADMIN_COMMANDS = [BotCommand("admin", "Админ-меню"), BotCommand("inbox", "Заявки на проверке"),
-                  BotCommand("reminder", "Напоминание сейчас")]
+                  BotCommand("reminder", "Напоминание сейчас"), BotCommand("upgrade", "Повысить статус")]
 
 
 async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1400,6 +1502,7 @@ def build_app() -> Application:
         app.bot_data["summary_day"] = now.date().isoformat()
     app.bot_data["base_id"] = settings.airtable_base_id
     app.bot_data["process_decisions"] = process_decisions
+    app.bot_data["upgrade_status"] = upgrade_status
     app.bot_data["preview_reminder"] = preview_reminder
 
     app.add_handler(TypeHandler(Update, log_update), group=-1)
@@ -1413,6 +1516,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("inbox", admin.cmd_inbox, filters=private))
     app.add_handler(CommandHandler("reminder", cmd_reminder, filters=private))
     app.add_handler(CommandHandler("admin", cmd_admin, filters=private))
+    app.add_handler(CommandHandler("upgrade", admin.cmd_upgrade, filters=private))
     app.add_handler(MessageHandler(private & (filters.VOICE | filters.AUDIO), on_voice))
     app.add_handler(MessageHandler(private & (filters.Document.ALL | filters.PHOTO), on_file))
     app.add_handler(MessageHandler(private & filters.TEXT & ~filters.COMMAND, on_text))

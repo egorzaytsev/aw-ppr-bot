@@ -501,6 +501,29 @@ class AirtableRepo:
             fields[Registrations.PROCESSED_AT] = datetime.now(timezone.utc).isoformat()
         self._registrations.update(reg_id, fields)
 
+    # ---------- события и повышение статуса ----------
+
+    def reg_status_events(self) -> list[dict]:
+        """Заявки, где Reg Status сменили, а бот этого ещё не обработал (Bot Reg Status другой)."""
+        formula = (f"AND({{{Registrations.REG_STATUS}}}!='', "
+                   f"{{{Registrations.REG_STATUS}}}!={{{Registrations.BOT_REG_STATUS}}})")
+        return self._registrations.all(formula=formula, use_field_ids=True)
+
+    def projects_with_managers(self) -> list[dict]:
+        """Живые проекты, где есть менеджеры в уведомлении или предрегистрации — для /upgrade."""
+        formula = (f"AND(OR(COUNTA({{{Projects.NOTIFIED}}})>0, COUNTA({{{Projects.PRE_REGISTERED}}})>0), "
+                   f"{{{Projects.STATUS}}}!='Won', {{{Projects.STATUS}}}!='Lost')")
+        return self._projects.all(formula=formula, use_field_ids=True,
+                                  fields=[Projects.NAME, Projects.PPR_REF, Projects.NOTIFIED, Projects.PRE_REGISTERED,
+                                          Projects.REGISTERED, Projects.PPR_TRACK],
+                                  sort=[Projects.PPR_REF])
+
+    def person_companies(self, person_id: str) -> list[str]:
+        try:
+            return self._people.get(person_id, use_field_ids=True)["fields"].get(People.COMPANY) or []
+        except Exception:
+            return []
+
     def clear_awaiting(self, reg_id: str) -> None:
         self._registrations.update(reg_id, {Registrations.BOT_PROCESSED: ""})
 

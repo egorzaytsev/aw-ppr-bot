@@ -89,6 +89,7 @@ class Registrations:
     QUOTE_NO = "fldrzhovqmXoGiEFp"
     QUOTE_VALID = "fldn9Rvq4Y5WufPwJ"
     PROCESSED = "fldQFFIL7xmiTZ12a"      # checkbox: заявка закрыта
+    BOT_REG_STATUS = "fldwvOjv1I3iwTiV5"  # Reg Status, который бот уже обработал (смена — событие)
     PROCESSED_AT = "fldQZsVVnaskL3BY9"
 
 
