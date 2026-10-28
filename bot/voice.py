@@ -14,12 +14,12 @@ class Transcriber:
         )
         self._model = model
 
-    async def transcribe(self, audio: bytes, filename: str = "voice.ogg") -> str:
-        resp = await self._client.post(
-            GROQ_URL,
-            files={"file": (filename, audio, "audio/ogg")},
-            data={"model": self._model, "language": "ru", "response_format": "json"},
-        )
+    async def transcribe(self, audio: bytes, filename: str = "voice.ogg", language: str | None = "ru") -> str:
+        """language=None — язык определяет сама модель (сбор Telegram: русский, испанский, английский)."""
+        data = {"model": self._model, "response_format": "json"}
+        if language:
+            data["language"] = language
+        resp = await self._client.post(GROQ_URL, files={"file": (filename, audio, "audio/ogg")}, data=data)
         resp.raise_for_status()
         return (resp.json().get("text") or "").strip()
 

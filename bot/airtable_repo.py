@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from pyairtable import Api
 
-from .airtable_ids import Companies, Decision, People, Projects, Registrations, RegStatus, RequestType
+from .airtable_ids import Buffer, Companies, Decision, People, Projects, Registrations, RegStatus, RequestType
 from .state import DialogState
 
 log = logging.getLogger(__name__)
@@ -84,6 +84,7 @@ class AirtableRepo:
         self._registrations = api.table(base_id, Registrations.TABLE)
         self._companies = api.table(base_id, Companies.TABLE)
         self._projects = api.table(base_id, Projects.TABLE)
+        self._buffer = api.table(base_id, Buffer.TABLE)
 
     # ---------- People ----------
 
@@ -156,6 +157,18 @@ class AirtableRepo:
             fields[Registrations.TARGET_PROJECT] = [target_project_id]
         record = self._registrations.create(fields)
         return record["id"]
+
+    # ---------- Буфер ----------
+
+    def buffer_has(self, key: str) -> bool:
+        return bool(self._buffer.all(formula=f"{{{Buffer.KEY}}}={_quote(key)}", max_records=1,
+                                     fields=[Buffer.KEY], use_field_ids=True))
+
+    def buffer_add(self, fields: dict) -> str:
+        return self._buffer.create(fields, typecast=True)["id"]
+
+    def buffer_attach(self, record_id: str, filename: str, content: bytes, content_type: str | None = None) -> None:
+        self._buffer.upload_attachment(record_id, Buffer.FILES, filename, content, content_type)
 
     def upload_attachment(
         self, record_id: str, filename: str, content: bytes, content_type: str | None = None

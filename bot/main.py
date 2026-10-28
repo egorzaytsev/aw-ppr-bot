@@ -38,6 +38,7 @@ from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, QUOTE, WON
 from .scenarios.new_project import SOLO_ARCHITECT
 from .scenarios.update_project import fill_preset
 from .slots import VALENCIA
+from .tg_collector import TelegramCollector
 from .voice import Transcriber
 
 log = logging.getLogger("aw-ppr-bot")
@@ -1475,13 +1476,19 @@ def build_app() -> Application:
             log.exception("Не удалось задать список команд")
         app.bot_data["decisions_task"] = asyncio.create_task(_decisions_loop(app))
         app.bot_data["alerts_task"] = asyncio.create_task(_alerts_loop(app))
+        if settings.collector_token:
+            collector = TelegramCollector(settings.collector_token, app.bot_data["repo"], transcriber)
+            app.bot_data["collector"] = collector
+            app.bot_data["collector_task"] = asyncio.create_task(collector.run())
         app.bot_data["reminders_task"] = asyncio.create_task(_reminders_loop(app))
 
     async def post_shutdown(app: Application) -> None:
-        for key in ("decisions_task", "reminders_task", "alerts_task"):
+        for key in ("decisions_task", "reminders_task", "alerts_task", "collector_task"):
             task = app.bot_data.get(key)
             if task:
                 task.cancel()
+        if app.bot_data.get("collector"):
+            await app.bot_data["collector"].aclose()
         await transcriber.aclose()
 
     app = (

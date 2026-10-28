@@ -101,6 +101,20 @@ class RegStatus:
     DECLINED = "Declined"
 
 
+class Buffer:
+    """Буфер: всё новое ждёт разбора Егора; в основную базу — только после одобрения."""
+    TABLE = "tblkAlRuU99WwYtKM"
+    WHAT = "fldSbtsh9PJiP53ou"
+    SOURCE = "fldwdgJaWQ3vDoj5T"      # Telegram / Письмо / Квотация / Проформа / Инвойс / Аудио
+    RECEIVED = "fld4rF7k13dGLIvKL"
+    PROJECT = "fldT3njOIwDoY7THg"
+    ESSENCE = "fldeoObFm1krSUePf"
+    SOURCE_REF = "fldmzsXCpq3w3KOhv"
+    STATUS = "fldNjTs2z5MhglbSo"      # Новое / Отложено
+    FILES = "fldXGqMVzFWurwhou"
+    KEY = "fldKohxc59eYlQHw0"          # tg:<chat>:<message> — защита от дублей
+
+
 class Decision:
     ACCEPT = "Accept"
     ACCEPT_MERGE = "Accept — merge into Target Project"

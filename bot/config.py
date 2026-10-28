@@ -33,6 +33,8 @@ class Settings:
     groq_api_key: str
     groq_model: str
     admin_chat_id: str | None
+    # Токен @hareworldbot — сбор Telegram для сводки CRM в Буфер; пусто — сбор выключен
+    collector_token: str | None
     log_level: str
 
 
@@ -45,5 +47,6 @@ def load_settings() -> Settings:
         groq_api_key=_required("GROQ_API_KEY"),
         groq_model=os.environ.get("GROQ_WHISPER_MODEL", "whisper-large-v3").strip(),
         admin_chat_id=os.environ.get("ADMIN_CHAT_ID", "").strip() or None,
+        collector_token=os.environ.get("HAREWORLD_BOT_TOKEN", "").strip() or None,
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip().upper(),
     )
