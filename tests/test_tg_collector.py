@@ -35,3 +35,12 @@ def test_poll_writes_once_and_confirms_offset():
     asyncio.run(c.poll_once())
     asyncio.run(c.poll_once())          # то же сообщение пришло снова (не подтверждено) — дубля нет
     assert len(added) == 1 and calls[:2] == [None, 101]
+
+
+def test_groq_filename_renames_telegram_voice():
+    from bot.voice import groq_filename
+    assert groq_filename("file_12.oga") == "file_12.ogg"
+    assert groq_filename("note.opus") == "note.ogg"
+    assert groq_filename("voice.ogg") == "voice.ogg"
+    assert groq_filename("track.MP3") == "track.MP3"
+    assert groq_filename("blob") == "blob.ogg"
