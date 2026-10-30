@@ -11,7 +11,7 @@ from dataclasses import replace
 from ..airtable_ids import Projects, RequestType
 from .base import DETAIL, Question, Scenario
 from .new_project import (
-    ORIGIN_BUREAU, ORIGIN_OWN, OWN_DESIGN, QUESTIONS, SOLO, STAGE_ARCHITECT_SELECTION, current_pl, exw, location,
+    NO_BUREAU, ORIGIN_BUREAU, ORIGIN_OWN, OWN_DESIGN, QUESTIONS, SOLO, STAGE_ARCHITECT_SELECTION, current_pl, exw, location,
     project_log,
     specifier,
 )
@@ -216,7 +216,7 @@ LOG_GAP_KEYS = ("Decision Maker Company", "Influencers", "Competing Dealers")
 def _ask_only(q: Question) -> Question:
     """Вопрос сценария «Новый проект», который задаётся, только если поле пустое в проекте."""
     if q.key == "AW Origin":
-        return replace(q, ask_if=lambda a: "AW Origin" in a.get("_ask", ()))
+        return replace(q, ask_if=lambda a: "AW Origin" in a.get("_ask", ()) and a.get("Specifier") != NO_BUREAU)
     if q.key == "Specifier":
         return replace(q, choices=q.choices + (("Бюро ещё не выбрано", NO_BUREAU_YET),),
                        ask_if=lambda a: "Specifier" in a.get("_ask", ()) and a.get("AW Origin") != ORIGIN_OWN)

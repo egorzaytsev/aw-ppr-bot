@@ -523,12 +523,24 @@ class AirtableRepo:
         return self._registrations.all(formula=formula, use_field_ids=True)
 
     def projects_with_managers(self) -> list[dict]:
-        """Живые проекты, где есть менеджеры в уведомлении или предрегистрации — для /upgrade."""
-        formula = (f"AND(OR(COUNTA({{{Projects.NOTIFIED}}})>0, COUNTA({{{Projects.PRE_REGISTERED}}})>0), "
+        """Живые проекты, где у менеджеров есть статус — для /upgrade (повысить или откатить)."""
+        formula = (f"AND(OR(COUNTA({{{Projects.NOTIFIED}}})>0, COUNTA({{{Projects.PRE_REGISTERED}}})>0, "
+                   f"COUNTA({{{Projects.REGISTERED}}})>0), "
                    f"{{{Projects.STATUS}}}!='Won', {{{Projects.STATUS}}}!='Lost')")
         return self._projects.all(formula=formula, use_field_ids=True,
                                   fields=[Projects.NAME, Projects.PPR_REF, Projects.NOTIFIED, Projects.PRE_REGISTERED,
                                           Projects.REGISTERED, Projects.PPR_TRACK],
+                                  sort=[Projects.PPR_REF])
+
+    def expired_statuses(self) -> list[dict]:
+        """Живые проекты с менеджерами, у которых истёк срок статуса (Status Expiry раньше сегодня)."""
+        formula = (f"AND({{{Projects.STATUS_EXPIRY}}}!='', IS_BEFORE({{{Projects.STATUS_EXPIRY}}}, TODAY()), "
+                   f"OR(COUNTA({{{Projects.NOTIFIED}}})>0, COUNTA({{{Projects.PRE_REGISTERED}}})>0, "
+                   f"COUNTA({{{Projects.REGISTERED}}})>0), "
+                   f"{{{Projects.STATUS}}}!='Won', {{{Projects.STATUS}}}!='Lost')")
+        return self._projects.all(formula=formula, use_field_ids=True,
+                                  fields=[Projects.NAME, Projects.PPR_REF, Projects.NOTIFIED, Projects.PRE_REGISTERED,
+                                          Projects.REGISTERED, Projects.STATUS_EXPIRY],
                                   sort=[Projects.PPR_REF])
 
     def person_companies(self, person_id: str) -> list[str]:

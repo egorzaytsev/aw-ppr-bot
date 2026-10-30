@@ -46,6 +46,10 @@ ACTION_UP, ACTION_UP_NO, ACTION_UP_LIST, ACTION_UP_PICK = "up", "upno", "upl", "
 FORCE = {"pickf": ACTION_PICK, "accf": ACTION_ACCEPT, "newf": ACTION_NEW}
 # Проект для слияния назван не латиницей — сначала новое название
 ACTION_RENAME = "ren"
+# Откат статуса менеджера: ad:rb:<проект>:<менеджер> → на этап ниже (rbd) или снять (rbc), затем причина текстом
+ACTION_RB, ACTION_RB_DOWN, ACTION_RB_CANCEL = "rb", "rbd", "rbc"
+_ROLLBACK = {ACTION_RB_DOWN: "down", ACTION_RB_CANCEL: "cancel"}
+_LOWER_RU = {"registered": "предрегистрацию", "pre_registered": "уведомление"}
 UPGRADE_PAGE = 8
 _TARGET_RU = {"pre": "предрегистрацию", "reg": "регистрацию"}
 UPGRADE_REQUESTS = {"New — Pre-registration", "New — Registration",
@@ -78,7 +82,7 @@ async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     repo = ctx.bot_data["repo"]
     if not item:
         item = await asyncio.to_thread(repo.find_awaiting, update.effective_chat.id)
-    if item and item[0] != ACTION_REMIND_USER:
+    if item and item[0] != ACTION_REMIND_USER and item[0] not in _ROLLBACK:
         await asyncio.to_thread(repo.clear_awaiting, item[1])
 
 
@@ -94,6 +98,14 @@ def upgrade_markup(project_id: str, person_id: str, target: str) -> InlineKeyboa
     ])
 
 
+_SHORT_STATUS = {"reg": "рег.", "pre": "предрег.", "notified": "увед."}
+
+
+def rollback_markup(project_id: str, person_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        "↩️ Откатить / аннулировать", callback_data=f"{CB_ADMIN}{ACTION_RB}:{project_id}:{person_id}")]])
+
+
 async def _upgrade_pairs(ctx: ContextTypes.DEFAULT_TYPE) -> list[tuple]:
     """(проект, менеджер, статус, подпись) — кого можно повысить: уведомление / предрегистрация, не Simplified."""
     repo = ctx.bot_data["repo"]
@@ -104,13 +116,14 @@ async def _upgrade_pairs(ctx: ContextTypes.DEFAULT_TYPE) -> list[tuple]:
         if f.get(Projects.PPR_TRACK) == "Simplified (<30k)":
             continue
         ref, pname = f.get(Projects.PPR_REF) or "", (f.get(Projects.NAME) or "")[:24]
-        rows = [(p, "pre") for p in f.get(Projects.PRE_REGISTERED) or []] if not f.get(Projects.REGISTERED) else []
+        rows = [(p, "reg") for p in f.get(Projects.REGISTERED) or []]
+        rows += [(p, "pre") for p in f.get(Projects.PRE_REGISTERED) or []]
         rows += [(p, "notified") for p in f.get(Projects.NOTIFIED) or []]
         for person, status in rows:
             if person not in names:
                 names[person] = (await asyncio.to_thread(repo.person_name, person)) or person
             short = names[person].split()[0] if names[person] else "?"
-            label = f"{ref} · {pname} · {short} · {'предрег.' if status == 'pre' else 'увед.'}"
+            label = f"{ref} · {pname} · {short} · {_SHORT_STATUS[status]}"
             out.append((r["id"], person, status, label))
     return out
 
@@ -125,7 +138,7 @@ async def cmd_upgrade(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _show_upgrade_list(chat, ctx: ContextTypes.DEFAULT_TYPE, page: int) -> None:
     pairs = await _upgrade_pairs(ctx)
     if not pairs:
-        await chat.send_message("🛠 Повышать некого: нет менеджеров в уведомлении или предрегистрации.")
+        await chat.send_message("🛠 В проектах нет менеджеров со статусом.")
         return
     pages = (len(pairs) + UPGRADE_PAGE - 1) // UPGRADE_PAGE
     page = max(0, min(page, pages - 1))
@@ -138,7 +151,7 @@ async def _show_upgrade_list(chat, ctx: ContextTypes.DEFAULT_TYPE, page: int) ->
         nav.append(InlineKeyboardButton("Дальше →", callback_data=f"{CB_ADMIN}{ACTION_UP_LIST}:{page + 1}"))
     if nav:
         rows.append(nav)
-    await chat.send_message(f"🛠 Кого повысить? ({page + 1}/{pages})", reply_markup=InlineKeyboardMarkup(rows))
+    await chat.send_message(f"🛠 Чей статус изменить — повысить или откатить? ({page + 1}/{pages})", reply_markup=InlineKeyboardMarkup(rows))
 
 
 def ask_markup(reg_id: str) -> InlineKeyboardMarkup:
@@ -467,17 +480,38 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         targets = ["pre", "reg"] if status == "notified" else ["reg"] if status == "pre_registered" else []
         if project.get(Projects.REGISTERED):
             targets = [t for t in targets if t != "reg"]
-        if not targets:
-            await chat.send_message("🛠 Повышать некуда: статус уже максимальный или регистрация занята.")
-            return
         rows = [[InlineKeyboardButton(f"⬆️ На {_TARGET_RU[t]}",
                                       callback_data=f"{CB_ADMIN}{ACTION_UP}:{parts[0]}:{parts[1]}:{t}")] for t in targets]
+        if status:
+            rows.append([InlineKeyboardButton("↩️ Откатить / аннулировать",
+                                              callback_data=f"{CB_ADMIN}{ACTION_RB}:{parts[0]}:{parts[1]}")])
         rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")])
         missing = project.get(Projects.PPR_NEXT_MISSING) or ""
         hint = f"\nДля следующего этапа не хватает: {escape(missing)}" if missing else ""
         await chat.send_message(f"🛠 {escape(project.get(Projects.PPR_REF) or '')} · "
                                 f"{escape(project.get(Projects.NAME) or '')}: на какой статус?{hint}",
                                 reply_markup=InlineKeyboardMarkup(rows))
+        return
+    if action == ACTION_RB and len(parts) >= 2:
+        project = await asyncio.to_thread(repo.project_fields, parts[0])
+        status = dealer_status(project, parts[1])
+        if not status:
+            await chat.send_message("🛠 У этого менеджера в проекте уже нет статуса.")
+            return
+        rows = []
+        if status in _LOWER_RU:
+            rows.append([InlineKeyboardButton(f"↩️ На {_LOWER_RU[status]}",
+                                              callback_data=f"{CB_ADMIN}{ACTION_RB_DOWN}:{parts[0]}:{parts[1]}")])
+        rows.append([InlineKeyboardButton("✖️ Аннулировать — снять статус",
+                                          callback_data=f"{CB_ADMIN}{ACTION_RB_CANCEL}:{parts[0]}:{parts[1]}")])
+        rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")])
+        await chat.send_message(f"🛠 {escape(project.get(Projects.PPR_REF) or '')} · "
+                                f"{escape(project.get(Projects.NAME) or '')}: что сделать со статусом?",
+                                reply_markup=InlineKeyboardMarkup(rows))
+        return
+    if action in _ROLLBACK and len(parts) >= 2:
+        pending[chat.id] = (action, parts[0], parts[1])  # только в памяти: ожидание в Airtable — у заявок
+        await chat.send_message("🛠 Напиши причину — она уйдёт менеджеру. Передумал — нажми меню внизу.")
         return
     if action == ACTION_UP and len(parts) >= 3 and parts[2] in _TARGET_RU:
         who = routing.who_by_chat(ctx.bot_data, chat.id)
@@ -727,6 +761,15 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         return False  # бот ничего не ждёт — текст идёт дальше, в обычный диалог
     action, reg_id, reply_id = item
     chat = update.effective_chat
+    if action in _ROLLBACK:
+        reason = text.strip()
+        if not reason:
+            pending[chat.id] = item
+            await chat.send_message("🛠 Пустой текст — напиши причину.")
+            return True
+        who = routing.who_by_chat(ctx.bot_data, chat.id)
+        await ctx.bot_data["rollback_status"](ctx.application, reg_id, reply_id, _ROLLBACK[action], reason, who)
+        return True
     _mark_decider(ctx, update, reg_id)
     if action != ACTION_REMIND_USER:
         await asyncio.to_thread(repo.clear_awaiting, reg_id)

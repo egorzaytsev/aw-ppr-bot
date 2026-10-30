@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from ..airtable_ids import RequestType
 from .base import DETAIL, Gate, Question, Scenario, format_value
 
@@ -25,6 +27,8 @@ ORIGIN_DEALER = "Нет — AW предлагает дилер взамен пр
 ORIGIN_OWN = "Бюро нет — проект ведёт дилер"
 CONTACT_BUREAU_DOCS = "Indirect (bureau docs)"
 MATERIALS_KEY = "Materials"
+BUREAU_DOCS_KEY = "Bureau Documents"  # обязательны, если AW предлагаем взамен продукта бюро
+NO_BUREAU = "__no_bureau_own__"
 THIRD_PARTY_KEY = "Third-party Statement"  # все документы третьей стороны одним вопросом
 # Месяц размещения заказа на регистрации — заменяет Expected Order Date
 ORDER_MONTH_FINAL = "Order Month Final"
@@ -36,6 +40,21 @@ WANTS_QUOTE = "_simplified_quote"
 _REGION_WORDS = ("област", "обл.", "край", "район", "республик", "округ")
 _COMMENT_WORDS = ("возможно", "будет", "так как", "уточн", "но ", "пока ", "примерно")
 MAX_ADDRESS_LEN = 80
+
+
+_NOT_A_NAME = re.compile(r"^(нет|не знаю|неизвест|пока|—|-)", re.I)
+
+
+def check_name(text: str, message: str) -> str | None:
+    """«нет архитектора», «пока не знаю» — это не имя."""
+    return message if _NOT_A_NAME.search(text.strip()) else None
+
+
+def origin(a: dict) -> str | None:
+    """Кто заложил AW; «Бюро нет» на вопросе о бюро — значит, проект ведёт дилер."""
+    if a.get("Specifier") == NO_BUREAU:
+        return ORIGIN_OWN
+    return a.get("AW Origin")
 
 
 def check_city(text: str) -> str | None:
@@ -57,7 +76,7 @@ def check_address(text: str) -> str | None:
 def materials_prompt(a: dict) -> str:
     """Все материалы — одним экраном; документы бюро — только если AW заложен бюро (или ответа нет)."""
     items = ["визуализации", "планировки", "твоя презентация для клиента"]
-    if a.get("AW Origin") not in (ORIGIN_DEALER, ORIGIN_OWN):
+    if origin(a) not in (ORIGIN_DEALER, ORIGIN_OWN):
         items.append("ведомость или спецификация бюро")
     items += ["твоя спецификация", "квотация Andreu World"]
     return "Пришли материалы по проекту — всё, что есть:\n" + "\n".join(f"• {i}" for i in items)
@@ -207,27 +226,29 @@ PHASE_1 = (
         ),
     ),
     Question(
+        key="Specifier",
+        label="Архбюро",
+        prompt="Какое бюро делает дизайн-проект?",
+        hint="Архитектор работает сам — «Частный архитектор». Дизайн-проекта нет — «Бюро нет»",
+        choices=((SOLO_ARCHITECT, SOLO), ("Бюро нет — проект ведём мы", NO_BUREAU)),
+        validate=lambda t: check_name(t, "Напиши название бюро. Бюро нет — нажми «Бюро нет»."),
+        # На выборе архитектора бюро ещё нет — не спрашиваем
+        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION,
+    ),
+    Question(
         key="AW Origin",
         label="AW в проекте бюро",
         prompt="AW заложен в проект бюро?",
+        prompt_fn=lambda a: "AW заложен в проект архитектора?" if a.get("Specifier") == SOLO
+        else "AW заложен в проект бюро?",
         kind="choice",
         # Откуда ждать подтверждение: документы бюро или предложение самого дилера
         choices=(
             ("Да, заложен бюро", ORIGIN_BUREAU),
             ("Нет — AW предлагаем мы взамен", ORIGIN_DEALER),
-            ("Бюро нет — проект ведём мы", ORIGIN_OWN),
         ),
-        # На выборе архитектора бюро ещё нет — не спрашиваем
-        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION,
-    ),
-    Question(
-        key="Specifier",
-        label="Архбюро",
-        prompt="Как называется бюро?",
-        hint="Архитектор работает сам, без бюро — нажми «Частный архитектор»",
-        choices=((SOLO_ARCHITECT, SOLO),),
-        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION
-        and a.get("AW Origin") in (ORIGIN_BUREAU, ORIGIN_DEALER),
+        # Бюро нет — ответ ясен без вопроса: проект ведёт дилер (origin)
+        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION and a.get("Specifier") != NO_BUREAU,
     ),
     Question(
         key="Lead Architect",
@@ -237,12 +258,13 @@ PHASE_1 = (
         # Частный архитектор: имя — единственное, что о нём известно, поэтому обязательно
         prompt_fn=lambda a: "Как зовут архитектора?" if a.get("Specifier") == SOLO else "Кто ГАП проекта?",
         optional_fn=lambda a: a.get("Specifier") != SOLO,
+        validate=lambda t: check_name(t, "Нужно имя. Архитектора нет — вернись к вопросу о бюро и нажми «Бюро нет»."),
         skip_label="Пока не знаю",
         missing_label="пока не известен",
         # ГАП нужен, только если AW заложил сам архитектор; частному архитектору — всегда (это его имя)
         ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION
-        and a.get("Specifier") not in (None, OWN_DESIGN)
-        and (a.get("AW Origin") == ORIGIN_BUREAU or a.get("Specifier") == SOLO),
+        and a.get("Specifier") not in (None, OWN_DESIGN, NO_BUREAU)
+        and (origin(a) == ORIGIN_BUREAU or a.get("Specifier") == SOLO),
     ),
     Question(
         key="AW Alternatives",
@@ -304,7 +326,7 @@ PHASE_2 = (
         choices=CONTACT_CHOICES,
         # AW не заложен бюро (или бюро нет) — документы бюро его не подтверждают
         choices_fn=lambda a: tuple(c for c in CONTACT_CHOICES if c[1] != CONTACT_BUREAU_DOCS
-                                   or a.get("AW Origin") not in (ORIGIN_DEALER, ORIGIN_OWN)),
+                                   or origin(a) not in (ORIGIN_DEALER, ORIGIN_OWN)),
         evidence_for=("Indirect (bureau docs)", "Verifiable (email/contact)", "Joint meeting with AW"),
         evidence_key="Contact Evidence",
         evidence_prompt="Пришли подтверждение — файл или ссылку.",
@@ -415,7 +437,21 @@ SIMPLIFIED_EXTRA = (
     ),
 )
 
-QUESTIONS = PHASE_1 + PHASE_2 + PHASE_3 + SIMPLIFIED_EXTRA
+# Документы бюро — в конце фазы 2 по той же причине: индексы начатых диалогов не сдвигаются
+BUREAU_EXTRA = (
+    Question(
+        phase=2,
+        key=BUREAU_DOCS_KEY,
+        label="Документы бюро",
+        prompt="Пришли ведомость или спецификацию бюро — что заложено вместо AW",
+        hint="Без неё предложение взамен не зарегистрировать. Файлы по одному, больше 5 МБ — ссылкой.",
+        kind="files",
+        # AW предлагаем взамен продукта бюро — документы бюро обязательны
+        ask_if=lambda a: origin(a) == ORIGIN_DEALER,
+    ),
+)
+
+QUESTIONS = PHASE_1 + PHASE_2 + PHASE_3 + SIMPLIFIED_EXTRA + BUREAU_EXTRA
 _BY_KEY = {q.key: q for q in QUESTIONS}
 
 GATES = {
@@ -473,9 +509,9 @@ def specifier(a: dict) -> dict:
 
     Проект ведёт сам дилер — Specifier = «Собственная проработка» (в проект ставится компания дилера).
     """
-    if a.get("AW Origin") == ORIGIN_OWN:
-        return {"Specifier": OWN_DESIGN}
-    if a.get("AW Origin") == ORIGIN_DEALER:
+    if origin(a) == ORIGIN_OWN:
+        return {"Specifier": OWN_DESIGN, "AW Origin": ORIGIN_OWN}
+    if origin(a) == ORIGIN_DEALER:
         # Specifier — тот, кто заложил AW: здесь сам дилер; бюро — только строкой в Project Log
         return {"Specifier": OWN_DESIGN, "Specifier Type": None, "Bureau": bureau_name(a)}
     if a.get("Specifier") != SOLO:
@@ -548,7 +584,7 @@ LOG_KEYS = (
 
 def bureau_name(a: dict) -> str | None:
     """Бюро, которое AW не закладывало (дилер предлагает взамен) — для Project Log."""
-    if a.get("AW Origin") != ORIGIN_DEALER:
+    if origin(a) != ORIGIN_DEALER:
         return None
     name = a.get("Lead Architect") if a.get("Specifier") == SOLO else a.get("Specifier")
     if not name or name == SOLO:
@@ -572,9 +608,11 @@ def project_log(a: dict) -> list[str]:
     if confirmed is not None and a.get("PL Volume") is not None and confirmed != a["PL Volume"]:
         lines.append(f"Объём по прайсу при уведомлении: {_money(a['PL Volume'])}")
     for key in LOG_KEYS:
-        if a.get(key):
+        value = origin(a) if key == "AW Origin" else a.get(key)
+        if value:
             q = _BY_KEY[key]
-            lines.append(f"{q.title}: {format_value(q, a[key])}")
+            text = "Бюро нет — проект ведём мы" if value == ORIGIN_OWN else format_value(q, value)
+            lines.append(f"{q.title}: {text}")
     return lines
 
 

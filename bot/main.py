@@ -1012,6 +1012,74 @@ async def upgrade_status(app: Application, project_id: str, person_id: str, targ
         await _handle_registration(app, None, synthetic, event=True, who=who)
 
 
+STATUS_FIELDS = {PPR_REGISTERED: Projects.REGISTERED, PPR_PRE_REGISTERED: Projects.PRE_REGISTERED,
+                 PPR_NOTIFIED: Projects.NOTIFIED}
+LOWER_STATUS = {PPR_REGISTERED: PPR_PRE_REGISTERED, PPR_PRE_REGISTERED: PPR_NOTIFIED, PPR_NOTIFIED: None}
+
+
+def rollback_dealer_text(project: dict, old: str, new: str | None, reason: str) -> str:
+    """Менеджеру: статус снижен или снят — причина и как вернуть."""
+    ref = project.get(Projects.PPR_REF) or ""
+    head = f"↩️ <b>{escape(project.get(Projects.NAME) or '')}</b>" + (f" · {escape(ref)}" if ref else "")
+    now = PPR_LABELS[new].lower() if new else "статус снят"
+    what = (f"Чтобы вернуть {PPR_LABELS[old].lower()}, нажми «Обновить проект» → «Дополнить» и подай заявку снова."
+            if new else "Если проект снова актуален — нажми «Новый проект» и подай его заново.")
+    return (f"{head}\nСтатус изменён: {PPR_LABELS[old].lower()} → {now}.\n"
+            f"Причина: {escape(reason)}\n\n{what} Вопросы — Егору.")
+
+
+async def rollback_status(app: Application, project_id: str, person_id: str, mode: str, reason: str,
+                          who: str | None = None) -> None:
+    """Откат менеджера на этап ниже (mode «down») или снятие статуса («cancel») — по кнопке проверяющего."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    admin_chat = routing.resolve(app.bot_data, who or routing.EGOR)[1]
+    project = await asyncio.to_thread(repo.project_fields, project_id)
+    old = _manager_status(project, person_id)
+    if not old:
+        if admin_chat:
+            await _send_html(app.bot, admin_chat, "🛠 У этого менеджера в проекте уже нет статуса.")
+        return
+    new = LOWER_STATUS[old] if mode == "down" else None
+    updates = {STATUS_FIELDS[old]: [p for p in project.get(STATUS_FIELDS[old]) or [] if p != person_id]}
+    if new:
+        updates[STATUS_FIELDS[new]] = [p for p in project.get(STATUS_FIELDS[new]) or [] if p != person_id] + [person_id]
+        updates[Projects.STATUS_CONFIRMED] = datetime.now(VALENCIA).date().isoformat()  # новый статус — новый срок
+    await asyncio.to_thread(repo.update_project, project_id, updates)
+    person = await asyncio.to_thread(repo.person_name, person_id) or "менеджер"
+    line = (f"Статус {person}: {PPR_LABELS[old].lower()} → {PPR_LABELS[new].lower() if new else 'снят'}. "
+            f"Причина: {reason}")
+    await asyncio.to_thread(repo.append_project_log, project_id, project.get(Projects.PROJECT_LOG),
+                            f"{datetime.now(VALENCIA):%d.%m.%Y} · Егор (бот):", [line])
+    chats = await asyncio.to_thread(repo.chat_ids_for_people, [person_id])
+    for chat in chats:
+        await _send_html(app.bot, chat, rollback_dealer_text(project, old, new, reason))
+    if admin_chat:
+        await _send_html(app.bot, admin_chat,
+                         f"🛠 ↩️ {escape(project.get(Projects.PPR_REF) or '')} · {escape(project.get(Projects.NAME) or '')}"
+                         f"\n{escape(line)}\n📨 " + ("Дилеру отправлено" if chats else "Дилеру не отправлено — нет Telegram"))
+
+
+async def _warn_expired(app: Application, admin_chat) -> None:
+    """Истёк срок статуса — только предупреждение проверяющему, с кнопками отката."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    rows, lines = [], []
+    names: dict = app.bot_data.setdefault("person_names", {})
+    for r in await asyncio.to_thread(repo.expired_statuses):
+        f = r["fields"]
+        for field, status in ((Projects.REGISTERED, PPR_REGISTERED), (Projects.PRE_REGISTERED, PPR_PRE_REGISTERED),
+                              (Projects.NOTIFIED, PPR_NOTIFIED)):
+            for person in f.get(field) or []:
+                if person not in names:
+                    names[person] = await asyncio.to_thread(repo.person_name, person) or "?"
+                label = f"{f.get(Projects.PPR_REF) or ''} · {(f.get(Projects.NAME) or '')[:30]} · {names[person]}"
+                lines.append(f"• {escape(label)} — {PPR_LABELS[status].lower()}, срок до "
+                             f"{str(f.get(Projects.STATUS_EXPIRY) or '')[:10]}")
+                rows.append([(f"↩️ {label}"[:60], f"{admin.CB_ADMIN}{admin.ACTION_RB}:{r['id']}:{person}")])
+    if lines:
+        await _send_html(app.bot, admin_chat, "🛠 ⏳ <b>Истёк срок статуса</b> — продли или откати:\n" + "\n".join(lines[:15]),
+                         _markup(rows[:15]))
+
+
 async def _offer_upgrade(app: Application, admin_chat, fresh: dict, project_id: str, person_id: str) -> None:
     """После «Дополнить»: условия следующего этапа выполнены — предложить проверяющему повысить."""
     if not admin_chat or fresh.get(Projects.PPR_NEXT_MISSING) or fresh.get(Projects.REGISTERED) \
@@ -1094,6 +1162,7 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
     accepted = ((reg.get(Registrations.DECISION) or "").startswith("Accept") or pl.declined_upgrade) \
         and target and not pl.blocked
     card = None
+    status_person = ((reg.get(Registrations.SUBMITTED_BY) or [""])[0]) if accepted else ""
     if accepted:
         fresh = await asyncio.to_thread(repo.project_fields, target[0])
         # Статус на проекте — у менеджера, отправившего заявку; в тексте — компания
@@ -1159,7 +1228,8 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
             created_projects.discard(target[0])
             extra = (["🆕 Проект создан"] if created else []) + [escape(c) for c in pl.changes] + (
                 ["🏢 Компании: " + escape(", ".join(company_notes))] if company_notes else [])
-            await _send_html(app.bot, admin_chat, cards.admin_copy(card, bool(dealer_chats), extra))
+            rb = admin.rollback_markup(target[0], status_person) if pl.status_label and status_person else None
+            await _send_html(app.bot, admin_chat, cards.admin_copy(card, bool(dealer_chats), extra), rb)
         elif pl.dealer_text and not pl.blocked:
             await _send_html(app.bot, admin_chat, _admin_summary(
                 reg, pl, pl.project_name or "", False, dealer_name, bool(dealer_chats), [], None))
@@ -1411,6 +1481,7 @@ async def _alerts_loop(app: Application) -> None:
                                  alerts.summary_text(now, handler.day_count, stats, overdue, unknown))
                 handler.day_count = 0
                 app.bot_data["summary_day"] = now.date().isoformat()
+                await _warn_expired(app, admin_chat)
         except Exception:
             # Не log.exception — иначе ошибка отправки сама станет «ошибкой бота» по кругу
             log.warning("Не удалось отправить оповещение Егору", exc_info=True)
@@ -1510,6 +1581,7 @@ def build_app() -> Application:
     app.bot_data["base_id"] = settings.airtable_base_id
     app.bot_data["process_decisions"] = process_decisions
     app.bot_data["upgrade_status"] = upgrade_status
+    app.bot_data["rollback_status"] = rollback_status
     app.bot_data["preview_reminder"] = preview_reminder
 
     app.add_handler(TypeHandler(Update, log_update), group=-1)

@@ -59,7 +59,7 @@ def _run_phase1(exw="120к", stage=3, skip_optional=False, other_place=False):
     r = engine.handle_callback(r.state, CH + str(stage))          # стадия
     if stage != 0:
         assert r.state.step == 10
-        r = engine.handle_callback(r.state, CH + "2")             # бюро нет — проект ведём мы (бюро и ГАП не спрашиваем)
+        r = engine.handle_callback(r.state, CH + "1")             # бюро нет — проект ведём мы (AW Origin и ГАП не спрашиваем)
     r = engine.handle_callback(r.state, CH + "1")                 # да, по тендеру
     return r
 
@@ -305,10 +305,10 @@ def test_stage_change_to_other_asks_specifier():
     r = engine.handle_callback(r.state, engine.CB_EDIT)
     r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "9")
     r = engine.handle_callback(r.state, CH + "2")                 # Проектирование
-    assert r.state.step == 10 and r.state.awaiting == "answer"  # AW в проекте бюро?
-    r = engine.handle_callback(r.state, CH + "0")                 # да, заложен бюро
-    assert engine._current_q(r.state).key == "Specifier"
+    assert r.state.step == 10 and engine._current_q(r.state).key == "Specifier"  # сначала бюро
     r = engine.handle_text(r.state, "UNK Project")
+    assert engine._current_q(r.state).key == "AW Origin"
+    r = engine.handle_callback(r.state, CH + "0")                 # да, заложен бюро
     assert engine._current_q(r.state).key == "Lead Architect"   # за бюро — ГАП
     r = engine.handle_text(r.state, "Иванов")
     assert r.state.awaiting == "confirm"
@@ -396,6 +396,7 @@ def test_materials_one_screen_can_skip():
     r = engine.handle_callback(st, engine.CB_SKIP)
     assert r.state.step == 22
     st.answers["AW Origin"] = "Да, заложен бюро"
+    st.answers["Specifier"] = "UNK Project"
     st.step = 21
     assert "• ведомость или спецификация бюро" in engine.question_screen(st).text
 
@@ -646,12 +647,13 @@ def _to_specifier():
     r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     r = engine.handle_callback(r.state, engine.CB_EDIT)
     r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "10")
-    return engine.handle_callback(r.state, CH + "0")              # AW заложен бюро → название бюро
+    r = engine.handle_text(r.state, "UNK Project")                # бюро
+    assert engine._current_q(r.state).key == "AW Origin"
+    return engine.handle_callback(r.state, CH + "0")              # AW заложен бюро → ГАП
 
 
 def test_bureau_then_architect_unknown():
     r = _to_specifier()
-    r = engine.handle_text(r.state, "UNK Project")
     assert engine._current_q(r.state).key == "Lead Architect"
     labels = [b[0] for row in r.screens[0].buttons for b in row]
     assert labels == ["Пока не знаю"]
@@ -664,12 +666,16 @@ def test_bureau_then_architect_unknown():
 
 
 def test_solo_architect_name_required():
-    r = _to_specifier()
+    r = _to_specifier_start()
     r = engine.handle_callback(r.state, CH + "0")                 # Частный архитектор
+    assert engine._current_q(r.state).prompt == "AW заложен в проект архитектора?"
+    r = engine.handle_callback(r.state, CH + "0")                 # да, заложен
     q = engine._current_q(r.state)
     assert q.key == "Lead Architect" and q.prompt == "Как зовут архитектора?" and not q.optional
     assert "Пока не знаю" not in str(r.screens[0].buttons)
     r = engine.handle_callback(r.state, engine.CB_SKIP)           # пропустить нельзя
+    assert engine._current_q(r.state).key == "Lead Architect"
+    r = engine.handle_text(r.state, "нет архиектора")             # не имя
     assert engine._current_q(r.state).key == "Lead Architect"
     r = engine.handle_text(r.state, "Иван Петров")
     p = engine.build_payload(r.state)
@@ -680,7 +686,7 @@ def test_solo_architect_name_required():
 def test_own_design_skips_bureau_and_architect():
     r = _notification_summary()                                   # «Бюро нет — проект ведём мы»
     text = r.screens[0].text
-    assert "AW в проекте бюро: Бюро нет — проект ведём мы" in text and "ГАП" not in text and "Архбюро" not in text
+    assert "Архбюро: Бюро нет — проект ведём мы" in text and "ГАП" not in text and "AW в проекте бюро" not in text
     assert engine.build_payload(r.state)["Specifier"] == "Собственная проработка"
 
 
@@ -689,9 +695,8 @@ def test_dealer_offers_aw_needs_bureau_not_architect():
     r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     r = engine.handle_callback(r.state, engine.CB_EDIT)
     r = engine.handle_callback(r.state, engine.CB_EDIT_STEP + "10")
+    r = engine.handle_text(r.state, "UNK Project")                # бюро
     r = engine.handle_callback(r.state, CH + "1")                 # нет — AW предлагаем мы взамен
-    assert engine._current_q(r.state).key == "Specifier"
-    r = engine.handle_text(r.state, "UNK Project")
     assert r.state.awaiting == "confirm" and "ГАП" not in r.screens[0].text
     p = engine.build_payload(r.state)
     # Specifier — тот, кто заложил AW: дилер; бюро — строкой в логе
@@ -735,8 +740,8 @@ def test_fill_asks_bureau_on_architect_selection_and_log_answers():
     assert preset["_ask"] == ["Specifier", "Lead Architect", "Decision Maker Company", "Competing Dealers"]
     r = engine.start("project_fill", preset)
     assert engine._current_q(r.state).key == "Specifier"
-    assert ("Бюро ещё не выбрано", "ch:1") in [b for row in r.screens[-1].buttons for b in row]
-    r = engine.handle_callback(r.state, "ch:1")
+    assert ("Бюро ещё не выбрано", "ch:2") in [b for row in r.screens[-1].buttons for b in row]
+    r = engine.handle_callback(r.state, "ch:2")
     assert engine._current_q(r.state).key == "Decision Maker Company"   # ГАП не спрашиваем
     r = engine.handle_text(r.state, "Петрович")
     r = engine.handle_callback(r.state, "ch:0")
@@ -852,3 +857,27 @@ def test_fill_simplified_asks_only_phase1():
               P.OBJECT_ADDRESS: "a", P.PROJECT_STAGE: "Concept", P.SPECIFIER: ["s"], P.EXW_POTENTIAL: 9000,
               P.AW_ALTERNATIVES: "No — AW only", P.PPR_TRACK: "Simplified (<30k)"}
     assert gaps_for(fields, "notified")[0] == ["AW Origin"]
+
+
+def test_no_bureau_is_answer_and_not_a_name():
+    r = _to_specifier_start()
+    assert engine._current_q(r.state).key == "Specifier"
+    r = engine.handle_text(r.state, "нет архитектора")            # не название — переспросить
+    assert engine._current_q(r.state).key == "Specifier" and "Бюро нет" in r.screens[0].text
+
+
+def _to_specifier_start():
+    r = _run_phase1()
+    r = engine.handle_callback(r.state, engine.CB_GATE_NO)
+    r = engine.handle_callback(r.state, engine.CB_EDIT)
+    return engine.handle_callback(r.state, engine.CB_EDIT_STEP + "10")
+
+
+def test_dealer_offers_aw_requires_bureau_documents():
+    r = _to_specifier_start()
+    r = engine.handle_text(r.state, "UNK Project")
+    r = engine.handle_callback(r.state, CH + "1")                 # AW предлагаем мы взамен
+    st = r.state
+    from bot.scenarios.new_project import QUESTIONS, BUREAU_DOCS_KEY
+    q = next(x for x in QUESTIONS if x.key == BUREAU_DOCS_KEY)
+    assert q.applies(st.answers) and not q.optional
