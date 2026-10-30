@@ -113,6 +113,29 @@ def analysis_text(candidates: list[Candidate]) -> str:
 _LEGAL = re.compile(r"^(ооо|пао|зао|оао|ао|ип|llc|ltd)\s+", re.IGNORECASE)
 
 
+MAX_NAME_LEN = 80
+
+
+def has_cyrillic(text: str) -> bool:
+    return bool(re.search(r"[а-яё]", text or "", re.I))
+
+
+def to_latin(text: str) -> str:
+    """Транслит строки как есть (для названия, которое уже есть в базе кириллицей)."""
+    out = "".join(_TRANSLIT.get(ch.lower(), ch) if ch.lower() in _TRANSLIT else ch for ch in text or "")
+    out = " ".join(w[:1].upper() + w[1:] for w in out.split())
+    return out[:MAX_NAME_LEN].strip()
+
+
+def name_problem(name: str) -> str | None:
+    """Названия проектов — только латиницей и не длиннее 80 знаков."""
+    if has_cyrillic(name):
+        return "название только латиницей: где можно — переводим, где нельзя — транслитерация"
+    if len(name) > MAX_NAME_LEN:
+        return f"не длиннее {MAX_NAME_LEN} знаков (сейчас {len(name)})"
+    return None
+
+
 def latin_name(payload: dict) -> str:
     """Черновик названия проекта латиницей: «Клиент Объект» транслитом, без ООО и кавычек."""
     parts = []

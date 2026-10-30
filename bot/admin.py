@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from html import escape
 
@@ -41,6 +42,10 @@ ACTION_NAME = "name"
 ACTION_ACCEPT_NOTE = "accn"
 # Повышение статуса без заявки: ad:up:<проект>:<менеджер>:pre|reg; список /upgrade и выбор пары
 ACTION_UP, ACTION_UP_NO, ACTION_UP_LIST, ACTION_UP_PICK = "up", "upno", "upl", "ups"
+# Подтверждение несмотря на незаполненные ответы: те же действия с флагом «точно»
+FORCE = {"pickf": ACTION_PICK, "accf": ACTION_ACCEPT, "newf": ACTION_NEW}
+# Проект для слияния назван не латиницей — сначала новое название
+ACTION_RENAME = "ren"
 UPGRADE_PAGE = 8
 _TARGET_RU = {"pre": "предрегистрацию", "reg": "регистрацию"}
 UPGRADE_REQUESTS = {"New — Pre-registration", "New — Registration",
@@ -231,6 +236,25 @@ _META_KEYS = {"Dealer Project Name", "Project Log", "PPR Track", "EXW Potential"
 
 _EXTRA_TITLES = {"Bureau": "Архбюро (AW не закладывало)"}
 
+# «Нет» здесь — полноценный ответ, а не пропуск
+_NO_IS_ANSWER = {"Parallel Registrations", "AW Alternatives", "Competing Dealers", "Area Source"}
+_VAGUE = re.compile(r"^(нет\b|—$|-$|не знаю|пока\b)|неизвест|не получил|нет данных|уточня", re.I)
+
+
+def weak_answers(payload: dict) -> list[str]:
+    """Вопросы заявки без настоящего ответа: пропущено, «нет», «пока неизвестно»."""
+    out = []
+    for key, q in _QUESTIONS.items():
+        if key.startswith("_") or key not in payload:
+            continue  # не спрашивали — не ответ
+        value = payload[key]
+        if value in (None, "", []):
+            out.append(q.title)
+        elif isinstance(value, str) and _VAGUE.search(value.strip()) and not (
+                key in _NO_IS_ANSWER and value.strip().lower() == "нет"):
+            out.append(f"{q.title} — «{value.strip()[:40]}»")
+    return out
+
 
 def _ru(key: str, value) -> str:
     """Значение поля по-русски: варианты Airtable → подписи, числа, даты, файлы."""
@@ -269,8 +293,9 @@ def _card_body(rtype: str, payload: dict) -> list[str]:
         _pair(("Клиент", _v(payload, "End Client"))),
         _pair(("Объект", obj)),
         _pair(("Город", _v(payload, "City")), ("Стадия", escape(stage))),
-        _pair(("Бюро", _v(payload, "Bureau") or _v(payload, "Specifier")), ("ГАП", _v(payload, "Lead Architect"))),
         _pair(("AW в проекте бюро", _v(payload, "AW Origin"))),
+        _pair(("Бюро", _v(payload, "Bureau") or _v(payload, "Specifier"))),
+        _pair(("ГАП", _v(payload, "Lead Architect"))),
         _pair(("Объём по прайсу", f"{pl:,.0f} €".replace(",", " ") if isinstance(pl, (int, float)) else "")),
         _pair(("Альтернативы AW", escape(_ru("AW Alternatives", payload["AW Alternatives"]))
                if payload.get("AW Alternatives") else "")),
@@ -421,6 +446,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     project_id = parts[1] if len(parts) > 1 else ""
     reply_id = parts[2] if len(parts) > 2 else ""
     pending = _pending(ctx)
+    force = action in FORCE
+    action = FORCE.get(action, action)
 
     if action == ACTION_CANCEL:
         await drop_pending(update, ctx)
@@ -524,6 +551,10 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action == ACTION_ACCEPT:
         target = reg.get(Registrations.TARGET_PROJECT) or []
+        if target and not force and await _confirm_weak(chat, reg, "accf", reg_id, "-", reply_id):
+            return
+        if target and await _ask_rename(ctx, chat, reg_id, target[0], reply_id):
+            return
         if target:
             await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, _accept_note(ctx, reg_id))
             if reply_id:
@@ -551,6 +582,14 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         await _apply_now(ctx)
         return
 
+    if action == ACTION_RENAME:
+        suggestion = ctx.bot_data.get("rename_suggest", {}).pop(reg_id, "")
+        if suggestion:
+            pending.pop(chat.id, None)
+            await asyncio.to_thread(repo.clear_awaiting, reg_id)
+            await _rename_and_merge(ctx, reg_id, reply_id, suggestion)
+        return
+
     if action == ACTION_NAME:
         # project_id здесь — исходное действие (new / dnew), reply_id — ответ дилера
         suggestion = dedup.latin_name(_payload(reg))
@@ -568,6 +607,10 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         return
 
     if action == ACTION_PICK and project_id:
+        if not force and await _confirm_weak(chat, reg, "pickf", reg_id, project_id, reply_id):
+            return
+        if await _ask_rename(ctx, chat, reg_id, project_id, reply_id):
+            return
         await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, _accept_note(ctx, reg_id), project_id)
         if reply_id:
             await asyncio.to_thread(repo.close_reply, reply_id, project_id)
@@ -575,6 +618,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         return
 
     if action == ACTION_NEW:
+        if not force and await _confirm_weak(chat, reg, "newf", reg_id, "-", reply_id):
+            return
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id, chat.id)
         await chat.send_message(
@@ -583,6 +628,61 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
             + ". Передумал — просто нажми меню внизу.",
             reply_markup=name_markup(reg, reg_id, ACTION_NEW, reply_id),
         )
+
+
+async def _confirm_weak(chat, reg: dict, force_action: str, reg_id: str, project_id: str, reply_id: str) -> bool:
+    """Заявка на статус с незаполненными ответами — переспросить. True — спросили, дальше не идём."""
+    rtype = reg.get(Registrations.REQUEST_TYPE)
+    if rtype not in STATUS_REQUESTS:
+        return False
+    weak = weak_answers(_payload(reg))
+    if not weak:
+        return False
+    data = f"{CB_ADMIN}{force_action}:{reg_id}:{project_id}" + (f":{reply_id}" if reply_id else "")
+    rows = [[InlineKeyboardButton(f"✅ Да, подтверждаю {REQUEST_LABELS.get(rtype, 'статус')}", callback_data=data)],
+            [InlineKeyboardButton("✏️ Запросить у дилера", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
+            [InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]
+    name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+    await chat.send_message(
+        f"🛠 «{name}»: не заполнены поля:\n" + "\n".join(f"• {escape(w)}" for w in weak)
+        + f"\n\nТочно подтверждаешь {REQUEST_LABELS.get(rtype, 'статус')}?",
+        reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+    return True
+
+
+async def _ask_rename(ctx: ContextTypes.DEFAULT_TYPE, chat, reg_id: str, project_id: str, reply_id: str) -> bool:
+    """Проект для слияния назван не латиницей или длиннее 80 знаков — сначала новое название."""
+    repo = ctx.bot_data["repo"]
+    project = await asyncio.to_thread(repo.project_fields, project_id)
+    name = project.get(Projects.NAME) or ""
+    problem = dedup.name_problem(name)
+    if not problem:
+        return False
+    await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id]})
+    _pending(ctx)[chat.id] = (ACTION_RENAME, reg_id, reply_id)
+    await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_RENAME, reply_id, chat.id)
+    suggestion = dedup.to_latin(name)
+    ctx.bot_data.setdefault("rename_suggest", {})[reg_id] = suggestion
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ {suggestion[:60]}",
+                                                         callback_data=f"{CB_ADMIN}{ACTION_RENAME}:{reg_id}")]])
+    await chat.send_message(
+        f"🛠 Проект «{escape(name)}»: {problem}. Напиши новое название — "
+        "или возьми транслит кнопкой. Передумал — нажми меню внизу.",
+        reply_markup=markup, parse_mode="HTML")
+    return True
+
+
+async def _rename_and_merge(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str, reply_id: str, name: str) -> None:
+    repo = ctx.bot_data["repo"]
+    reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+    target = (reg.get(Registrations.TARGET_PROJECT) or [None])[0]
+    if not target:
+        return
+    await asyncio.to_thread(repo.update_project, target, {Projects.NAME: name})
+    await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, _accept_note(ctx, reg_id), target)
+    if reply_id:
+        await asyncio.to_thread(repo.close_reply, reply_id, target)
+    await _apply_now(ctx)
 
 
 def _accept_note(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> str:
@@ -643,8 +743,17 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id, chat.id)
         await chat.send_message("🛠 Выбери проект кнопкой под сообщением об отказе.")
         return True
-    if action in (ACTION_DNEW, ACTION_NEW):
-        await create_named_project(ctx, action, reg_id, reply_id, text)
+    if action in (ACTION_DNEW, ACTION_NEW, ACTION_RENAME):
+        problem = dedup.name_problem(text)
+        if problem:
+            pending[chat.id] = item
+            await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
+            await chat.send_message(f"🛠 {problem}. Напиши название ещё раз.")
+            return True
+        if action == ACTION_RENAME:
+            await _rename_and_merge(ctx, reg_id, reply_id, text)
+        else:
+            await create_named_project(ctx, action, reg_id, reply_id, text)
         return True
     if action == ACTION_ACCEPT_NOTE:
         # Комментарий запомнили — дальше как обычное «Принять»
