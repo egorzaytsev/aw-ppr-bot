@@ -167,6 +167,20 @@ class AirtableRepo:
     def buffer_add(self, fields: dict) -> str:
         return self._buffer.create(fields, typecast=True)["id"]
 
+    def buffer_update(self, record_id: str, fields: dict) -> None:
+        self._buffer.update(record_id, fields, typecast=True)
+
+    def buffer_get(self, record_id: str) -> dict | None:
+        try:
+            return self._buffer.get(record_id, use_field_ids=True)
+        except Exception:
+            return None
+
+    def outbox_drafts(self) -> list[dict]:
+        """Исходящие-черновики в Буфере (создаёт Claude) — ждут превью Егору."""
+        formula = f"AND({{{Buffer.SOURCE}}}='Исходящее', {{{Buffer.STATUS}}}='Черновик')"
+        return self._buffer.all(formula=formula, use_field_ids=True)
+
     def buffer_attach(self, record_id: str, filename: str, content: bytes, content_type: str | None = None) -> None:
         self._buffer.upload_attachment(record_id, Buffer.FILES, filename, content, content_type)
 

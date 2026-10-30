@@ -35,6 +35,11 @@ class Settings:
     admin_chat_id: str | None
     # Токен @hareworldbot — сбор Telegram для сводки CRM в Буфер; пусто — сбор выключен
     collector_token: str | None
+    # Егор в @hareworldbot: превью исходящих и его записи; Dropbox — большие файлы и /ecoCRM/records/inbox
+    collector_owner_id: int
+    dropbox_app_key: str | None
+    dropbox_app_secret: str | None
+    dropbox_refresh_token: str | None
     log_level: str
 
 
@@ -48,5 +53,9 @@ def load_settings() -> Settings:
         groq_model=os.environ.get("GROQ_WHISPER_MODEL", "whisper-large-v3").strip(),
         admin_chat_id=os.environ.get("ADMIN_CHAT_ID", "").strip() or None,
         collector_token=os.environ.get("HAREWORLD_BOT_TOKEN", "").strip() or None,
+        collector_owner_id=int(os.environ.get("COLLECTOR_OWNER_ID", "6412409625").strip() or 6412409625),
+        dropbox_app_key=os.environ.get("DROPBOX_APP_KEY", "").strip() or None,
+        dropbox_app_secret=os.environ.get("DROPBOX_APP_SECRET", "").strip() or None,
+        dropbox_refresh_token=os.environ.get("DROPBOX_REFRESH_TOKEN", "").strip() or None,
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip().upper(),
     )

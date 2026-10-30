@@ -38,6 +38,8 @@ from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, QUOTE, WON
 from .scenarios.new_project import SOLO_ARCHITECT
 from .scenarios.update_project import fill_preset
 from .slots import VALENCIA
+from .dropbox_store import DropboxStore
+from .records_inbox import RecordsInbox
 from .tg_collector import TelegramCollector
 from .voice import Transcriber
 
@@ -1547,19 +1549,29 @@ def build_app() -> Application:
             log.exception("Не удалось задать список команд")
         app.bot_data["decisions_task"] = asyncio.create_task(_decisions_loop(app))
         app.bot_data["alerts_task"] = asyncio.create_task(_alerts_loop(app))
+        dropbox = None
+        if settings.dropbox_refresh_token and settings.dropbox_app_key and settings.dropbox_app_secret:
+            dropbox = DropboxStore(settings.dropbox_app_key, settings.dropbox_app_secret,
+                                   settings.dropbox_refresh_token)
+            app.bot_data["dropbox"] = dropbox
+            inbox = RecordsInbox(dropbox, transcriber, app.bot_data["repo"])
+            app.bot_data["records_task"] = asyncio.create_task(inbox.run())
         if settings.collector_token:
-            collector = TelegramCollector(settings.collector_token, app.bot_data["repo"], transcriber)
+            collector = TelegramCollector(settings.collector_token, app.bot_data["repo"], transcriber, dropbox,
+                                          settings.collector_owner_id)
             app.bot_data["collector"] = collector
             app.bot_data["collector_task"] = asyncio.create_task(collector.run())
         app.bot_data["reminders_task"] = asyncio.create_task(_reminders_loop(app))
 
     async def post_shutdown(app: Application) -> None:
-        for key in ("decisions_task", "reminders_task", "alerts_task", "collector_task"):
+        for key in ("decisions_task", "reminders_task", "alerts_task", "collector_task", "records_task"):
             task = app.bot_data.get(key)
             if task:
                 task.cancel()
         if app.bot_data.get("collector"):
             await app.bot_data["collector"].aclose()
+        if app.bot_data.get("dropbox"):
+            await app.bot_data["dropbox"].aclose()
         await transcriber.aclose()
 
     app = (

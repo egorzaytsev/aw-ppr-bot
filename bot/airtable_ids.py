@@ -112,7 +112,8 @@ class Buffer:
     SOURCE_REF = "fldmzsXCpq3w3KOhv"
     STATUS = "fldNjTs2z5MhglbSo"      # Новое / Отложено
     FILES = "fldXGqMVzFWurwhou"
-    KEY = "fldKohxc59eYlQHw0"          # tg:<chat>:<message> — защита от дублей
+    KEY = "fldKohxc59eYlQHw0"          # tg:<отправитель>:<дата>:<хеш> — защита от дублей
+    ANALYSIS = "fldDUVlg4xaQ6KYai"     # у исходящих — итог отправки
 
 
 class Decision:
