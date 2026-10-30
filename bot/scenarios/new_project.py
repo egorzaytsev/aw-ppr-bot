@@ -25,6 +25,9 @@ ORIGIN_DEALER = "Нет — AW предлагает дилер взамен пр
 ORIGIN_OWN = "Бюро нет — проект ведёт дилер"
 CONTACT_BUREAU_DOCS = "Indirect (bureau docs)"
 MATERIALS_KEY = "Materials"
+THIRD_PARTY_KEY = "Third-party Statement"  # все документы третьей стороны одним вопросом
+# Месяц размещения заказа на регистрации — заменяет Expected Order Date
+ORDER_MONTH_FINAL = "Order Month Final"
 # Упрощённая схема (до 30 000 €): «зарегистрировать» = прислать номер квотации бэк-офиса
 SIMPLIFIED_QUOTE = "Simplified Quote №"
 WANTS_QUOTE = "_simplified_quote"
@@ -90,6 +93,11 @@ STAGE_NOTIFICATION = "уведомление"
 STAGE_PRE_REGISTRATION = "предрегистрация"
 STAGE_REGISTRATION = "регистрация"
 STAGE_SIMPLIFIED = "регистрация по упрощённой схеме (квотация)"
+
+
+def _month(v) -> str:
+    """2027-03-01 → 03.2027"""
+    return f"{v[5:7]}.{v[:4]}" if isinstance(v, str) and len(v) >= 7 else str(v)
 
 
 def _money(v) -> str:
@@ -358,32 +366,30 @@ PHASE_3 = (
         prompt="Кто лично принимает решение по мебели?",
         hint="Имя, компания, роль",
     ),
+    Question(
+        phase=3,
+        key=THIRD_PARTY_KEY,
+        label="Документы заказчика и бюро",
+        prompt=("Пришли документы заказчика или бюро — всё, что есть:\n• ведомость с Andreu World\n"
+                "• тендерное задание\n• запрос КП от заказчика\n• другое"),
+        hint="Файлы по одному, больше 5 МБ — ссылкой.",
+        kind="files",
+        optional=True,
+        missing_label="не присланы",
+    ),
+    # Бывшие вопросы по видам документов — не задаются; оставлены, чтобы не сдвигать индексы вопросов
     *(
-        Question(
-            phase=3,
-            group="Документы третьей стороны",
-            group_min_one=True,
-            key=key,
-            label=label,
-            prompt=prompt,
-            hint=hint,
-            kind="files",
-            choices=(("Нет", NONE),),
-        )
-        for key, label, prompt, hint in (
-            ("Third-party Statement", "Ведомость", "Есть ведомость с Andreu World внутри?",
-             "Пришли файл или ссылку — или нажми «Нет». Документы третьей стороны спрошу по видам"),
-            ("Tender Brief", "Тендерное задание", "Есть тендерное задание?", "Файл или ссылка — или «Нет»"),
-            ("Purchase Request", "Запрос на закупку", "Есть запрос на закупку?", "Файл или ссылка — или «Нет»"),
-            ("Other Third-party Document", "Прочее", "Другие документы третьей стороны?",
-             "Файл или ссылка — или «Нет»"),
-        )
+        Question(phase=3, key=key, label=label, prompt=label, kind="files", ask_if=lambda a: False)
+        for key, label in (("Tender Brief", "Тендерное задание"), ("Purchase Request", "Запрос КП"),
+                           ("Other Third-party Document", "Прочее"))
     ),
     Question(
         phase=3,
-        key="Shipment Month",
-        label="Месяц отгрузки",
-        prompt="В каком месяце нужна отгрузка?",
+        key=ORDER_MONTH_FINAL,
+        label="Месяц размещения заказа",
+        prompt="В каком месяце размещение заказа?",
+        hint_fn=lambda a: (f"Раньше был {_month(a['Order Month'])}. Не изменился — выбери его же"
+                           if a.get("Order Month") else ""),
         kind="month",
     ),
     Question(
@@ -536,7 +542,7 @@ def stage(phase_reached: int, a: dict, missing_phase1: list) -> tuple[str, str]:
 # Что уходит строками в Project Log при Accept (полей в Projects нет)
 LOG_KEYS = (
     "AW Origin", "Decision Maker Company", "Influencers", "Competing Dealers",
-    "Order Month", "Call Slot 15", "Decision Maker", "Shipment Month", "Call Slot 30",
+    "Order Month", "Call Slot 15", "Decision Maker", ORDER_MONTH_FINAL, "Call Slot 30",
 )
 
 

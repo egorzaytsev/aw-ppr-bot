@@ -267,3 +267,12 @@ def test_status_goes_to_manager_not_company():
     assert P.NOTIFIED == "fldJRkBhuJzyg7QIX"
     pre = plan(dict(r, **{R.REQUEST_TYPE: "Upgrade — Pre-registration"}), {**FULL, P.NOTIFIED: ["recMARINA"]})
     assert pre.project_updates[P.PRE_REGISTERED] == ["recMARINA"] and pre.project_updates[P.NOTIFIED] == []
+
+
+def test_order_month_final_overwrites_expected_order_date():
+    from bot.decisions import change_lines, transfers
+    reg = {R.PAYLOAD: '{"Order Month Final": "2027-06-01"}'}
+    project = {P.NAME: "X", P.EXPECTED_ORDER_DATE: "2027-03-01"}
+    u, _ = transfers(reg, project)
+    assert u[P.EXPECTED_ORDER_DATE] == "2027-06-01"
+    assert "📅 Размещение заказа: 03.2027 → 06.2027" in change_lines(project, u)

@@ -244,13 +244,12 @@ def test_prereg_then_registration_full_flow():
     assert r.state.phase == 3 and r.state.step == 23
     r = engine.handle_text(r.state, "Q-2026-1187")
     r = engine.handle_text(r.state, "Иванов И., ПАО Сбербанк, директор АХО")
-    assert "<b>Есть ведомость с Andreu World внутри?</b>" in r.screens[0].text
+    assert "<b>Пришли документы заказчика или бюро — всё, что есть:</b>" in r.screens[0].text
+    assert "• запрос КП от заказчика" in r.screens[0].text
     r = engine.handle_file(r.state, dict(FILE, file_id="F2", name="vedomost.pdf"))
     r = engine.handle_callback(r.state, engine.CB_DONE)
-    r = engine.handle_callback(r.state, CH + "0")                 # тендерного задания нет
-    r = engine.handle_callback(r.state, CH + "0")                 # запроса на закупку нет
-    r = engine.handle_callback(r.state, CH + "0")                 # прочего нет
-    assert r.state.step == 29
+    assert r.state.step == 29                                     # виды документов больше не спрашиваем
+    assert "<b>В каком месяце размещение заказа?</b>" in r.screens[0].text
     r = engine.handle_text(r.state, "июнь 2027")
     r = engine.handle_text(r.state, "16.10, 15:00, Мск")
     assert r.state.awaiting == "confirm"
@@ -268,6 +267,7 @@ def test_prereg_then_registration_full_flow():
     log = p["Project Log"].splitlines()
     assert "AW в проекте бюро: Бюро нет — проект ведём мы" in log
     assert "Звонок 30 минут: 16.10, 15:00, Мск" in log
+    assert p["Order Month Final"] == "2027-06-01"
     names = [it["name"] for _, it in engine.collected_files(r.state)]
     assert names == ["plan.pdf", "spec.xlsx", "vedomost.pdf"]
     assert "Layouts" not in p and "Specification For Quotation" not in p
@@ -466,16 +466,13 @@ def test_stale_qualifier_state_heals():
     assert r.screens and r.screens[-1].text
 
 
-def test_third_party_docs_all_no_requires_one():
+def test_third_party_docs_one_screen_can_skip():
     r = _run_phase2(_run_phase1())
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
     st.step = 25
-    for _ in range(4):
-        r = engine.handle_callback(st, CH + "0")
-        st = r.state
-    assert "Документы третьей стороны: нужен хотя бы один файл или ссылка" in r.screens[0].text
-    assert r.state.step == 25
+    r = engine.handle_callback(st, engine.CB_SKIP)
+    assert r.state.step == 29
 
 
 def test_other_place_asks_country_and_city():

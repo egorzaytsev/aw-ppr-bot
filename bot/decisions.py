@@ -121,6 +121,10 @@ def transfers(reg: dict, project: dict) -> tuple[dict, set]:
     order = payload.get("Order Month")
     if isinstance(order, str) and _ISO_DATE.fullmatch(order) and _empty(project.get(Projects.EXPECTED_ORDER_DATE)):
         updates[Projects.EXPECTED_ORDER_DATE] = order
+    # Месяц размещения заказа на регистрации — самый свежий: заменяет прежний
+    final = payload.get("Order Month Final")
+    if isinstance(final, str) and _ISO_DATE.fullmatch(final) and final != project.get(Projects.EXPECTED_ORDER_DATE):
+        updates[Projects.EXPECTED_ORDER_DATE] = final
     if payload.get("Specifier") and _empty(project.get(Projects.SPECIFIER)):
         provided.add(Projects.SPECIFIER)  # связь с Companies ставит Егор
     # Файлы заявки — в Dossier Files (дописываем к уже лежащим)
@@ -185,6 +189,10 @@ def change_lines(project: dict, moved: dict) -> list[str]:
             else:
                 fmt = lambda v: STAGE_RU.get(v, v)  # noqa: E731
             lines.append(f"{label}: {fmt(old)} → {fmt(new)}")
+    old_order = project.get(Projects.EXPECTED_ORDER_DATE)
+    if Projects.EXPECTED_ORDER_DATE in moved and not _empty(old_order):
+        fmt = lambda v: f"{str(v)[5:7]}.{str(v)[:4]}"  # noqa: E731
+        lines.append(f"📅 Размещение заказа: {fmt(old_order)} → {fmt(moved[Projects.EXPECTED_ORDER_DATE])}")
     if Projects.PPR_TRACK in moved and not _empty(project.get(Projects.PPR_TRACK)):
         lines.append("📈 Трек: Simplified → Full")
     return lines
