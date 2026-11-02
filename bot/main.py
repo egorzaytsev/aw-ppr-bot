@@ -1563,7 +1563,8 @@ def build_app() -> Application:
             app.bot_data["collector"] = collector
             app.bot_data["collector_task"] = asyncio.create_task(collector.run())
         if settings.spanish_token and dropbox:
-            spanish = SpanishCards(settings.spanish_token, dropbox, settings.collector_owner_id)
+            spanish = SpanishCards(settings.spanish_token, dropbox, settings.collector_owner_id, settings.groq_api_key,
+                                   settings.spanish_llm_model)
             app.bot_data["spanish"] = spanish
             app.bot_data["spanish_task"] = asyncio.create_task(spanish.run())
         app.bot_data["reminders_task"] = asyncio.create_task(_reminders_loop(app))

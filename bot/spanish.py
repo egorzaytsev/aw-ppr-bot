@@ -1,10 +1,13 @@
 """Карточки испанского — отдельный личный бот Егора (не рабочий), без Mac и без Claude.
 
 Каждый день в 10:00 (Валенсия) — следующие 6 карточек: испанское и перевод под спойлером.
-Новые карточки: Егор присылает боту текст урока — строки «испанское — перевод»
-(разделитель: таб, два пробела, « — », « - », «=»). Заголовки «# дата», нумерация упражнений и строки
-без перевода не берутся — бот перечисляет пропущенные. Старую очередь (queue.json) можно прислать файлом.
-Команды: /more — ещё порция сейчас, /left — сколько осталось.
+Новые карточки — сами из Google Doc с уроками (раз в 3 часа): документ делится на разделы по датам
+(«28.10»), из строк, которых бот ещё не видел, LLM (Groq) делает пары «испанское — перевод»;
+перевода нет — переводит сам. Упражнения, таблицы спряжений, ссылки и коды Zoom не берутся.
+Строки помечаются виденными только после успешного разбора, поэтому урок, который дописывают
+во время занятия, догоняется при следующей проверке.
+Можно и вручную: текст боту — тот же разбор; старая очередь (queue.json) — файлом.
+Команды: /more — ещё порция сейчас, /left — сколько осталось, /doc — проверить документ сейчас.
 
 Очередь — один JSON в Dropbox /Spanish/cards.json: переживает перезапуски Railway, её можно открыть руками.
 Пишет и принимает команды только от Егора; остальным не отвечает.
@@ -12,6 +15,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -31,6 +35,42 @@ DAILY_N = 6
 SEND_AT = time(10, 0)
 POLL_TIMEOUT = 50
 RETRY_PAUSE = 30
+DOC_URL = "https://docs.google.com/document/d/12cJa9dqg5_vOm_FF1KL5hg6Iw0KfP0koAZ3OIxhL1QA/export?format=txt"
+DOC_EVERY = 3 * 3600
+FIRST_RUN_SECTIONS = 2   # первый запуск: берём два последних урока, старые считаем отправленными раньше
+LLM_URL = "https://api.groq.com/openai/v1/chat/completions"
+LLM_CHUNK = 120
+
+_SECTION = re.compile(r"^\s*#?\s*(\d{1,2}\.\d{2})\s*$")
+_NOISE = re.compile(r"https?://|zoom|meet -|идентификатор|код доступа", re.I)
+
+LLM_PROMPT = """Ты делаешь карточки для изучения испанского из конспекта урока (носитель — русский).
+Карточка — пара: испанское слово, фраза, выражение или пример употребления — и короткий русский перевод.
+Бери ВСЁ лексическое: слова, фразы, разговорные выражения, примеры. Если перевода в тексте нет — переведи сам.
+Если строка — испанское определение термина («El inmovilismo es…»), карточка: термин — короткий русский смысл.
+Варианты через «/» объедини в одну карточку. Испанскую часть сохраняй как в тексте, исправляя только явные опечатки.
+НЕ бери: таблицы спряжений, нумерованные упражнения и вопросы к ним, строки только на русском, ссылки, коды, имена.
+Ответ — только JSON: {"cards": [{"es": "...", "ru": "..."}]}. Нечего брать — {"cards": []}."""
+
+
+def split_sections(text: str) -> list[tuple[str, list[str]]]:
+    """[(ключ раздела, строки)]; ключ — дата и номер её повтора («28.10#2» на следующий год)."""
+    sections: list[tuple[str, list[str]]] = []
+    seen: dict[str, int] = {}
+    for raw in text.replace("\r", "").split("\n"):
+        m = _SECTION.match(raw.strip("\ufeff"))
+        if m:
+            n = seen[m.group(1)] = seen.get(m.group(1), 0) + 1
+            sections.append((m.group(1) if n == 1 else f"{m.group(1)}#{n}", []))
+        elif sections:
+            line = raw.strip()
+            if line and not _NOISE.search(line):
+                sections[-1][1].append(line)
+    return sections
+
+
+def line_id(line: str) -> str:
+    return hashlib.sha1(" ".join(line.lower().split()).encode()).hexdigest()[:10]
 
 _SEP = re.compile(r"\t+|\s{2,}|\s+[—–-]\s+|\s*=\s*")
 _EXERCISE = re.compile(r"^\s*(\d+[.)]|[a-zа-я][.)])\s")
@@ -89,8 +129,11 @@ def next_send(now: datetime) -> datetime:
 
 
 class SpanishCards:
-    def __init__(self, token: str, dropbox, owner_id: int) -> None:
+    def __init__(self, token: str, dropbox, owner_id: int, groq_key: str = "",
+                 llm_model: str = "llama-3.3-70b-versatile") -> None:
         self._token = token
+        self._groq_key = groq_key
+        self._llm_model = llm_model
         self._dbx = dropbox
         self._owner = owner_id
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(POLL_TIMEOUT + 20))
@@ -142,6 +185,66 @@ class SpanishCards:
             await self._save()
             return len(portion)
 
+    # ---------- разбор текста ----------
+
+    async def extract(self, lines: list[str]) -> list[dict]:
+        """Карточки из строк конспекта через LLM; без ключа — простой разбор «испанское — перевод»."""
+        if not self._groq_key:
+            return parse_cards("\n".join(lines))[0]
+        cards: list[dict] = []
+        for i in range(0, len(lines), LLM_CHUNK):
+            resp = await self._client.post(LLM_URL, headers={"Authorization": f"Bearer {self._groq_key}"}, json={
+                "model": self._llm_model, "temperature": 0.1, "response_format": {"type": "json_object"},
+                "messages": [{"role": "system", "content": LLM_PROMPT},
+                             {"role": "user", "content": "\n".join(lines[i:i + LLM_CHUNK])}]})
+            if resp.status_code != 200:
+                raise RuntimeError(f"Groq {resp.status_code}: {resp.text[:200]}")
+            data = json.loads(resp.json()["choices"][0]["message"]["content"])
+            for c in data.get("cards", []):
+                es, ru = str(c.get("es", "")).strip(), str(c.get("ru", "")).strip()
+                if es and ru:
+                    cards.append({"es": es, "ru": ru})
+        return cards
+
+    async def _add(self, cards: list[dict]) -> int:
+        """Добавить в конец очереди без повторов; вызывать под self._lock."""
+        st = await self._load()
+        known = {c["es"].lower() for c in st["cards"]}
+        new = []
+        for c in cards:
+            if c["es"].lower() not in known:
+                known.add(c["es"].lower())
+                new.append(c)
+        st["cards"] += new
+        return len(new)
+
+    async def check_doc(self, report: bool = False) -> int:
+        resp = await self._client.get(DOC_URL, follow_redirects=True)
+        if resp.status_code != 200 or "text/plain" not in resp.headers.get("content-type", ""):
+            raise RuntimeError(f"Google Doc недоступен ({resp.status_code}) — проверь доступ «по ссылке»")
+        sections = split_sections(resp.content.decode("utf-8-sig", errors="replace"))
+        added, notes = 0, []
+        async with self._lock:
+            st = await self._load()
+            if "seen" not in st:   # первый запуск — старые уроки уже были в прежней очереди
+                st["seen"] = {k: [line_id(x) for x in lines] for k, lines in sections[:-FIRST_RUN_SECTIONS]}
+            for key, lines in sections:
+                seen = set(st["seen"].get(key, []))
+                fresh = [x for x in lines if line_id(x) not in seen]
+                if not fresh:
+                    continue
+                n = await self._add(await self.extract(fresh))
+                st["seen"][key] = sorted(seen | {line_id(x) for x in fresh})
+                await self._save()   # после каждого раздела: сбой дальше не повторит уже разобранное
+                added += n
+                if n:
+                    notes.append(f"{key.split('#')[0]} — {n}")
+            left = len(st["cards"]) - st["sent"]
+        if notes or report:
+            what = ", ".join(notes) if notes else "новых строк нет"
+            await self._say(f"📒 Из документа: {what}. В очереди {left}.")
+        return added
+
     # ---------- сообщения Егора ----------
 
     async def _on_message(self, msg: dict) -> None:
@@ -154,10 +257,15 @@ class SpanishCards:
         cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
         if cmd in ("/start", "/help"):
             await self._say("🇪🇸 Каждый день в 10:00 — 6 карточек, перевод под спойлером.\n"
-                            "Пришли текст урока строками «испанское — перевод», я добавлю их в очередь.\n"
-                            "/more — ещё порция сейчас, /left — сколько осталось.")
+                            "Новые слова беру сам из документа с уроками (раз в 3 часа).\n"
+                            "/more — ещё порция сейчас, /left — сколько осталось, /doc — проверить документ сейчас.")
         elif cmd == "/more":
             await self.send_portion()
+        elif cmd == "/doc":
+            try:
+                await self.check_doc(report=True)
+            except Exception as exc:
+                await self._say(f"⚠️ Документ не разобран: {escape(_short_error(exc))}")
         elif cmd == "/left":
             async with self._lock:
                 st = await self._load()
@@ -167,21 +275,15 @@ class SpanishCards:
             await self._add_text(text)
 
     async def _add_text(self, text: str) -> None:
-        cards, skipped = parse_cards(text)
+        cards = await self.extract([x.strip() for x in text.splitlines() if x.strip()])
         async with self._lock:
-            st = await self._load()
-            known = {c["es"].lower() for c in st["cards"]}
-            new = [c for c in cards if c["es"].lower() not in known]
-            st["cards"] += new
+            new = await self._add(cards)
             if new:
                 await self._save()
-        reply = f"➕ Добавил {len(new)} карточек, в очереди {len(st['cards']) - st['sent']}."
-        if len(cards) > len(new):
-            reply += f"\nУже были: {len(cards) - len(new)}."
-        if skipped:
-            shown = "\n".join(f"• {escape(s[:80])}" for s in skipped[:10])
-            more = f"\n…и ещё {len(skipped) - 10}" if len(skipped) > 10 else ""
-            reply += f"\nНе понял (нет перевода или это упражнение):\n{shown}{more}"
+            st = await self._load()
+        reply = f"➕ Добавил {new} карточек, в очереди {len(st['cards']) - st['sent']}."
+        if len(cards) > new:
+            reply += f"\nУже были: {len(cards) - new}."
         await self._say(reply)
 
     async def _import_file(self, doc: dict) -> None:
@@ -235,9 +337,29 @@ class SpanishCards:
                 continue
             await asyncio.sleep(max(30.0, (next_send(datetime.now(VALENCIA)) - datetime.now(VALENCIA)).total_seconds()))
 
+    async def _doc_loop(self) -> None:
+        last_error = ""
+        while True:
+            try:
+                await self.check_doc()
+                last_error = ""
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                err = _short_error(exc)
+                log.warning("Карточки: документ не разобран: %s", err)
+                if err != last_error:   # одна и та же ошибка — одно сообщение, не каждые 3 часа
+                    last_error = err
+                    try:
+                        await self._say(f"⚠️ Документ с уроками не разобран: {escape(err)}")
+                    except Exception:
+                        pass
+            await asyncio.sleep(DOC_EVERY)
+
     async def run(self) -> None:
         log.info("Карточки испанского запущены")
         daily = asyncio.create_task(self._daily())
+        doc = asyncio.create_task(self._doc_loop())
         try:
             while True:
                 try:
@@ -249,6 +371,7 @@ class SpanishCards:
                     await asyncio.sleep(RETRY_PAUSE)
         finally:
             daily.cancel()
+            doc.cancel()
 
     async def aclose(self) -> None:
         await self._client.aclose()

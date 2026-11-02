@@ -5,7 +5,7 @@ from datetime import datetime
 import httpx
 
 from bot.slots import VALENCIA
-from bot.spanish import SpanishCards, card_text, import_queue, next_send, parse_cards
+from bot.spanish import SpanishCards, card_text, import_queue, next_send, parse_cards, split_sections
 
 
 def test_parse_cards_separators_and_skips():
@@ -81,3 +81,39 @@ def test_strangers_ignored():
     bot = _bot()
     asyncio.run(bot._on_message({"from": {"id": 2}, "chat": {"type": "private"}, "text": "/left"}))
     assert bot.sent == []
+
+
+def test_split_sections_and_noise():
+    text = "﻿ZOOM\nhttps://x\n14.10 \r\n\r\nrivales /competidores \r\nCódigo\n28.10\nun clavo\nhttps://zoom.us/j/1\n14.10\notra vez\n"
+    secs = split_sections(text)
+    assert [k for k, _ in secs] == ["14.10", "28.10", "14.10#2"]
+    assert secs[0][1] == ["rivales /competidores", "Código"] and secs[1][1] == ["un clavo"]
+
+
+class FakeResp:
+    status_code = 200
+    headers = {"content-type": "text/plain; charset=utf-8"}
+
+    def __init__(self, text):
+        self.content = text.encode()
+
+
+def test_check_doc_first_run_then_only_new_lines():
+    bot = _bot()
+    doc = {"text": "01.10\nviejo — старый\n14.10\nrivales — соперники\n28.10\nun clavo — гвоздь\n"}
+    extracted = []
+
+    async def get(url, **kw):
+        return FakeResp(doc["text"])
+
+    async def extract(lines):
+        extracted.append(list(lines))
+        return parse_cards("\n".join(lines))[0]
+    bot._client.get = get
+    bot.extract = extract
+    assert asyncio.run(bot.check_doc()) == 2            # первый запуск: два последних урока
+    assert extracted == [["rivales — соперники"], ["un clavo — гвоздь"]]
+    doc["text"] += "pinzas — пинцет\n"                  # урок дописали
+    assert asyncio.run(bot.check_doc()) == 1
+    assert extracted[-1] == ["pinzas — пинцет"]
+    assert asyncio.run(bot.check_doc()) == 0
