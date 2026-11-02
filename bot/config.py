@@ -40,6 +40,8 @@ class Settings:
     dropbox_app_key: str | None
     dropbox_app_secret: str | None
     dropbox_refresh_token: str | None
+    # Личный бот карточек испанского (не рабочий); пусто — карточки выключены
+    spanish_token: str | None
     log_level: str
 
 
@@ -57,5 +59,6 @@ def load_settings() -> Settings:
         dropbox_app_key=os.environ.get("DROPBOX_APP_KEY", "").strip() or None,
         dropbox_app_secret=os.environ.get("DROPBOX_APP_SECRET", "").strip() or None,
         dropbox_refresh_token=os.environ.get("DROPBOX_REFRESH_TOKEN", "").strip() or None,
+        spanish_token=os.environ.get("SPANISH_BOT_TOKEN", "").strip() or None,
         log_level=os.environ.get("LOG_LEVEL", "INFO").strip().upper(),
     )

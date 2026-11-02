@@ -47,6 +47,15 @@ class DropboxStore:
         resp.raise_for_status()
         return resp.json().get("path_display", path)
 
+    async def upload_overwrite(self, path: str, content: bytes) -> None:
+        """Файл состояния: перезаписать на месте."""
+        headers = dict(await self._bearer(), **{
+            "Content-Type": "application/octet-stream",
+            "Dropbox-API-Arg": json.dumps({"path": path, "mode": "overwrite"}, ensure_ascii=True),
+        })
+        resp = await self._client.post(f"{CONTENT}/files/upload", headers=headers, content=content)
+        resp.raise_for_status()
+
     async def download(self, path: str) -> bytes:
         headers = dict(await self._bearer(), **{"Dropbox-API-Arg": json.dumps({"path": path}, ensure_ascii=True)})
         resp = await self._client.post(f"{CONTENT}/files/download", headers=headers)

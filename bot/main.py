@@ -41,6 +41,7 @@ from .slots import VALENCIA
 from .dropbox_store import DropboxStore
 from .records_inbox import RecordsInbox
 from .tg_collector import TelegramCollector
+from .spanish import SpanishCards
 from .voice import Transcriber
 
 log = logging.getLogger("aw-ppr-bot")
@@ -1561,15 +1562,21 @@ def build_app() -> Application:
                                           settings.collector_owner_id)
             app.bot_data["collector"] = collector
             app.bot_data["collector_task"] = asyncio.create_task(collector.run())
+        if settings.spanish_token and dropbox:
+            spanish = SpanishCards(settings.spanish_token, dropbox, settings.collector_owner_id)
+            app.bot_data["spanish"] = spanish
+            app.bot_data["spanish_task"] = asyncio.create_task(spanish.run())
         app.bot_data["reminders_task"] = asyncio.create_task(_reminders_loop(app))
 
     async def post_shutdown(app: Application) -> None:
-        for key in ("decisions_task", "reminders_task", "alerts_task", "collector_task", "records_task"):
+        for key in ("decisions_task", "reminders_task", "alerts_task", "collector_task", "records_task",
+                    "spanish_task"):
             task = app.bot_data.get(key)
             if task:
                 task.cancel()
-        if app.bot_data.get("collector"):
-            await app.bot_data["collector"].aclose()
+        for key in ("collector", "spanish"):
+            if app.bot_data.get(key):
+                await app.bot_data[key].aclose()
         if app.bot_data.get("dropbox"):
             await app.bot_data["dropbox"].aclose()
         await transcriber.aclose()
