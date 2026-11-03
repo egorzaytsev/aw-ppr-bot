@@ -44,6 +44,10 @@ ACTION_ACCEPT_NOTE = "accn"
 ACTION_UP, ACTION_UP_NO, ACTION_UP_LIST, ACTION_UP_PICK = "up", "upno", "upl", "ups"
 # Подтверждение несмотря на незаполненные ответы: те же действия с флагом «точно»
 FORCE = {"pickf": ACTION_PICK, "accf": ACTION_ACCEPT, "newf": ACTION_NEW}
+# «Принять как предрегистрацию» вместо запрошенной регистрации: dp<x> → то же решение без переспроса
+DOWNGRADE = {"dpn": "newf", "dpp": "pickf", "dpa": "accf"}
+_DOWN_OF = {v: k for k, v in DOWNGRADE.items()}
+_PRE_OF = {"New — Registration": "New — Pre-registration", "Upgrade — Registration": "Upgrade — Pre-registration"}
 # Проект для слияния назван не латиницей — сначала новое название
 ACTION_RENAME = "ren"
 # Откат статуса менеджера: ad:rb:<проект>:<менеджер> → на этап ниже (rbd) или снять (rbc), затем причина текстом
@@ -630,7 +634,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         if suggestion and project_id in (ACTION_NEW, ACTION_DNEW):
             pending.pop(chat.id, None)
             await asyncio.to_thread(repo.clear_awaiting, reg_id)
-            await create_named_project(ctx, project_id, reg_id, reply_id, suggestion)
+            await create_named_project(ctx, project_id, reg_id, reply_id, suggestion, chat)
         return
 
     if action == ACTION_DNEW:
@@ -651,8 +655,22 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         await _apply_now(ctx)
         return
 
+    if action in DOWNGRADE:
+        rtype = reg.get(Registrations.REQUEST_TYPE)
+        if rtype in _PRE_OF:
+            await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.REQUEST_TYPE: _PRE_OF[rtype]})
+            missing = "; ".join(w.split(" — «")[0] for w in weak_answers(_payload(reg)))
+            notes = ctx.bot_data.setdefault("accept_notes", {})
+            note = "Принято как предрегистрация." + (f" Для регистрации не хватает: {missing}." if missing else "")
+            notes[reg_id] = (notes[reg_id] + "\n" if notes.get(reg_id) else "") + note
+        tail = f":{reply_id}" if reply_id else ""
+        await on_admin_callback(update, ctx, f"{CB_ADMIN}{DOWNGRADE[action]}:{reg_id}:{project_id or '-'}{tail}")
+        return
+
     if action == ACTION_NEW:
-        if not force and await _confirm_weak(chat, reg, "newf", reg_id, "-", reply_id):
+        name_ready = ctx.bot_data.setdefault("new_names", {}).pop(reg_id, "") if force else ""
+        if name_ready:   # название уже выбрано, переспрос по пустым полям подтверждён
+            await create_named_project(ctx, ACTION_NEW, reg_id, reply_id, name_ready, chat, force=True)
             return
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id, chat.id)
@@ -664,8 +682,11 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         )
 
 
-async def _confirm_weak(chat, reg: dict, force_action: str, reg_id: str, project_id: str, reply_id: str) -> bool:
-    """Заявка на статус с незаполненными ответами — переспросить. True — спросили, дальше не идём."""
+async def _confirm_weak(chat, reg: dict, force_action: str, reg_id: str, project_id: str, reply_id: str,
+                        new_name: str = "") -> bool:
+    """Заявка на статус с незаполненными ответами — переспросить. True — спросили, дальше не идём.
+
+    Для запрошенной регистрации — ещё и «Принять как предрегистрацию»."""
     rtype = reg.get(Registrations.REQUEST_TYPE)
     if rtype not in STATUS_REQUESTS:
         return False
@@ -673,12 +694,17 @@ async def _confirm_weak(chat, reg: dict, force_action: str, reg_id: str, project
     if not weak:
         return False
     data = f"{CB_ADMIN}{force_action}:{reg_id}:{project_id}" + (f":{reply_id}" if reply_id else "")
-    rows = [[InlineKeyboardButton(f"✅ Да, подтверждаю {REQUEST_LABELS.get(rtype, 'статус')}", callback_data=data)],
-            [InlineKeyboardButton("✏️ Запросить у дилера", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
+    rows = [[InlineKeyboardButton(f"✅ Да, подтверждаю {REQUEST_LABELS.get(rtype, 'статус')}", callback_data=data)]]
+    if rtype in _PRE_OF:
+        down = f"{CB_ADMIN}{_DOWN_OF[force_action]}:{reg_id}:{project_id}" + (f":{reply_id}" if reply_id else "")
+        rows.append([InlineKeyboardButton("⬇️ Принять как предрегистрацию", callback_data=down)])
+    rows += [[InlineKeyboardButton("✏️ Запросить у дилера", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
             [InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+    head = (f"🛠 «{name}» → новый проект <b>{escape(new_name)}</b> (референс AW-… присвоится при создании)"
+            if new_name else f"🛠 «{name}»")
     await chat.send_message(
-        f"🛠 «{name}»: не заполнены поля:\n" + "\n".join(f"• {escape(w)}" for w in weak)
+        f"{head}: не заполнены поля:\n" + "\n".join(f"• {escape(w)}" for w in weak)
         + f"\n\nТочно подтверждаешь {REQUEST_LABELS.get(rtype, 'статус')}?",
         reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
     return True
@@ -733,9 +759,17 @@ def name_markup(reg: dict, reg_id: str, action: str, reply_id: str = "") -> Inli
 
 
 async def create_named_project(ctx: ContextTypes.DEFAULT_TYPE, action: str, reg_id: str, reply_id: str,
-                               name: str) -> None:
-    """Создать проект с этим названием: new — принять в него, dnew — отказ фиксируется в нём."""
+                               name: str, chat=None, force: bool = False) -> None:
+    """Создать проект с этим названием: new — принять в него, dnew — отказ фиксируется в нём.
+
+    Сначала название, потом переспрос по пустым полям (в нём уже видно, какой проект появится)."""
     repo = ctx.bot_data["repo"]
+    if action == ACTION_NEW and not force and chat is not None:
+        reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+        ctx.bot_data.setdefault("new_names", {})[reg_id] = name
+        if await _confirm_weak(chat, reg, "newf", reg_id, "-", reply_id, new_name=name):
+            return
+        ctx.bot_data["new_names"].pop(reg_id, None)
     project_id = await asyncio.to_thread(repo.create_project, name)
     ctx.bot_data.setdefault("created_projects", set()).add(project_id)  # для итога «Проект создан»
     if action == ACTION_DNEW:
@@ -796,7 +830,7 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         if action == ACTION_RENAME:
             await _rename_and_merge(ctx, reg_id, reply_id, text)
         else:
-            await create_named_project(ctx, action, reg_id, reply_id, text)
+            await create_named_project(ctx, action, reg_id, reply_id, text, chat)
         return True
     if action == ACTION_ACCEPT_NOTE:
         # Комментарий запомнили — дальше как обычное «Принять»

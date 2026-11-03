@@ -120,8 +120,30 @@ def has_cyrillic(text: str) -> bool:
     return bool(re.search(r"[а-яё]", text or "", re.I))
 
 
+# Частые слова названий — переводим, остальное транслитом («где можно — переводим»)
+_WORDS = [
+    (r"бизнес[- ]?центр[а-я]*|\bбц\b", "BC"), (r"торгов[а-я]* центр[а-я]*|\bтц\b|\bтрц\b", "Mall"),
+    (r"жил[а-я]* комплекс[а-я]*|\bжк\b", "Residential"), (r"штаб[- ]квартир[а-я]*", "HQ"),
+    (r"(\d+)[- ]?(?:й|ий|ый)?\s*этаж[а-я]*", r"Floor \1"), (r"этаж[а-я]*\s*(\d+)", r"Floor \1"),
+    (r"гостиниц(?:а|ы|е|у|ей)|отел(?:ь|я|е|ю|ем)", "Hotel"), (r"офис(?:а|е|у|ом|ы|ов)?", "Office"), (r"ресторан(?:а|е|у|ом|ы|ов)?", "Restaurant"),
+    (r"банк(?:а|е|у|ом|и|ов)?", "Bank"), (r"школ(?:а|ы|е|у|ой|ам)", "School"), (r"университет[а-я]*", "University"),
+    (r"музе(?:й|я|е|ю|ем|и|ев)", "Museum"), (r"больниц(?:а|ы|е|у|ей)", "Hospital"), (r"клиник(?:а|и|е|у|ой)", "Clinic"),
+    (r"аэропорт[а-я]*", "Airport"), (r"библиотек(?:а|и|е|у|ой)", "Library"), (r"театр(?:а|е|у|ом|ы|ов)?", "Theatre"),
+    (r"башн(?:я|и|е|ю|ей)", "Tower"), (r"апартамент[а-я]*", "Apartments"), (r"кампус[а-я]*", "Campus"),
+    (r"кафе", "Cafe"), (r"штаб", "HQ"), (r"центр(?:а|е|у|ом|ы|ов)?", "Center"), (r"здани[ея]", "Building"),
+]
+_WORDS_RE = [(re.compile(rf"(?<![а-яё]){pat}(?![а-яё])", re.I), repl) for pat, repl in _WORDS]
+
+
+def translate_words(text: str) -> str:
+    for rx, repl in _WORDS_RE:
+        text = rx.sub(repl, text)
+    return re.sub(r"\s*[·•|]\s*", " ", text)
+
+
 def to_latin(text: str) -> str:
-    """Транслит строки как есть (для названия, которое уже есть в базе кириллицей)."""
+    """Название латиницей: частые слова переводим, остальное транслитом."""
+    text = translate_words(text or "")
     out = "".join(_TRANSLIT.get(ch.lower(), ch) if ch.lower() in _TRANSLIT else ch for ch in text or "")
     out = " ".join(w[:1].upper() + w[1:] for w in out.split())
     return out[:MAX_NAME_LEN].strip()
@@ -141,12 +163,12 @@ def latin_name(payload: dict) -> str:
     parts = []
     for key in ("End Client", "Object Name"):
         raw = re.sub(r"[«»\"'“”]", "", str(payload.get(key) or "")).strip()
-        raw = _LEGAL.sub("", raw)
+        raw = translate_words(_LEGAL.sub("", raw))
         if raw:
             parts.append("".join(_TRANSLIT.get(ch.lower(), ch) if ch.lower() in _TRANSLIT else ch for ch in raw))
     words = " ".join(parts).split()
     name = " ".join(w[:1].upper() + w[1:] for w in words)
-    return name[:40].strip()
+    return name[:60].strip()
 
 
 def _company_key(name: str) -> str:
