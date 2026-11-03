@@ -175,7 +175,8 @@ def test_prereg_prefills_skipped_phase1_without_skip():
     r = engine.handle_text(r.state, "4500")
     r = engine.handle_callback(r.state, engine.CB_QUALIFIER + "0")
     assert r.state.phase == 2 and r.state.step == 14 and not r.state.prefill
-    assert engine.stage_of(r.state)[0] == "New — Pre-registration"
+    # Фаза 2 ещё без обязательных ответов — этап по-прежнему уведомление
+    assert engine.stage_of(r.state)[0] == "New — Notification"
 
 
 def test_fill_completes_and_offers_prereg():
@@ -881,3 +882,30 @@ def test_dealer_offers_aw_requires_bureau_documents():
     from bot.scenarios.new_project import QUESTIONS, BUREAU_DOCS_KEY
     q = next(x for x in QUESTIONS if x.key == BUREAU_DOCS_KEY)
     assert q.applies(st.answers) and not q.optional
+
+
+def test_vague_answers_rejected_everywhere():
+    from bot.scenarios.base import is_vague
+    for t in ("пока нет", "пока никто", "не знаю", "—", "-", "?", "уточняется", "нет данных", "н/д"):
+        assert is_vague("Decision Maker", t), t
+    assert not is_vague("Parallel Registrations", "Нет")     # «нет» — настоящий ответ
+    assert not is_vague("Decision Maker", "Департамент закупок ЦБ")
+
+
+def test_required_phase2_question_offers_stop_and_stays_notification():
+    r = _run_phase1(skip_optional=True)
+    r = engine.handle_callback(r.state, engine.CB_GATE_YES)
+    r = engine.handle_text(r.state, "Лобби")
+    r = engine.handle_text(r.state, "ул. Лесная, 9")
+    r = engine.handle_text(r.state, "4500")
+    r = engine.handle_callback(r.state, engine.CB_QUALIFIER + "0")
+    q = engine._current_q(r.state)
+    while q.bind(r.state.answers).optional or q.kind != "text":   # до первого обязательного текстового вопроса
+        r = engine.handle_callback(r.state, engine.CB_SKIP if q.bind(r.state.answers).optional
+                                   else engine.CB_CHOICE + "0")
+        q = engine._current_q(r.state)
+    r2 = engine.handle_text(r.state, "пока никто")
+    assert engine._current_q(r2.state).key == q.key and "не ответ" in r2.screens[0].text
+    assert engine.CB_STOP in str(engine.question_screen(r.state).buttons)
+    r = engine.handle_callback(r.state, engine.CB_STOP)
+    assert engine.stage_of(r.state)[0] == "New — Notification"

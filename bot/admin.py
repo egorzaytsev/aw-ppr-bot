@@ -20,7 +20,7 @@ from telegram.ext import ContextTypes
 from . import dedup, routing
 from .cards import dealer_status
 from .decisions import plan as decision_plan
-from .scenarios.base import describe_items, format_value
+from .scenarios.base import describe_items, format_value, is_vague
 from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
 from .airtable_ids import Decision, Projects, Registrations
 
@@ -92,6 +92,37 @@ async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _pending(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
     return ctx.bot_data.setdefault("admin_pending", {})
+
+
+# Новая заявка на предрег./рег. проверяется по шагам: уведомление (нет дублей) → предрегистрация → регистрация
+STEPWISE = {"New — Pre-registration": "pre", "New — Registration": "reg"}
+_STEP_PHASE = {"pre": 2, "reg": 3}
+
+
+async def _start_stepwise(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str, reg: dict) -> None:
+    """Принимаем сначала как уведомление; следующие шаги бот предложит после записи (main: offer_step)."""
+    rtype = reg.get(Registrations.REQUEST_TYPE)
+    if rtype not in STEPWISE:
+        return
+    await asyncio.to_thread(ctx.bot_data["repo"].update_registration, reg_id,
+                            {Registrations.REQUEST_TYPE: "New — Notification"})
+    reg[Registrations.REQUEST_TYPE] = "New — Notification"
+    ctx.bot_data.setdefault("stepwise", {})[reg_id] = {"final": STEPWISE[rtype], "payload": _payload(reg)}
+
+
+def step_offer(ref: str, name: str, step: str, final: str, payload: dict, missing: str = "") -> str:
+    """«Шаг 2 из 3 · предрегистрация?» — с пустыми ответами этой фазы."""
+    total = 3 if final == "reg" else 2
+    n = 2 if step == "pre" else 3
+    asked = "регистрацию" if final == "reg" else "предрегистрацию"
+    weak = weak_answers(payload, _STEP_PHASE[step])
+    lines = [f"🛠 <b>Шаг {n} из {total}</b> · {escape(ref)} · {escape(name)}",
+             f"Дилер просил {asked}. Подтверждаем {_TARGET_RU[step]}?"]
+    if weak:
+        lines += ["Без ответа:"] + [f"• {escape(w)}" for w in weak]
+    if missing:
+        lines.append(f"По проекту не хватает: {escape(missing)}")
+    return "\n".join(lines)
 
 
 def upgrade_markup(project_id: str, person_id: str, target: str) -> InlineKeyboardMarkup:
@@ -254,21 +285,18 @@ _META_KEYS = {"Dealer Project Name", "Project Log", "PPR Track", "EXW Potential"
 _EXTRA_TITLES = {"Bureau": "Архбюро (AW не закладывало)"}
 
 # «Нет» здесь — полноценный ответ, а не пропуск
-_NO_IS_ANSWER = {"Parallel Registrations", "AW Alternatives", "Competing Dealers", "Area Source"}
-_VAGUE = re.compile(r"^(нет\b|—$|-$|не знаю|пока\b)|неизвест|не получил|нет данных|уточня", re.I)
 
 
-def weak_answers(payload: dict) -> list[str]:
-    """Вопросы заявки без настоящего ответа: пропущено, «нет», «пока неизвестно»."""
+def weak_answers(payload: dict, phase: int | None = None) -> list[str]:
+    """Вопросы заявки без настоящего ответа: пропущено, «нет», «пока неизвестно» (phase — только этой фазы)."""
     out = []
     for key, q in _QUESTIONS.items():
-        if key.startswith("_") or key not in payload:
+        if key.startswith("_") or key not in payload or (phase and q.phase != phase):
             continue  # не спрашивали — не ответ
         value = payload[key]
         if value in (None, "", []):
             out.append(q.title)
-        elif isinstance(value, str) and _VAGUE.search(value.strip()) and not (
-                key in _NO_IS_ANSWER and value.strip().lower() == "нет"):
+        elif isinstance(value, str) and is_vague(key, value):
             out.append(f"{q.title} — «{value.strip()[:40]}»")
     return out
 
@@ -586,6 +614,9 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
         )
         return
+
+    if action in (ACTION_ACCEPT, ACTION_PICK, ACTION_NEW):
+        await _start_stepwise(ctx, reg_id, reg)
 
     if action == ACTION_ACCEPT:
         target = reg.get(Registrations.TARGET_PROJECT) or []

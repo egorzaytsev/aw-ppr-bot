@@ -28,6 +28,18 @@ class ParseError(ValueError):
     """Ответ не подходит — текст ошибки уходит пользователю."""
 
 
+# Ответ без информации: «пока нет», «не знаю», «—»… Такое в анкету не принимаем — вопрос пропускают кнопкой.
+VAGUE = re.compile(r"^(нет\b|—$|-$|\?+$|не знаю|пока\b|н/д\b|нд$)|неизвест|не получил|нет данных|уточня", re.I)
+# «Нет» здесь — полноценный ответ, а не пропуск
+NO_IS_ANSWER = frozenset({"Parallel Registrations", "AW Alternatives", "Competing Dealers", "Area Source"})
+VAGUE_HINT = "Это не ответ — нужна реальная информация. Не знаешь — нажми кнопку под вопросом."
+
+
+def is_vague(key: str, text: str) -> bool:
+    t = (text or "").strip()
+    return bool(VAGUE.search(t)) and not (key in NO_IS_ANSWER and t.lower().rstrip(".") == "нет")
+
+
 @dataclass(frozen=True)
 class Question:
     # Ключ в Payload. Где есть поле в Projects — его имя, чтобы перенос был прямым.
@@ -234,6 +246,8 @@ def parse_answer(q: Question, text: str) -> Value:
         problem = q.validate(text)
         if problem:
             raise ParseError(problem)
+    if isinstance(value, str) and value == text and is_vague(q.key, text):
+        raise ParseError(VAGUE_HINT)
     return value
 
 

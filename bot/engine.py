@@ -13,8 +13,8 @@ from html import escape
 from . import phrases, slots
 from .scenarios import SCENARIOS
 from .scenarios.base import (
-    DETAIL, Gate, ParseError, Question, Scenario, describe_items, find_links, format_value,
-    match_choice, parse_answer,
+    DETAIL, VAGUE_HINT, Gate, ParseError, Question, Scenario, describe_items, find_links, format_value,
+    is_vague, match_choice, parse_answer,
 )
 from .state import (
     AWAIT_ANSWER, AWAIT_CONFIRM, AWAIT_DETAIL, AWAIT_EVIDENCE, AWAIT_GATE, AWAIT_MONTH,
@@ -23,6 +23,7 @@ from .state import (
 
 # callback_data кнопок
 CB_SKIP = "skip"
+CB_STOP = "stop"       # обязательный вопрос фазы 2–3: «пока не знаю» — отправить на этапе ниже
 CB_CHOICE = "ch:"      # + индекс варианта в Question.choices
 CB_QUALIFIER = "qf:"   # + индекс варианта в Question.qualifiers
 CB_DONE = "done"       # конец загрузки файлов
@@ -143,8 +144,13 @@ def _gate_open(state: DialogState, n: int) -> bool:
 
 
 def stage_of(state: DialogState) -> tuple[str, str]:
-    """(Request Type, подпись этапа) по достигнутой фазе и полноте."""
-    return scenario_of(state).stage(state.phase, state.answers, _titles(state, missing(state, phase=1)))
+    """(Request Type, подпись этапа) по последней фазе, где все обязательные ответы есть."""
+    reached = 1
+    for n in range(2, state.phase + 1):
+        if missing(state, required_only=True, phase=n):
+            break
+        reached = n
+    return scenario_of(state).stage(reached, state.answers, _titles(state, missing(state, phase=1)))
 
 
 # ---------- экраны ----------
@@ -221,6 +227,8 @@ def question_screen(state: DialogState) -> Screen:
         buttons.append([("Готово", CB_DONE)])
     if q.optional and not _no_skip(state, q):
         buttons.append([(q.skip_label, CB_SKIP)])
+    elif _can_stop(state, q):
+        buttons.append([("Пока не знаю — отправить без этого", CB_STOP)])
     return Screen("\n".join(lines), buttons)
 
 
@@ -304,6 +312,11 @@ def _to_next_phase(state: DialogState) -> Result:
         state.editing = False
         return _ask(state, gaps[0])
     return _enter_next_phase(state)
+
+
+def _can_stop(state: DialogState, q: Question) -> bool:
+    """Обязательный вопрос фазы 2–3 новой заявки: можно остановиться — заявка уйдёт на этапе ниже."""
+    return q.phase >= 2 and not q.bind(state.answers).optional and not state.editing
 
 
 def _no_skip(state: DialogState, q: Question) -> bool:
@@ -583,6 +596,8 @@ def handle_text(state: DialogState, text: str) -> Result:
         if not text.strip():
             return Result(state, [detail_screen(state)])
         problem = q.validate(text.strip()) if q.validate else None
+        if not problem and is_vague(q.key, text):
+            problem = VAGUE_HINT
         if problem:
             return Result(state, [Screen(f"⚠️ {escape(problem)}"), detail_screen(state)])
         state.answers[q.key] = text.strip()
@@ -623,6 +638,9 @@ def handle_callback(state: DialogState, data: str) -> Result:
         q = _current_q(state)
         if data == CB_SKIP and q.optional and not _no_skip(state, q):
             return _accept(state, q, None)
+        if data == CB_STOP and _can_stop(state, q):
+            state.declined_gate = state.phase
+            return _to_summary(state)
         if data == CB_DONE and q.kind == "files":
             if isinstance(state.answers.get(q.key), list) and state.answers[q.key]:
                 if q.qualifiers:

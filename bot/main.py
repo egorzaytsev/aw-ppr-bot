@@ -1013,6 +1013,23 @@ async def upgrade_status(app: Application, project_id: str, person_id: str, targ
     }
     async with app.bot_data.setdefault("decisions_lock", asyncio.Lock()):
         await _handle_registration(app, None, synthetic, event=True, who=who)
+    # Пошаговая проверка: после предрегистрации — предложить регистрацию
+    step = app.bot_data.setdefault("stepwise_next", {}).pop((project_id, person_id), None)
+    if step and target == "pre" and step["final"] == "reg":
+        await offer_step(app, routing.resolve(app.bot_data, who or routing.EGOR)[1], project_id, person_id,
+                         "reg", step)
+
+
+async def offer_step(app: Application, admin_chat, project_id: str, person_id: str, step: str, info: dict) -> None:
+    """Следующий шаг пошаговой проверки новой заявки — проверяющему, с кнопками «Повысить / Пока оставить»."""
+    if not admin_chat:
+        return
+    fresh = await asyncio.to_thread(app.bot_data["repo"].project_fields, project_id)
+    if step == "pre" and info["final"] == "reg":
+        app.bot_data.setdefault("stepwise_next", {})[(project_id, person_id)] = info
+    text = admin.step_offer(fresh.get(Projects.PPR_REF) or "", fresh.get(Projects.NAME) or "", step,
+                            info["final"], info["payload"], fresh.get(Projects.PPR_NEXT_MISSING) or "")
+    await _send_html(app.bot, admin_chat, text, admin.upgrade_markup(project_id, person_id, step))
 
 
 STATUS_FIELDS = {PPR_REGISTERED: Projects.REGISTERED, PPR_PRE_REGISTERED: Projects.PRE_REGISTERED,
@@ -1236,6 +1253,9 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
         elif pl.dealer_text and not pl.blocked:
             await _send_html(app.bot, admin_chat, _admin_summary(
                 reg, pl, pl.project_name or "", False, dealer_name, bool(dealer_chats), [], None))
+    step = app.bot_data.setdefault("stepwise", {}).pop(rec_id, None) if rec_id else None
+    if step and accepted and status_person and not pl.blocked:
+        await offer_step(app, admin_chat, target[0], status_person, "pre", step)
     if not pl.blocked:
         decided_by.pop(rec_id, None)
         other = routing.EGOR if decider != routing.EGOR else (routing.LOLA if routed == routing.LOLA else None)

@@ -79,9 +79,9 @@ class Repo:
         pass
 
 
-def test_new_project_name_first_then_confirm_then_downgrade(monkeypatch):
+def test_new_registration_accepted_stepwise_as_notification_first(monkeypatch):
     repo, chat = Repo(), Chat()
-    ctx = SimpleNamespace(bot_data={"repo": repo, "apply_decisions": None})
+    ctx = SimpleNamespace(bot_data={"repo": repo})
     update = SimpleNamespace(effective_chat=chat)
     monkeypatch.setattr(admin, "is_admin", lambda u, c: True)
 
@@ -90,16 +90,18 @@ def test_new_project_name_first_then_confirm_then_downgrade(monkeypatch):
     monkeypatch.setattr(admin, "_apply_now", no_apply)
     run = lambda data: asyncio.run(admin.on_admin_callback(update, ctx, data))
 
-    run("ad:new:recR:-")                                   # сначала — название с вариантом кнопкой
+    run("ad:new:recR:-")                                   # шаг 1 — название, без переспроса
     assert "название нового проекта" in chat.sent[-1][0]
     assert "PV Smart BC Insait Floor 3" in chat.sent[-1][1].inline_keyboard[0][0].text
-    run("ad:name:recR:new")                                # вариант выбран — теперь переспрос
-    text, markup = chat.sent[-1]
-    assert "PV Smart BC Insait Floor 3" in text and "не заполнены" in text and not repo.created
-    buttons = [b.text for row in markup.inline_keyboard for b in row]
-    assert "⬇️ Принять как предрегистрацию" in buttons
-    down = next(b.callback_data for row in markup.inline_keyboard for b in row if b.text.startswith("⬇️"))
-    run(down)
-    assert repo.reg[Registrations.REQUEST_TYPE] == "New — Pre-registration"
+    run("ad:name:recR:new")
+    assert repo.reg[Registrations.REQUEST_TYPE] == "New — Notification"
     assert repo.created == ["PV Smart BC Insait Floor 3"]
-    assert "Принято как предрегистрация" in repo.decision[2]
+    assert ctx.bot_data["stepwise"]["recR"]["final"] == "reg"
+
+
+def test_step_offer_lists_phase_gaps():
+    payload = {"Influencers": "", "Decision Maker Company": "пока никто", "Quotation / Proforma №": "пока нет"}
+    two = admin.step_offer("AW-26-0251", "PV Smart BC Insait Floor 3", "pre", "reg", payload)
+    assert "Шаг 2 из 3" in two and "предрегистрацию?" in two and "пока никто" in two and "пока нет" not in two
+    three = admin.step_offer("AW-26-0251", "X", "reg", "reg", payload)
+    assert "Шаг 3 из 3" in three and "пока нет" in three
