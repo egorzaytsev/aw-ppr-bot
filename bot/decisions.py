@@ -142,6 +142,9 @@ def transfers(reg: dict, project: dict) -> tuple[dict, set]:
 OWN_DESIGN = "Собственная проработка"
 
 
+COMPANY_PICKS = "_Company Picks"
+
+
 def company_links(reg: dict, project: dict, dealer: str | None) -> list[dict]:
     """Связи проекта с Companies по заявке: End Client, Specifier, DEALER.
 
@@ -150,16 +153,27 @@ def company_links(reg: dict, project: dict, dealer: str | None) -> list[dict]:
     """
     payload = payload_of(reg)
     links: list[dict] = []
+    picked = payload.get(COMPANY_PICKS) or {}   # выбор проверяющего: {ключ анкеты: id компании или "new"}
+
+    def named(field: str, key: str, name: str, ctype: str) -> dict:
+        choice = picked.get(key)
+        if choice and choice != "new":
+            return {"field": field, "company_id": choice}
+        link = {"field": field, "name": name, "type": ctype}
+        if choice == "new":
+            link["new"] = True
+        return link
+
     client = str(payload.get("End Client") or "").strip()
     if client and _empty(project.get(Projects.END_CLIENT)):
-        links.append({"field": Projects.END_CLIENT, "name": client, "type": "End Client"})
+        links.append(named(Projects.END_CLIENT, "End Client", client, "End Client"))
     spec = str(payload.get("Specifier") or "").strip()
     if spec and _empty(project.get(Projects.SPECIFIER)):
         if spec == OWN_DESIGN and dealer:
             links.append({"field": Projects.SPECIFIER, "company_id": dealer})  # проектирует сам дилер
         elif spec != OWN_DESIGN:
             solo = payload.get("Specifier Type") == "Частный архитектор"
-            links.append({"field": Projects.SPECIFIER, "name": spec, "type": "Architect" if solo else "Design Studio"})
+            links.append(named(Projects.SPECIFIER, "Specifier", spec, "Architect" if solo else "Design Studio"))
     if dealer and dealer not in (project.get(Projects.DEALER) or []):
         links.append({"field": Projects.DEALER, "company_id": dealer, "append": True})
     return links

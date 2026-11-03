@@ -19,7 +19,7 @@ from telegram.ext import ContextTypes
 
 from . import dedup, routing
 from .cards import dealer_status
-from .decisions import plan as decision_plan
+from .decisions import COMPANY_PICKS, OWN_DESIGN, plan as decision_plan
 from .scenarios.base import describe_items, format_value, is_vague
 from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
 from .airtable_ids import Decision, Projects, Registrations
@@ -50,6 +50,7 @@ _DOWN_OF = {v: k for k, v in DOWNGRADE.items()}
 _PRE_OF = {"New — Registration": "New — Pre-registration", "Upgrade — Registration": "Upgrade — Pre-registration"}
 # Проект для слияния назван не латиницей — сначала новое название
 ACTION_RENAME = "ren"
+ACTION_COMPANY = "co"   # ad:co:<заявка>:<№ вопроса>:<id компании или new> — похожая компания в базе
 # Откат статуса менеджера: ad:rb:<проект>:<менеджер> → на этап ниже (rbd) или снять (rbc), затем причина текстом
 ACTION_RB, ACTION_RB_DOWN, ACTION_RB_CANCEL = "rb", "rbd", "rbc"
 _ROLLBACK = {ACTION_RB_DOWN: "down", ACTION_RB_CANCEL: "cancel"}
@@ -464,6 +465,38 @@ async def _close_if_orphan_reply(repo, rec: dict) -> bool:
     return True
 
 
+# Компании из заявки, которые бот свяжет с проектом: (ключ анкеты, роль, поле проекта)
+_COMPANY_KEYS = (("End Client", "клиент", Projects.END_CLIENT), ("Specifier", "бюро", Projects.SPECIFIER))
+
+
+async def _ask_companies(ctx: ContextTypes.DEFAULT_TYPE, chat, reg_id: str, reg: dict, project_id: str,
+                         resume: str) -> bool:
+    """Клиент / бюро похожи на компанию из базы, но не то же название — спросить до записи. True — спросили."""
+    repo = ctx.bot_data["repo"]
+    payload = _payload(reg)
+    picks = payload.get(COMPANY_PICKS) or {}
+    project = await asyncio.to_thread(repo.project_fields, project_id) if project_id.startswith("rec") else {}
+    for idx, (key, role, field) in enumerate(_COMPANY_KEYS):
+        name = str(payload.get(key) or "").strip()
+        if not name or key in picks or name == OWN_DESIGN or project.get(field):
+            continue
+        cands = await asyncio.to_thread(repo.company_candidates, name)
+        if not cands:
+            continue
+        ctx.bot_data.setdefault("company_resume", {})[reg_id] = resume
+        rows = [[InlineKeyboardButton(f"Это «{cname[:40]}»", callback_data=f"{CB_ADMIN}{ACTION_COMPANY}:{reg_id}:{idx}:{cid}")]
+                for cid, cname in cands]
+        rows.append([InlineKeyboardButton(f"🆕 Новая компания «{name[:35]}»",
+                                          callback_data=f"{CB_ADMIN}{ACTION_COMPANY}:{reg_id}:{idx}:new")])
+        rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")])
+        title = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+        await chat.send_message(f"🛠 «{title}»: {role} <b>{escape(name)}</b> — в базе есть похожие. "
+                                "Это одна из них или новая компания?",
+                                reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
+        return True
+    return False
+
+
 def _payload(reg: dict) -> dict:
     try:
         data = json.loads(reg.get(Registrations.PAYLOAD) or "{}")
@@ -615,6 +648,23 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         )
         return
 
+    if action == ACTION_COMPANY and len(parts) >= 3 and parts[1].isdigit() and int(parts[1]) < len(_COMPANY_KEYS):
+        payload = _payload(reg)
+        payload.setdefault(COMPANY_PICKS, {})[_COMPANY_KEYS[int(parts[1])][0]] = parts[2]
+        await asyncio.to_thread(repo.update_registration, reg_id,
+                                {Registrations.PAYLOAD: json.dumps(payload, ensure_ascii=False, indent=2)})
+        resume = ctx.bot_data.setdefault("company_resume", {}).pop(reg_id, "")
+        if resume:
+            await on_admin_callback(update, ctx, resume)   # дальше — следующий вопрос или само решение
+        else:
+            await chat.send_message("🛠 Записал. Нажми решение по заявке ещё раз.")
+        return
+
+    target_now = (reg.get(Registrations.TARGET_PROJECT) or [""])[0]
+    if action == ACTION_NEW or (action == ACTION_PICK and project_id) or (action == ACTION_ACCEPT and target_now):
+        where = project_id if action == ACTION_PICK else target_now if action == ACTION_ACCEPT else "-"
+        if await _ask_companies(ctx, chat, reg_id, reg, where, data):
+            return
     if action in (ACTION_ACCEPT, ACTION_PICK, ACTION_NEW):
         await _start_stepwise(ctx, reg_id, reg)
 

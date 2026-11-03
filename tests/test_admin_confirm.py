@@ -65,6 +65,12 @@ class Repo:
     def update_registration(self, reg_id, fields):
         self.reg.update(fields)
 
+    def company_candidates(self, name):
+        return [("recSG", "Smart Group")] if name == "PV Smart" else []
+
+    def project_fields(self, pid):
+        return {}
+
     def create_project(self, name):
         self.created.append(name)
         return "recP"
@@ -90,8 +96,14 @@ def test_new_registration_accepted_stepwise_as_notification_first(monkeypatch):
     monkeypatch.setattr(admin, "_apply_now", no_apply)
     run = lambda data: asyncio.run(admin.on_admin_callback(update, ctx, data))
 
-    run("ad:new:recR:-")                                   # шаг 1 — название, без переспроса
-    assert "название нового проекта" in chat.sent[-1][0]
+    run("ad:new:recR:-")                                   # сначала — клиент похож на компанию из базы
+    text, markup = chat.sent[-1]
+    assert "PV Smart" in text and "похожие" in text
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert "Это «Smart Group»" in labels
+    run(next(b.callback_data for row in markup.inline_keyboard for b in row if b.text.startswith("🆕")))
+    assert json.loads(repo.reg[Registrations.PAYLOAD])["_Company Picks"] == {"End Client": "new"}
+    assert "название нового проекта" in chat.sent[-1][0]      # шаг 1 — название, без переспроса
     assert "PV Smart BC Insait Floor 3" in chat.sent[-1][1].inline_keyboard[0][0].text
     run("ad:name:recR:new")
     assert repo.reg[Registrations.REQUEST_TYPE] == "New — Notification"

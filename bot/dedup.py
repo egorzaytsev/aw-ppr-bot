@@ -176,14 +176,25 @@ def _company_key(name: str) -> str:
     return key or sound(name).strip()
 
 
+_LEGAL_WORDS = re.compile(r"(?<![a-zа-яё])(ооо|пао|зао|оао|ао|ип|llc|ltd|inc|gmbh|s\.?l\.?|s\.?a\.?|plc)(?![a-zа-яё])\.?",
+                          re.IGNORECASE)
+
+
+def _full_key(name: str) -> str:
+    """Название целиком (все слова, и короткие — «PV»), без ООО/LLC, кавычек и регистра."""
+    return " ".join(re.findall(r"[a-z0-9]+", sound(_LEGAL_WORDS.sub(" ", name or ""))))
+
+
 def match_company(name: str, companies: dict) -> str | None:
-    """id существующей компании с тем же названием (ООО/ПАО и транслитерация не мешают)."""
-    key = _company_key(name)
+    """id компании с тем же названием: ООО/LLC, регистр, транслит и опечатка не мешают.
+
+    «PV Smart» ≠ «Smart Group»: похожие, но не те же — это company_candidates, решает проверяющий."""
+    key = _full_key(name)
     if not key:
         return None
     best, best_ratio = None, 0.0
     for cid, cname in companies.items():
-        other = _company_key(cname or "")
+        other = _full_key(cname or "")
         if not other:
             continue
         if other == key:
@@ -192,3 +203,13 @@ def match_company(name: str, companies: dict) -> str | None:
         if ratio > best_ratio:
             best, best_ratio = cid, ratio
     return best if best_ratio >= 0.92 else None
+
+
+def company_candidates(name: str, companies: dict, limit: int = 3) -> list[tuple[str, str]]:
+    """Похожие компании (общее значимое слово), когда точного совпадения нет: [(id, название)]."""
+    if not _full_key(name) or match_company(name, companies):
+        return []
+    key = _company_key(name)
+    out = [(cid, cname) for cid, cname in companies.items()
+           if cname and (_company_key(cname) == key or overlap(name, cname))]
+    return out[:limit]

@@ -1159,13 +1159,15 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
                 cid, created = link["company_id"], False
             else:
                 cid, created = await asyncio.to_thread(
-                    repo.find_or_create_company, link["name"], link["type"], country)
+                    repo.find_or_create_company, link["name"], link["type"], country, bool(link.get("new")))
             if link.get("append"):
                 updates[link["field"]] = list((project or {}).get(link["field"]) or []) + [cid]
             else:
                 updates[link["field"]] = [cid]
             cname = await asyncio.to_thread(repo.company_name, cid)
-            company_notes.append(f"{cname} ({LINK_ROLE[link['field']]}{', новая' if created else ''})")
+            role = "проект ведёт сам" if link["field"] == Projects.SPECIFIER and cid in dealers \
+                else LINK_ROLE[link["field"]]
+            company_notes.append(f"{cname} ({role}{', новая' if created else ''})")
         new_specifier = updates.get(Projects.SPECIFIER)
         await asyncio.to_thread(repo.update_project, target[0], updates)
     # ГАП — человек бюро в People и участник проекта

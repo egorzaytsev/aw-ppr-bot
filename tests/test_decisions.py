@@ -276,3 +276,16 @@ def test_order_month_final_overwrites_expected_order_date():
     u, _ = transfers(reg, project)
     assert u[P.EXPECTED_ORDER_DATE] == "2027-06-01"
     assert "📅 Размещение заказа: 03.2027 → 06.2027" in change_lines(project, u)
+
+
+def test_company_match_strict_and_picks():
+    from bot import dedup
+    from bot.decisions import company_links
+    from bot.airtable_ids import Projects, Registrations
+    import json as _json
+    names = {"r1": "Smart Group", "r2": "Andreu World S.L."}
+    assert dedup.match_company("PV Smart", names) is None            # не то же название — не связываем сами
+    assert dedup.company_candidates("PV Smart", names) == [("r1", "Smart Group")]
+    assert dedup.match_company("ANDREU WORLD", names) == "r2"         # форма и регистр не мешают
+    reg = {Registrations.PAYLOAD: _json.dumps({"End Client": "PV Smart", "_Company Picks": {"End Client": "r1"}})}
+    assert company_links(reg, {}, None)[0] == {"field": Projects.END_CLIENT, "company_id": "r1"}
