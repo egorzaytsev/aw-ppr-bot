@@ -122,9 +122,9 @@ def has_cyrillic(text: str) -> bool:
 
 # Частые слова названий — переводим, остальное транслитом («где можно — переводим»)
 _WORDS = [
-    (r"бизнес[- ]?центр[а-я]*|\bбц\b", "BC"), (r"торгов[а-я]* центр[а-я]*|\bтц\b|\bтрц\b", "Mall"),
-    (r"жил[а-я]* комплекс[а-я]*|\bжк\b", "Residential"), (r"штаб[- ]квартир[а-я]*", "HQ"),
-    (r"(\d+)[- ]?(?:й|ий|ый)?\s*этаж[а-я]*", r"Floor \1"), (r"этаж[а-я]*\s*(\d+)", r"Floor \1"),
+    (r"бизнес[- ]?центр[а-я]*|\bбц\b", "BC"), (r"торгов[а-я]* центр[а-я]*|\bтц\b|\bтрц\b", "TC"),
+    (r"жил[а-я]* комплекс[а-я]*|\bжк\b", "RC"), (r"штаб[- ]квартир[а-я]*", "HQ"),
+    (r"(\d+)[- ]?(?:й|ий|ый)?\s*этаж[а-я]*", r"FL\1"), (r"этаж[а-я]*\s*(\d+)", r"FL\1"),
     (r"гостиниц(?:а|ы|е|у|ей)|отел(?:ь|я|е|ю|ем)", "Hotel"), (r"офис(?:а|е|у|ом|ы|ов)?", "Office"), (r"ресторан(?:а|е|у|ом|ы|ов)?", "Restaurant"),
     (r"банк(?:а|е|у|ом|и|ов)?", "Bank"), (r"школ(?:а|ы|е|у|ой|ам)", "School"), (r"университет[а-я]*", "University"),
     (r"музе(?:й|я|е|ю|ем|и|ев)", "Museum"), (r"больниц(?:а|ы|е|у|ей)", "Hospital"), (r"клиник(?:а|и|е|у|ой)", "Clinic"),
@@ -157,23 +157,57 @@ def name_problem(name: str) -> str | None:
     if has_cyrillic(name):
         return "название только латиницей: где можно — переводим, где нельзя — транслитерация"
     if _DASHES.search(name):
-        return "название через пробелы, без тире: «Kolesa Almaty Reception»"
+        return "название без тире, по образцу «PVSMART InsaitBC FL3»"
     if len(name) > MAX_NAME_LEN:
         return f"не длиннее {MAX_NAME_LEN} знаков (сейчас {len(name)})"
     return None
 
 
+# Техническая информация — короткими кодами (образец Егора: «PVSMART InsaitBC FL3»)
+_CODES = [
+    (r"бизнес[- ]?центр[а-я]*|\bбц\b", "BC"), (r"торгов[а-я]*[- ]?(?:развлекательн[а-я]*\s*)?центр[а-я]*|\bтр?ц\b", "TC"),
+    (r"жил[а-я]* комплекс[а-я]*|\bжк\b", "RC"), (r"штаб[- ]квартир[а-я]*", "HQ"),
+    (r"этаж[а-я]*", "FL"),   # без номера: «VIP этаж» → VIPFL
+]
+_PARTS = [
+    (r"(\d+)[- ]?(?:й|ий|ый)?\s*этаж[а-я]*|этаж[а-я]*\s*(\d+)", "FL"),
+    (r"корпус[а-я]*\s*(\d+)|(\d+)[- ]?(?:й|ий|ый)?\s*корпус[а-я]*", "K"),
+    (r"блок[а-я]*\s*(\w+)", "BL"),
+]
+_CODES_RE = [(re.compile(rf"(?<![а-яё]){pat}(?![а-яё])", re.I), code) for pat, code in _CODES]
+_PARTS_RE = [(re.compile(rf"(?<![а-яё]){pat}(?![а-яё])", re.I), code) for pat, code in _PARTS]
+
+
+def _translit(text: str) -> str:
+    return "".join(_TRANSLIT.get(ch.lower(), ch) if ch.lower() in _TRANSLIT else ch for ch in text)
+
+
+def _compact(raw: str, parts: list[str]) -> str:
+    """Объект слитно, тип кодом в конце: «Бизнес центр Инсайт» → «InsaitBC»; этаж/корпус — в parts."""
+    for rx, code in _PARTS_RE:
+        for m in rx.finditer(raw):
+            num = next((g for g in m.groups() if g), "")
+            tag = f"{code}{_translit(num).upper()}"
+            if tag not in parts:
+                parts.append(tag)
+        raw = rx.sub(" ", raw)
+    codes = []
+    for rx, code in _CODES_RE:
+        if rx.search(raw):
+            codes.append(code)
+            raw = rx.sub(" ", raw)
+    words = re.findall(r"[0-9a-z]+", _translit(translate_words(raw)), re.I)
+    return "".join(w if w.isupper() and len(w) > 1 else w[:1].upper() + w[1:] for w in words) + "".join(codes)
+
+
 def latin_name(payload: dict) -> str:
-    """Черновик названия проекта латиницей: «Клиент Объект» транслитом, без ООО и кавычек."""
-    parts = []
-    for key in ("End Client", "Object Name"):
-        raw = re.sub(r"[«»\"'“”]", "", str(payload.get(key) or "")).strip()
-        raw = translate_words(_LEGAL.sub("", raw))
-        if raw:
-            parts.append("".join(_TRANSLIT.get(ch.lower(), ch) if ch.lower() in _TRANSLIT else ch for ch in raw))
-    words = " ".join(parts).split()
-    name = " ".join(w[:1].upper() + w[1:] for w in words)
-    return name[:60].strip()
+    """Черновик названия по образцу «PVSMART InsaitBC FL3»: КЛИЕНТ слитно заглавными, объект слитно
+    с кодом типа, этаж / корпус / блок — коротко. Минимум пробелов, без ООО, кавычек и тире."""
+    clean = lambda key: _LEGAL.sub("", re.sub(r"[«»\"'“”]", "", str(payload.get(key) or "")).strip())
+    parts: list[str] = []
+    client = "".join(re.findall(r"[0-9a-z]+", _translit(clean("End Client")), re.I)).upper()
+    obj = _compact(" ".join(x for x in (clean("Object Name"), clean("Object Part")) if x), parts)
+    return " ".join(x for x in (client, obj, *parts) if x)[:MAX_NAME_LEN].strip()
 
 
 def _company_key(name: str) -> str:

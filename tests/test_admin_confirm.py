@@ -28,8 +28,9 @@ def test_name_rules():
 
 def test_latin_name_translates_common_words():
     assert dedup.latin_name({"End Client": "PV Smart", "Object Name": "Бизнес центр Инсайт · 3 этаж"}) \
-        == "PV Smart BC Insait Floor 3"
-    assert dedup.to_latin("ЖК Центральный") == "Residential Tsentralnyi"   # прилагательное — транслит
+        == "PVSMART InsaitBC FL3"                                # образец Егора
+    assert dedup.latin_name({"End Client": "Сбер", "Object Name": "ЖК Символ, корпус 2"}) == "SBER SimvolRC K2"
+    assert dedup.to_latin("ЖК Центральный") == "RC Tsentralnyi"   # прилагательное — транслит
 
 
 import asyncio
@@ -104,16 +105,16 @@ def test_new_registration_accepted_stepwise_as_notification_first(monkeypatch):
     run(next(b.callback_data for row in markup.inline_keyboard for b in row if b.text.startswith("🆕")))
     assert json.loads(repo.reg[Registrations.PAYLOAD])["_Company Picks"] == {"End Client": "new"}
     assert "название нового проекта" in chat.sent[-1][0]      # шаг 1 — название, без переспроса
-    assert "PV Smart BC Insait Floor 3" in chat.sent[-1][1].inline_keyboard[0][0].text
+    assert "PVSMART InsaitBC FL3" in chat.sent[-1][1].inline_keyboard[0][0].text
     run("ad:name:recR:new")
     assert repo.reg[Registrations.REQUEST_TYPE] == "New — Notification"
-    assert repo.created == ["PV Smart BC Insait Floor 3"]
+    assert repo.created == ["PVSMART InsaitBC FL3"]
     assert ctx.bot_data["stepwise"]["recR"]["final"] == "reg"
 
 
 def test_step_offer_lists_phase_gaps():
     payload = {"Influencers": "", "Decision Maker Company": "пока никто", "Quotation / Proforma №": "пока нет"}
-    two = admin.step_offer("AW260251", "PV Smart BC Insait Floor 3", "pre", "reg", payload)
+    two = admin.step_offer("AW260251", "PVSMART InsaitBC FL3", "pre", "reg", payload)
     assert "Шаг 2 из 3" in two and "предрегистрацию?" in two and "пока никто" in two and "пока нет" not in two
     three = admin.step_offer("AW260251", "X", "reg", "reg", payload)
     assert "Шаг 3 из 3" in three and "пока нет" in three
@@ -124,4 +125,4 @@ def test_project_names_without_dashes():
     assert dedup.name_problem("Kolesa - Almaty")
     assert dedup.name_problem("Kolesa Almaty Reception") is None
     assert dedup.name_problem("Saint-Petersburg Office") is None          # дефис внутри слова — не тире
-    assert dedup.to_latin("PV Smart — Бизнес центр Инсайт — 3 этаж") == "PV Smart BC Insait Floor 3"
+    assert dedup.to_latin("PV Smart — Бизнес центр Инсайт — 3 этаж") == "PV Smart BC Insait FL3"

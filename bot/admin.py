@@ -754,7 +754,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id, chat.id)
         await chat.send_message(
-            f"🛠 «{name}»: напиши название нового проекта латиницей, как оно будет в Projects"
+            f"🛠 «{name}»: напиши название нового проекта латиницей, как оно будет в Projects "
+            "(образец: PVSMART InsaitBC FL3 — клиент, объект с кодом типа, этаж)"
             + (" — или возьми вариант кнопкой" if dedup.latin_name(_payload(reg)) else "")
             + ". Передумал — просто нажми меню внизу.",
             reply_markup=name_markup(reg, reg_id, ACTION_NEW, reply_id),

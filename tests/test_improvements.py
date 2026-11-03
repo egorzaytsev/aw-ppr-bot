@@ -43,7 +43,7 @@ def test_age_line():
 
 
 def test_latin_name_suggestion():
-    assert dedup.latin_name({"End Client": "ООО «Айкон Тайерс»", "Object Name": "VIP этаж"}) == "Aikon Taiers VIP Etazh"
+    assert dedup.latin_name({"End Client": "ООО «Айкон Тайерс»", "Object Name": "VIP этаж"}) == "AIKONTAIERS VIPFL"
     assert dedup.latin_name({}) == ""
 
 
