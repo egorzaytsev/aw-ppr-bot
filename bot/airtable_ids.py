@@ -56,6 +56,7 @@ class Projects:
     PEOPLE = "fldLN8Lj9uqQpRzza"          # участники проекта (ГАП и др.)
     QUOTATION = "fld2eKHFMhU73fxS5"
     DEALER = "fldpdzk9bY1jFMPeJ"
+    PARTNER = "fldh6aWJ5jmn3EYkA"          # партнёр-дистрибьютор (Astros / Aluframe), не дилер PPR
     PROJECT_LOG = "fldC3PJr8sT9iZ8Rg"
     PPR_REF = "fld9H3DLTtTOTluOb"            # формула AW-YY-####
     PPR_NEXT_MISSING = "fldVIAWgivyBeKX4a"   # формула: чего не хватает для следующего этапа
@@ -99,6 +100,18 @@ class RegStatus:
     PRE_REGISTRATION = "Pre-registration"
     REGISTRATION = "Registration"
     DECLINED = "Declined"
+
+
+class Partners:
+    """Заявки с общего профиля AW (@aw_eeu, Lola Sapaeva (AW)) — от партнёров.
+
+    Партнёр проекта — по стране объекта; STATIO Лола присылает со своего профиля, там как у дилеров.
+    """
+    SENDERS = {"reciSEbDgaAY1tOpa"}
+    BY_COUNTRY = {
+        "Uzbekistan": "rec2DJSCpnhZORiyB",  # Aluframe
+        "Russia": "recYQinVKoMACGVc1",      # Astros
+    }
 
 
 class Buffer:

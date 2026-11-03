@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from html import escape
 
-from .airtable_ids import Decision, Projects, Registrations, RegStatus, RequestType
+from .airtable_ids import Decision, Partners, Projects, Registrations, RegStatus, RequestType
 
 PPR_NOTIFIED, PPR_PRE, PPR_REG = "Notification", "Pre-registration", "Registration"
 STATUS_FIELD = {
@@ -145,8 +145,16 @@ OWN_DESIGN = "Собственная проработка"
 COMPANY_PICKS = "_Company Picks"
 
 
+def partner_for(reg: dict, project: dict | None = None) -> str | None:
+    """Партнёр проекта для заявок с общего профиля AW: по стране объекта (иначе None)."""
+    if not set(reg.get(Registrations.SUBMITTED_BY) or []) & Partners.SENDERS:
+        return None
+    country = payload_of(reg).get("Country") or (project or {}).get(Projects.COUNTRY)
+    return Partners.BY_COUNTRY.get(str(country or ""))
+
+
 def company_links(reg: dict, project: dict, dealer: str | None) -> list[dict]:
-    """Связи проекта с Companies по заявке: End Client, Specifier, DEALER.
+    """Связи проекта с Companies по заявке: End Client, Specifier, DEALER, PARTNER.
 
     Каждая запись: {"field", "name" (найти или создать по названию) или "company_id", "type"}.
     Заполненные End Client / Specifier не трогаем; DEALER — дописываем компанию дилера.
@@ -176,6 +184,9 @@ def company_links(reg: dict, project: dict, dealer: str | None) -> list[dict]:
             links.append(named(Projects.SPECIFIER, "Specifier", spec, "Architect" if solo else "Design Studio"))
     if dealer and dealer not in (project.get(Projects.DEALER) or []):
         links.append({"field": Projects.DEALER, "company_id": dealer, "append": True})
+    partner = partner_for(reg, project)
+    if partner and _empty(project.get(Projects.PARTNER)):
+        links.append({"field": Projects.PARTNER, "company_id": partner})
     return links
 
 

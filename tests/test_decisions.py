@@ -289,3 +289,19 @@ def test_company_match_strict_and_picks():
     assert dedup.match_company("ANDREU WORLD", names) == "r2"         # форма и регистр не мешают
     reg = {Registrations.PAYLOAD: _json.dumps({"End Client": "PV Smart", "_Company Picks": {"End Client": "r1"}})}
     assert company_links(reg, {}, None)[0] == {"field": Projects.END_CLIENT, "company_id": "r1"}
+
+
+def test_partner_by_country_for_aw_profile():
+    from bot.decisions import company_links
+    from bot.airtable_ids import Partners, Projects, Registrations
+    import json as _json
+    aw = next(iter(Partners.SENDERS))
+    uz = {Registrations.SUBMITTED_BY: [aw], Registrations.PAYLOAD: _json.dumps({"Country": "Uzbekistan"})}
+    assert {"field": Projects.PARTNER, "company_id": Partners.BY_COUNTRY["Uzbekistan"]} in company_links(uz, {}, None)
+    ru = dict(uz, **{Registrations.PAYLOAD: _json.dumps({"Country": "Russia"})})
+    assert company_links(ru, {}, None)[-1]["company_id"] == Partners.BY_COUNTRY["Russia"]
+    kz = dict(uz, **{Registrations.PAYLOAD: _json.dumps({"Country": "Kazakhstan"})})
+    assert not [l for l in company_links(kz, {}, None) if l["field"] == Projects.PARTNER]
+    assert not [l for l in company_links(ru, {Projects.PARTNER: ["recX"]}, None) if l["field"] == Projects.PARTNER]
+    other = dict(uz, **{Registrations.SUBMITTED_BY: ["recSomeDealer"]})   # STATIO-профиль Лолы и дилеры — без партнёра
+    assert not [l for l in company_links(other, {}, None) if l["field"] == Projects.PARTNER]

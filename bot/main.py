@@ -28,7 +28,7 @@ from telegram.ext import (
 )
 
 from . import admin, alerts, cards, dedup, engine, phrases, reminders, routing
-from .airtable_ids import Decision, People, Projects, Registrations, RegStatus, RequestType
+from .airtable_ids import Decision, Partners, People, Projects, Registrations, RegStatus, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
     PPR_NOTIFIED, PPR_PRE_REGISTERED, PPR_REGISTERED, AirtableRepo, DealerProject, Person,
@@ -807,13 +807,20 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
             }
             await ctx.bot.send_message(
                 admin_chat,
-                admin.request_card(card_fields, reg_id, person.name, analysis,
-                                   ", ".join(_repo(ctx).company_name(c) for c in person.company_ids) or None),
+                admin.request_card(card_fields, reg_id, person.name, analysis, _sender_label(ctx, person, payload)),
                 parse_mode=ParseMode.HTML,
                 reply_markup=admin.decision_markup(ctx, reg_id, candidates),
             )
         except Exception:
             log.exception("Не удалось уведомить проверяющего %s", admin_chat)
+
+
+def _sender_label(ctx: ContextTypes.DEFAULT_TYPE, person, payload: dict) -> str | None:
+    """Компания отправителя для карточки; с общего профиля AW — партнёр по стране объекта."""
+    if person.record_id in Partners.SENDERS:
+        partner = Partners.BY_COUNTRY.get(str(payload.get("Country") or ""))
+        return f"партнёр {_repo(ctx).company_name(partner)}" if partner else "партнёр не определён (страна)"
+    return ", ".join(_repo(ctx).company_name(c) for c in person.company_ids) or None
 
 
 async def _upload_files(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str, files: list) -> list[str]:
@@ -911,7 +918,8 @@ async def process_decisions(app: Application) -> None:
         await _process_decisions(app)
 
 
-LINK_ROLE = {Projects.END_CLIENT: "клиент", Projects.SPECIFIER: "бюро", Projects.DEALER: "дилер"}
+LINK_ROLE = {Projects.END_CLIENT: "клиент", Projects.SPECIFIER: "бюро", Projects.DEALER: "дилер",
+             Projects.PARTNER: "партнёр"}
 DECISION_HEAD = {
     "Accept": "✅ Принято", "Accept — merge into Target Project": "✅ Принято",
     "Decline": "❌ Отказ", "Need more info": "❓ Запрошена информация",
