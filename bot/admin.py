@@ -18,7 +18,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from . import dedup, routing
-from .cards import dealer_status
+from .cards import dealer_status, name_ref, project_line
 from .decisions import COMPANY_PICKS, OWN_DESIGN, plan as decision_plan
 from .scenarios.base import describe_items, format_value, is_vague
 from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
@@ -117,7 +117,7 @@ def step_offer(ref: str, name: str, step: str, final: str, payload: dict, missin
     n = 2 if step == "pre" else 3
     asked = "регистрацию" if final == "reg" else "предрегистрацию"
     weak = weak_answers(payload, _STEP_PHASE[step])
-    lines = [f"🛠 <b>Шаг {n} из {total}</b> · {escape(ref)} · {escape(name)}",
+    lines = [f"🛠 <b>Шаг {n} из {total}</b> · <code>{escape(name_ref(name, ref))}</code>",
              f"Дилер просил {asked}. Подтверждаем {_TARGET_RU[step]}?"]
     if weak:
         lines += ["Без ответа:"] + [f"• {escape(w)}" for w in weak]
@@ -159,7 +159,7 @@ async def _upgrade_pairs(ctx: ContextTypes.DEFAULT_TYPE) -> list[tuple]:
             if person not in names:
                 names[person] = (await asyncio.to_thread(repo.person_name, person)) or person
             short = names[person].split()[0] if names[person] else "?"
-            label = f"{ref} · {pname} · {short} · {_SHORT_STATUS[status]}"
+            label = f"{name_ref(pname, ref)} · {short} · {_SHORT_STATUS[status]}"
             out.append((r["id"], person, status, label))
     return out
 
@@ -553,9 +553,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")])
         missing = project.get(Projects.PPR_NEXT_MISSING) or ""
         hint = f"\nДля следующего этапа не хватает: {escape(missing)}" if missing else ""
-        await chat.send_message(f"🛠 {escape(project.get(Projects.PPR_REF) or '')} · "
-                                f"{escape(project.get(Projects.NAME) or '')}: на какой статус?{hint}",
-                                reply_markup=InlineKeyboardMarkup(rows))
+        await chat.send_message(f"🛠 {project_line(project)}: на какой статус?{hint}",
+                                reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
         return
     if action == ACTION_RB and len(parts) >= 2:
         project = await asyncio.to_thread(repo.project_fields, parts[0])
@@ -570,9 +569,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         rows.append([InlineKeyboardButton("✖️ Аннулировать — снять статус",
                                           callback_data=f"{CB_ADMIN}{ACTION_RB_CANCEL}:{parts[0]}:{parts[1]}")])
         rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")])
-        await chat.send_message(f"🛠 {escape(project.get(Projects.PPR_REF) or '')} · "
-                                f"{escape(project.get(Projects.NAME) or '')}: что сделать со статусом?",
-                                reply_markup=InlineKeyboardMarkup(rows))
+        await chat.send_message(f"🛠 {project_line(project)}: что сделать со статусом?",
+                                reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
         return
     if action in _ROLLBACK and len(parts) >= 2:
         pending[chat.id] = (action, parts[0], parts[1])  # только в памяти: ожидание в Airtable — у заявок
@@ -782,7 +780,7 @@ async def _confirm_weak(chat, reg: dict, force_action: str, reg_id: str, project
     rows += [[InlineKeyboardButton("✏️ Запросить у дилера", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
             [InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
-    head = (f"🛠 «{name}» → новый проект <b>{escape(new_name)}</b> (референс AW-… присвоится при создании)"
+    head = (f"🛠 «{name}» → новый проект <b>{escape(new_name)}</b> (референс присвоится при создании)"
             if new_name else f"🛠 «{name}»")
     await chat.send_message(
         f"{head}: не заполнены поля:\n" + "\n".join(f"• {escape(w)}" for w in weak)

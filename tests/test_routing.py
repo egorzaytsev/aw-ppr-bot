@@ -19,10 +19,10 @@ def test_resolve_falls_back_to_egor_until_lola_known():
 
 
 def test_summary_lines():
-    assert routing.summary_line(routing.LOLA, "Accept", "AW-26-0225", "", "уведомление") == \
-        "ℹ️ Лола приняла AW-26-0225 как уведомление"
+    assert routing.summary_line(routing.LOLA, "Accept", "AW260225", "Kolesa Almaty Reception", "уведомление") == \
+        "ℹ️ Лола приняла <code>Kolesa Almaty Reception AW260225</code> как уведомление"
     assert routing.summary_line(routing.EGOR, "Decline", "", "Медалл") == "ℹ️ Егор отклонил «Медалл»"
     assert routing.summary_line(routing.LOLA, "Need more info", "", "Медалл") == \
         "ℹ️ Лола запросила информацию по «Медалл»"
     assert "плейсмент зафиксирован уведомлением" in routing.summary_line(
-        routing.LOLA, "Decline", "AW-26-0225", "X", declined_upgrade=True)
+        routing.LOLA, "Decline", "AW260225", "X", declined_upgrade=True)

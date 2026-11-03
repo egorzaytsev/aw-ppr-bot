@@ -521,8 +521,7 @@ def _sorted(projects: list[DealerProject]) -> list[DealerProject]:
 
 
 def _button_label(p: DealerProject) -> str:
-    ref = p.fields.get(Projects.PPR_REF)
-    label = (f"{ref} · " if ref else "") + f"{p.name[:28]} · {PPR_LABELS[p.ppr_status].lower()}"
+    label = f"{cards.name_ref(p.name[:40], p.fields.get(Projects.PPR_REF) or '')} · {PPR_LABELS[p.ppr_status].lower()}"
     days = _days_left(p)
     if days is not None:
         label += f" · {days} дн." if days >= 0 else " · срок истёк"
@@ -603,9 +602,7 @@ async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Per
         await update.effective_chat.send_message("Проект не найден. Открой «Мои проекты» заново.")
         return
     # Только своё: имя, статус дилера, срок, стадия, квотация. Других дилеров, лог, разбор, баллы — никогда.
-    lines = [f"<b>{escape(p.name)}</b>"]
-    if p.fields.get(Projects.PPR_REF):
-        lines.append(f"🔖 Референс: {escape(p.fields[Projects.PPR_REF])}")
+    lines = [f"🏗 {cards.project_line(p.fields)}"]
     lines.append(f"Твой статус: {PPR_LABELS[p.ppr_status].lower()}")
     days = _days_left(p)
     if days is not None:
@@ -1039,8 +1036,7 @@ LOWER_STATUS = {PPR_REGISTERED: PPR_PRE_REGISTERED, PPR_PRE_REGISTERED: PPR_NOTI
 
 def rollback_dealer_text(project: dict, old: str, new: str | None, reason: str) -> str:
     """Менеджеру: статус снижен или снят — причина и как вернуть."""
-    ref = project.get(Projects.PPR_REF) or ""
-    head = f"↩️ <b>{escape(project.get(Projects.NAME) or '')}</b>" + (f" · {escape(ref)}" if ref else "")
+    head = f"↩️ {cards.project_line(project)}"
     now = PPR_LABELS[new].lower() if new else "статус снят"
     what = (f"Чтобы вернуть {PPR_LABELS[old].lower()}, нажми «Обновить проект» → «Дополнить» и подай заявку снова."
             if new else "Если проект снова актуален — нажми «Новый проект» и подай его заново.")
@@ -1075,7 +1071,7 @@ async def rollback_status(app: Application, project_id: str, person_id: str, mod
         await _send_html(app.bot, chat, rollback_dealer_text(project, old, new, reason))
     if admin_chat:
         await _send_html(app.bot, admin_chat,
-                         f"🛠 ↩️ {escape(project.get(Projects.PPR_REF) or '')} · {escape(project.get(Projects.NAME) or '')}"
+                         f"🛠 ↩️ {cards.project_line(project)}"
                          f"\n{escape(line)}\n📨 " + ("Дилеру отправлено" if chats else "Дилеру не отправлено — нет Telegram"))
 
 
@@ -1091,7 +1087,7 @@ async def _warn_expired(app: Application, admin_chat) -> None:
             for person in f.get(field) or []:
                 if person not in names:
                     names[person] = await asyncio.to_thread(repo.person_name, person) or "?"
-                label = f"{f.get(Projects.PPR_REF) or ''} · {(f.get(Projects.NAME) or '')[:30]} · {names[person]}"
+                label = f"{cards.name_ref((f.get(Projects.NAME) or '')[:30], f.get(Projects.PPR_REF) or '')} · {names[person]}"
                 lines.append(f"• {escape(label)} — {PPR_LABELS[status].lower()}, срок до "
                              f"{str(f.get(Projects.STATUS_EXPIRY) or '')[:10]}")
                 rows.append([(f"↩️ {label}"[:60], f"{admin.CB_ADMIN}{admin.ACTION_RB}:{r['id']}:{person}")])
@@ -1110,8 +1106,7 @@ async def _offer_upgrade(app: Application, admin_chat, fresh: dict, project_id: 
     if not target:
         return
     what = "предрегистрации" if target == "pre" else "регистрации"
-    text = (f"✔️ <b>Условия для {what} выполнены</b> · {escape(fresh.get(Projects.PPR_REF) or '')} · "
-            f"{escape(fresh.get(Projects.NAME) or '')}")
+    text = f"✔️ <b>Условия для {what} выполнены</b> · {cards.project_line(fresh)}"
     await _send_html(app.bot, admin_chat, text, admin.upgrade_markup(project_id, person_id, target))
 
 

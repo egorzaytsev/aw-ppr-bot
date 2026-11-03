@@ -138,7 +138,7 @@ _WORDS_RE = [(re.compile(rf"(?<![а-яё]){pat}(?![а-яё])", re.I), repl) for 
 def translate_words(text: str) -> str:
     for rx, repl in _WORDS_RE:
         text = rx.sub(repl, text)
-    return re.sub(r"\s*[·•|]\s*", " ", text)
+    return re.sub(r"\s*[·•|—–]\s*|\s+-\s+", " ", text)
 
 
 def to_latin(text: str) -> str:
@@ -149,10 +149,15 @@ def to_latin(text: str) -> str:
     return out[:MAX_NAME_LEN].strip()
 
 
+_DASHES = re.compile(r"\s*[—–]\s*|\s+-\s+|^-+|-+$")
+
+
 def name_problem(name: str) -> str | None:
-    """Названия проектов — только латиницей и не длиннее 80 знаков."""
+    """Названия проектов — только латиницей, через пробелы без тире, не длиннее 80 знаков."""
     if has_cyrillic(name):
         return "название только латиницей: где можно — переводим, где нельзя — транслитерация"
+    if _DASHES.search(name):
+        return "название через пробелы, без тире: «Kolesa Almaty Reception»"
     if len(name) > MAX_NAME_LEN:
         return f"не длиннее {MAX_NAME_LEN} знаков (сейчас {len(name)})"
     return None

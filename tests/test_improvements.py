@@ -142,9 +142,9 @@ def test_upgrade_resets_status_date_and_card_shows_expiry():
 def test_offer_upgrade_only_when_next_step_complete():
     from bot.airtable_ids import Projects as P
     app = SimpleNamespace(bot=Bot(), bot_data={})
-    ready = {P.NAME: "Raiffeisen Private", P.PPR_REF: "AW-26-0094", P.NOTIFIED: ["recM"], P.PPR_TRACK: "Full"}
+    ready = {P.NAME: "Raiffeisen Private", P.PPR_REF: "AW260094", P.NOTIFIED: ["recM"], P.PPR_TRACK: "Full"}
     asyncio.run(main._offer_upgrade(app, "1", ready, "recP", "recM"))
-    assert "Условия для предрегистрации выполнены</b> · AW-26-0094 · Raiffeisen Private" in app.bot.sent[0][1]
+    assert "Условия для предрегистрации выполнены</b> · <code>Raiffeisen Private AW260094</code>" in app.bot.sent[0][1]
     asyncio.run(main._offer_upgrade(app, "1", dict(ready, **{P.PPR_NEXT_MISSING: "Dossier Files;"}), "recP", "recM"))
     asyncio.run(main._offer_upgrade(app, "1", dict(ready, **{P.REGISTERED: ["recX"]}), "recP", "recM"))
     assert len(app.bot.sent) == 1

@@ -73,13 +73,20 @@ def others_line(project: dict, dealer: str, status: str | None) -> list[str]:
     return lines
 
 
+def name_ref(name: str, ref: str) -> str:
+    """«Kolesa Almaty Reception AW260249» — название и референс (только из поля PPR Ref) одной строкой."""
+    return " ".join(x for x in ((name or "").strip(), (ref or "").strip()) if x)
+
+
+def project_line(project: dict) -> str:
+    """Строка проекта моноширинным — копируется целиком одним нажатием."""
+    return f"<code>{escape(name_ref(project.get(Projects.NAME) or '', project.get(Projects.PPR_REF) or ''))}</code>"
+
+
 def header(project: dict, dealer: str, dealer_name: str, title: str = "✅ Заявка принята") -> list[str]:
     status = dealer_status(project, dealer)
     lines = [f"<b>{title}</b>"]
-    ref = project.get(Projects.PPR_REF)
-    if ref:
-        lines.append(f"🔖 Референс: <b>{escape(ref)}</b>")
-    lines.append(f"🏗 Название проекта: <b>{escape(project.get(Projects.NAME) or '—')}</b>")
+    lines.append(f"🏗 {project_line(project)}")
     status_text = f" · статус {STATUS_RU[status]}" if status else ""
     lines.append(f"👤 {escape(dealer_name)}{status_text}")
     lines += others_line(project, dealer, status)
@@ -136,9 +143,7 @@ def pl_volume_of(payload: dict, project: dict) -> float | None:
 
 def subject_lines(project: dict) -> list[str]:
     """Подсказка для темы писем; вторая строка — моноширинная, копируется одним нажатием."""
-    subject = f"{project.get(Projects.NAME) or ''} {project.get(Projects.PPR_REF) or ''}".strip()
-    return ["✉️ Указывай название проекта и референс в теме писем по этому проекту:",
-            f"<code>{escape(subject)}</code>"]
+    return ["✉️ Указывай название проекта и референс в теме писем по этому проекту:", project_line(project)]
 
 
 def accept_card(project: dict, dealer: str, dealer_name: str, payload: dict, first_time: bool,

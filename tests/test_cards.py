@@ -11,7 +11,7 @@ def plain(text: str) -> str:
 
 
 def project(**kw):
-    base = {P.NAME: "MedallClinic SPB", P.PPR_REF: "AW-26-0220", P.PPR_TRACK: "Full", P.NOTIFIED: [D]}
+    base = {P.NAME: "MedallClinic SPB", P.PPR_REF: "AW260220", P.PPR_TRACK: "Full", P.NOTIFIED: [D]}
     base.update(kw)
     return base
 
@@ -21,10 +21,9 @@ def test_header_and_full_track_missing_lines():
                    P.CONTACT_LEVEL: "Declared"})
     text = plain(cards.accept_card(p, D, "STATIO", {}, first_time=True))
     lines = text.splitlines()
-    assert lines[:6] == [
+    assert lines[:5] == [
         "✅ Заявка принята",
-        "🔖 Референс: AW-26-0220",
-        "🏗 Название проекта: MedallClinic SPB",
+        "🏗 MedallClinic SPB AW260220",
         "👤 STATIO · статус уведомление",
         "🔎 Других статусов на объекте нет",
         "━━━━━━━━━━━━━━━",
@@ -36,8 +35,8 @@ def test_header_and_full_track_missing_lines():
     assert "📅 Месяц размещения заказа." in lines
     assert "👉 Всё это можно добавить через «Обновить проект» → «Дополнить материалы»." in lines
     assert lines[-2:] == ["✉️ Указывай название проекта и референс в теме писем по этому проекту:",
-                          "MedallClinic SPB AW-26-0220"]
-    assert "<code>MedallClinic SPB AW-26-0220</code>" in cards.accept_card(p, D, "STATIO", {}, first_time=True)
+                          "MedallClinic SPB AW260220"]
+    assert "<code>MedallClinic SPB AW260220</code>" in cards.accept_card(p, D, "STATIO", {}, first_time=True)
 
 
 def test_all_data_present_and_no_tail_on_repeat():
@@ -72,15 +71,15 @@ def test_admin_copy_and_update_card():
     card = cards.update_card(project(), D, "STATIO", "📝 Информацию внесли в проект.", note="Спасибо")
     assert plain(card).endswith("📝 Информацию внесли в проект.\n\n💬 Комментарий: Спасибо")
     admin = plain(cards.admin_copy(card, True, ["🆕 Проект создан"]))
-    assert admin.startswith("🛠 Взято в работу\n🔖 Референс: AW-26-0220")
+    assert admin.startswith("🛠 Взято в работу\n🏗 MedallClinic SPB AW260220")
     assert admin.endswith("🆕 Проект создан\n📨 Дилеру отправлено")
 
 
 def test_list_label_with_ref_and_next_stage_rules():
     from bot.airtable_repo import DealerProject
     from bot.main import _button_label, _next_request_type
-    p = DealerProject("recP", "MedallClinic SPB", "notified", None, "Full", {P.PPR_REF: "AW-26-0220"})
-    assert _button_label(p) == "AW-26-0220 · MedallClinic SPB · уведомление"
+    p = DealerProject("recP", "MedallClinic SPB", "notified", None, "Full", {P.PPR_REF: "AW260220"})
+    assert _button_label(p) == "MedallClinic SPB AW260220 · уведомление"
     assert _next_request_type(p) == "Upgrade — Pre-registration"
     p.fields[P.PPR_NEXT_MISSING] = "Dossier Files;"
     assert _next_request_type(p) is None

@@ -113,7 +113,15 @@ def test_new_registration_accepted_stepwise_as_notification_first(monkeypatch):
 
 def test_step_offer_lists_phase_gaps():
     payload = {"Influencers": "", "Decision Maker Company": "пока никто", "Quotation / Proforma №": "пока нет"}
-    two = admin.step_offer("AW-26-0251", "PV Smart BC Insait Floor 3", "pre", "reg", payload)
+    two = admin.step_offer("AW260251", "PV Smart BC Insait Floor 3", "pre", "reg", payload)
     assert "Шаг 2 из 3" in two and "предрегистрацию?" in two and "пока никто" in two and "пока нет" not in two
-    three = admin.step_offer("AW-26-0251", "X", "reg", "reg", payload)
+    three = admin.step_offer("AW260251", "X", "reg", "reg", payload)
     assert "Шаг 3 из 3" in three and "пока нет" in three
+
+
+def test_project_names_without_dashes():
+    assert dedup.name_problem("PV Smart — BC Insait")
+    assert dedup.name_problem("Kolesa - Almaty")
+    assert dedup.name_problem("Kolesa Almaty Reception") is None
+    assert dedup.name_problem("Saint-Petersburg Office") is None          # дефис внутри слова — не тире
+    assert dedup.to_latin("PV Smart — Бизнес центр Инсайт — 3 этаж") == "PV Smart BC Insait Floor 3"

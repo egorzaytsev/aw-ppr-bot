@@ -49,13 +49,11 @@ def resolve(bot_data: dict, who: str) -> tuple[str, str | None]:
 
 def summary_line(who: str, decision: str, ref: str, name: str, status_label: str = "",
                  declined_upgrade: bool = False) -> str:
-    """«ℹ️ Лола приняла AW-26-0225 как уведомление» — итог для второго проверяющего."""
+    """«ℹ️ Лола приняла Kolesa Almaty Reception AW260249 как уведомление» — итог для второго проверяющего."""
     def verb(masc: str, fem: str) -> str:
         return fem if who in _FEMININE else masc
 
-    what = escape(ref or f"«{name}»")
-    if ref and name:
-        what += f" · {escape(name)}"
+    what = f"<code>{escape(' '.join(x for x in (name, ref) if x))}</code>" if ref else escape(f"«{name}»")
     person = NAMES.get(who, who)
     if declined_upgrade:
         return f"ℹ️ {person} {verb('отклонил', 'отклонила')} повышение статуса {what} — плейсмент зафиксирован уведомлением"
