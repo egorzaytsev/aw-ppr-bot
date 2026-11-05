@@ -211,6 +211,7 @@ class TelegramCollector:
         self._connections: dict[str, dict] = {}   # business_connection_id → {user_id, risky}
         self._owner_connection: str | None = None
         self._last_outbox = 0.0
+        self._keyboard_cleared = False   # старая клавиатура Пепе в чате с @hareworldbot — убираем один раз
         self._pause = asyncio.sleep   # пауза между попытками расшифровки (в тестах — без ожидания)
 
     async def _call(self, method: str, **params) -> dict:
@@ -295,11 +296,20 @@ class TelegramCollector:
 
     # ---------- сообщения ----------
 
+    async def _clear_keyboard(self, msg: dict) -> None:
+        """В личке Егора с ботом висела клавиатура Пепе («Новый проект / Мои проекты») — снимаем её."""
+        if self._keyboard_cleared or (msg.get("chat") or {}).get("id") != self._owner or msg.get("business_connection_id"):
+            return
+        self._keyboard_cleared = True
+        await self._notify_owner("📥 Это Буфер: всё, что сюда пересылаешь, сохраняю. Кнопки Пепе здесь не работают — убрал.",
+                                 {"remove_keyboard": True})
+
     async def _handle(self, kind: str, msg: dict) -> None:
         if is_secret(msg):
             log.info("Сбор Telegram: сообщение с кодом или реквизитами не сохранено")
             return
         await self._connection_of(msg)
+        await self._clear_keyboard(msg)
         key = content_key(kind, msg)
         if await asyncio.to_thread(self._repo.buffer_has, key):
             return  # уже записано: перезапуск или та же переписка через второе подключение
