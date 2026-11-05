@@ -80,7 +80,10 @@ def _forward_note(msg: dict) -> str:
     sender = origin.get("sender_user") or {}
     name = _who(sender) or origin.get("sender_user_name") or (origin.get("chat") or {}).get("title") \
         or (origin.get("sender_chat") or {}).get("title")
-    return f"переслано от: {name}" if name else ""
+    uid = sender.get("id") or (origin.get("chat") or origin.get("sender_chat") or {}).get("id")
+    if not name:
+        return ""
+    return f"переслано от: {name} (id {uid})" if uid else f"переслано от: {name} (id скрыт настройками)"
 
 
 def _mb(size: int | None) -> str:

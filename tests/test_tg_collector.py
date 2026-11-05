@@ -14,7 +14,7 @@ def test_message_record_forward_and_business():
     f = message_record("business_message", msg)
     assert f[B.SOURCE] == "Telegram" and f[B.STATUS] == "Новое" and f[B.KEY].startswith("tg:1:1761650000:")
     assert f[B.WHAT].startswith("Telegram · Александр Стороженко (@storozh): По Райфу")
-    assert "переслано от: Марина" in f[B.SOURCE_REF] and "через Telegram Business" in f[B.SOURCE_REF]
+    assert "переслано от: Марина (id 5)" in f[B.SOURCE_REF] and "через Telegram Business" in f[B.SOURCE_REF]
     edited = message_record("edited_message", dict(msg, edit_date=1761650100))
     assert edited[B.KEY].endswith(":e1761650100")
 
