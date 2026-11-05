@@ -213,3 +213,11 @@ def test_records_inbox_transcribes_moves_and_writes_buffer():
     f = added[0]
     assert f[B.SOURCE] == "Аудио" and f[B.WHAT].startswith("Аудио · 30.10 10:00 · Встреча с Office")
     assert f[B.ESSENCE] == "Встреча с Office Solutions по Алматы"
+
+
+def test_message_record_contact_card():
+    msg = {"message_id": 8, "date": 1761650000, "chat": {"id": 42, "type": "private"},
+           "from": {"id": 1, "first_name": "Алина"},
+           "contact": {"first_name": "Алёна", "last_name": "Сизякова", "phone_number": "+79990000000", "user_id": 77}}
+    f = message_record("business_message", msg)
+    assert "👤 Контакт: Алёна Сизякова · +79990000000 · Telegram id 77" in f[B.ESSENCE]

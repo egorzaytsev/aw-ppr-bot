@@ -142,6 +142,13 @@ def message_record(update_kind: str, msg: dict, transcript: str = "", notes: lis
         parts.append(f"📎 {media['name']} · {_mb(media['size'])}")
     elif media and not transcript and not notes:
         parts.append(f"📎 {_MEDIA_RU[media['kind']]} · {_mb(media['size'])}")
+    contact = msg.get("contact")
+    if contact:   # карточка контакта: имя, телефон и Telegram ID, если человек есть в Telegram
+        name = " ".join(p for p in (contact.get("first_name"), contact.get("last_name")) if p)
+        bits = [name or "без имени", contact.get("phone_number") or ""]
+        if contact.get("user_id"):
+            bits.append(f"Telegram id {contact['user_id']}")
+        parts.append("👤 Контакт: " + " · ".join(b for b in bits if b))
     if transcript:
         parts.append(f"🎙 Расшифровка: {transcript}")
     parts += list(notes or [])
