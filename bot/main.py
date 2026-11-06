@@ -91,6 +91,7 @@ STAGE_LABELS = {
 }
 CARD_ACTIONS = {"fill": FILL, "news": NEWS, "won": WON, "lost": LOST, "quote": QUOTE}
 # Следующий этап по текущему статусу дилера
+NEXT_LABEL = {PPR_NOTIFIED: ("предрегистрацию", "предрегистрации"), PPR_PRE_REGISTERED: ("регистрацию", "регистрации")}
 NEXT_REQUEST = {PPR_NOTIFIED: RequestType.UPGRADE_PRE_REGISTRATION, PPR_PRE_REGISTERED: RequestType.UPGRADE_REGISTRATION}
 NEXT_LABEL = {PPR_NOTIFIED: "предрегистрацию", PPR_PRE_REGISTERED: "регистрацию"}
 SIMPLIFIED = "Simplified (<30k)"
@@ -644,6 +645,9 @@ async def _start_action(
     if action in ("next", "nextok"):
         await _request_next_stage(update, ctx, person, project_id, confirmed=action == "nextok")
         return
+    materials_only = action == "fillmat"   # «Добавить материалы» с экрана «всё есть»
+    if materials_only:
+        action = "fill"
     if action not in CARD_ACTIONS:
         return
     if await _blocked(update, ctx, person, f"{CB_CARD}{action}:{project_id}"):
@@ -654,6 +658,15 @@ async def _start_action(
         return
     target = {"id": p.record_id, "name": p.name}
     preset = fill_preset(target, p.fields, p.ppr_status) if action == "fill" else {"_target": target}
+    if preset.get("_files_only") and not materials_only and _next_request_type(p):
+        # Дополнять нечего, а для следующего этапа всё есть — предложить запросить его
+        what = NEXT_LABEL[p.ppr_status]
+        await _send(update, [engine.Screen(
+            f"🏗 {cards.project_line(p.fields)}\nОбязательные поля заполнены — для {what[1]} по проекту есть всё. "
+            f"Запроси {what[0]}, Егор проверит.",
+            [[(f"⏭ Запросить {what[0]}", f"{CB_CARD}next:{p.record_id}")],
+             [("📎 Добавить материалы", f"{CB_CARD}fillmat:{p.record_id}")]])])
+        return
     await _start_scenario(update, ctx, person, CARD_ACTIONS[action].code, preset)
 
 
@@ -1104,6 +1117,25 @@ async def _warn_expired(app: Application, admin_chat) -> None:
                          _markup(rows[:15]))
 
 
+READY_REPEAT_DAYS = 7   # «условия выполнены» по одному менеджеру — не чаще раза в неделю
+
+
+async def _warn_ready(app: Application, admin_chat) -> None:
+    """Утром: проекты, где для следующего этапа уже всё есть (в т.ч. после правок через Буфер), —
+    предложить повысить, не дожидаясь заявки партнёра."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    offered: dict = app.bot_data.setdefault("ready_offered", {})
+    today = datetime.now(VALENCIA).date()
+    for rec in await asyncio.to_thread(repo.ready_for_upgrade):
+        f = rec["fields"]
+        for person in dict.fromkeys((f.get(Projects.PRE_REGISTERED) or []) + (f.get(Projects.NOTIFIED) or [])):
+            last = offered.get((rec["id"], person))
+            if last and (today - last).days < READY_REPEAT_DAYS:
+                continue
+            await _offer_upgrade(app, admin_chat, f, rec["id"], person)
+            offered[(rec["id"], person)] = today
+
+
 async def _offer_upgrade(app: Application, admin_chat, fresh: dict, project_id: str, person_id: str) -> None:
     """После «Дополнить»: условия следующего этапа выполнены — предложить проверяющему повысить."""
     if not admin_chat or fresh.get(Projects.PPR_NEXT_MISSING) or fresh.get(Projects.REGISTERED) \
@@ -1510,6 +1542,7 @@ async def _alerts_loop(app: Application) -> None:
                 handler.day_count = 0
                 app.bot_data["summary_day"] = now.date().isoformat()
                 await _warn_expired(app, admin_chat)
+                await _warn_ready(app, admin_chat)
         except Exception:
             # Не log.exception — иначе ошибка отправки сама станет «ошибкой бота» по кругу
             log.warning("Не удалось отправить оповещение Егору", exc_info=True)

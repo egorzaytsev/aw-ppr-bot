@@ -165,6 +165,11 @@ def start(scenario_code: str, preset: dict | None = None) -> Result:
     head = f"<b>{escape(sc.title)}</b>"
     if target:
         head += f" · {escape(target['name'])}"
+    ask = state.answers.get("_ask")
+    if ask:   # «Дополнить»: сразу видно, чего не хватает
+        labels = list(dict.fromkeys(q.label for q in sc.questions if q.key in ask and q.label))
+        if labels:
+            head += "\nНе хватает: " + escape(", ".join(labels)) + "."
     intro = Screen(f"{head}\nМожно отвечать текстом или голосом. Прервать — /cancel.")
     return Result(state, [intro, question_screen(state)])
 

@@ -595,7 +595,7 @@ def test_fill_asks_only_gaps_in_phase_order():
               P.DOSSIER_FILES: [{"id": "att1"}], P.PROJECT_LOG: FULL_LOG}
     # Уведомление, всё заполнено → только приём файлов
     r = engine.start("project_fill", fill_preset(dict(TARGET["_target"]), fields, "notified"))
-    assert r.state.step == len(engine._qs(r.state)) - 1 and "Пустых полей по проекту нет" in r.screens[1].text
+    assert r.state.step == len(engine._qs(r.state)) - 1 and "Обязательные поля по проекту заполнены" in r.screens[1].text
     r = engine.handle_callback(r.state, engine.CB_DONE)          # пусто — нельзя
     assert r.state.awaiting == "answer"
     r = engine.handle_text(r.state, "https://disk.yandex.ru/new")
@@ -916,3 +916,8 @@ def test_fill_files_only_can_be_skipped_without_sending():
     assert ("Новых материалов нет", engine.CB_SKIP) in [b for row in r.screens[-1].buttons for b in row]
     r = engine.handle_callback(r.state, engine.CB_SKIP)
     assert r.state is None and "ничего не отправляю" in r.screens[0].text
+
+
+def test_fill_intro_lists_missing_fields():
+    r = engine.start("project_fill", {"_target": {"id": "recX", "name": "X"}, "_ask": ["Object Address", "Contact Level"]})
+    assert "Не хватает:" in r.screens[0].text

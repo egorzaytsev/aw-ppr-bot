@@ -564,6 +564,17 @@ class AirtableRepo:
                                           Projects.REGISTERED, Projects.STATUS_EXPIRY],
                                   sort=[Projects.PPR_REF])
 
+    def ready_for_upgrade(self) -> list[dict]:
+        """Живые проекты полного трека без регистрации, где для следующего этапа всё есть (PPR Next Step Missing пуст)."""
+        formula = (f"AND({{{Projects.PPR_NEXT_MISSING}}}='', COUNTA({{{Projects.REGISTERED}}})=0, "
+                   f"OR(COUNTA({{{Projects.NOTIFIED}}})>0, COUNTA({{{Projects.PRE_REGISTERED}}})>0), "
+                   f"{{{Projects.PPR_TRACK}}}!='Simplified (<30k)', "
+                   f"{{{Projects.STATUS}}}!='Won', {{{Projects.STATUS}}}!='Lost')")
+        return self._projects.all(formula=formula, use_field_ids=True,
+                                  fields=[Projects.NAME, Projects.PPR_REF, Projects.NOTIFIED, Projects.PRE_REGISTERED,
+                                          Projects.REGISTERED, Projects.PPR_TRACK, Projects.PPR_NEXT_MISSING],
+                                  sort=[Projects.PPR_REF])
+
     def person_companies(self, person_id: str) -> list[str]:
         try:
             return self._people.get(person_id, use_field_ids=True)["fields"].get(People.COMPANY) or []
