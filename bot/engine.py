@@ -637,6 +637,11 @@ def handle_callback(state: DialogState, data: str) -> Result:
     if state.awaiting == AWAIT_ANSWER:
         q = _current_q(state)
         if data == CB_SKIP and q.optional and not _no_skip(state, q):
+            if q.kind == "files" and not any(v not in (None, "", []) for k, v in state.answers.items()
+                                             if not k.startswith("_")):
+                # «Новых материалов нет» при пустой анкете — отправлять нечего
+                return Result(None, [Screen("Понял, новых материалов нет — ничего не отправляю. "
+                                            "Всё по проекту и так на месте.")])
             return _accept(state, q, None)
         if data == CB_STOP and _can_stop(state, q):
             state.declined_gate = state.phase
