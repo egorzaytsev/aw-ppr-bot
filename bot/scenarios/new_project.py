@@ -83,8 +83,8 @@ def materials_prompt(a: dict) -> str:
 CONTACT_CHOICES = (
     ("Пока ничем — только моё слово", "Declared"),
     ("Документы от бюро", CONTACT_BUREAU_DOCS),
-    ("Переписка или прямой контакт с клиентом или архбюро", "Verifiable (email/contact)"),
-    ("Готов к встрече с клиентом или архбюро вместе с AW", "Joint meeting with AW"),
+    ("Переписка или прямой контакт с клиентом", "Verifiable (email/contact)"),
+    ("Готов к встрече с клиентом вместе с AW", "Joint meeting with AW"),
 )
 WHOLE_OBJECT = "Весь объект"
 STAGE_ARCHITECT_SELECTION = "Architect selection"
@@ -320,7 +320,7 @@ PHASE_2 = (
         phase=2,
         key="Contact Level",
         label="Уровень контакта",
-        prompt="Чем подтверждён твой контакт с клиентом или архбюро?",
+        prompt="Чем подтверждён твой контакт с клиентом?",
         kind="choice",
         # Значения = варианты поля Contact Level в Projects
         choices=CONTACT_CHOICES,
