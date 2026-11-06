@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -72,3 +73,20 @@ def slot_value(d: date, idx: int, country: str | None) -> str:
     if country in LOCAL_TZ:
         head += f" (Валенсия {valencia_window(idx)})"
     return head
+
+
+_SLOT_RE = re.compile(r"(\d{2})\.(\d{2})\.(\d{4})[^\n]*?(?:Валенсия (\d{2}):(\d{2})|(\d{2}):(\d{2})–\d{2}:\d{2} Валенсия)")
+
+
+def valencia_start(value: str) -> datetime | None:
+    """Начало звонка по Валенсии из строки слота («05.11.2026 Чт, 14:00–16:00 Мск (Валенсия 12:00–14:00)»).
+    Свободный текст партнёра — None."""
+    m = _SLOT_RE.search(str(value or ""))
+    if not m:
+        return None
+    d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    hh, mm = (m.group(4), m.group(5)) if m.group(4) else (m.group(6), m.group(7))
+    try:
+        return datetime(y, mo, d, int(hh), int(mm), tzinfo=VALENCIA)
+    except ValueError:
+        return None

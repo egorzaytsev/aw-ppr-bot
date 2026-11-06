@@ -27,7 +27,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import admin, alerts, cards, dedup, engine, phrases, reminders, routing
+from . import admin, alerts, cards, dedup, engine, phrases, reminders, routing, slots
 from .airtable_ids import Decision, Partners, People, Projects, Registrations, RegStatus, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
@@ -831,13 +831,13 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
             if request_type in admin.UPGRADE_REQUESTS:
                 reg = await asyncio.to_thread(_repo(ctx).registration_fields, reg_id)
                 extra = await admin.upgrade_digest(_repo(ctx), reg)
-            await ctx.bot.send_message(
-                admin_chat,
+            await admin.send_card(
+                ctx.bot, admin_chat,
                 admin.request_card(card_fields, reg_id, person.name, analysis, _sender_label(ctx, person, payload),
                                    extra),
-                parse_mode=ParseMode.HTML,
-                reply_markup=admin.decision_markup(ctx, reg_id, candidates),
+                admin.decision_markup(ctx, reg_id, candidates),
             )
+            await admin.send_call_offer(ctx.bot, admin_chat, reg_id, card_fields, person.name)
         except Exception:
             log.exception("Не удалось уведомить проверяющего %s", admin_chat)
 
@@ -1129,6 +1129,46 @@ async def _warn_expired(app: Application, admin_chat) -> None:
     if lines:
         await _send_html(app.bot, admin_chat, "🛠 ⏳ <b>Истёк срок статуса</b> — продли или откати:\n" + "\n".join(lines[:15]),
                          _markup(rows[:15]))
+
+
+CALL_REMIND_BEFORE = timedelta(hours=1)
+
+
+async def _calls(app: Application) -> list[tuple[datetime, str, str, str]]:
+    """Звонки из заявок: (начало по Валенсии, кто, проект, строка слота)."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    out = []
+    for rec in await asyncio.to_thread(repo.recent_calls):
+        f = rec["fields"]
+        payload = admin._payload(f)
+        people = f.get(Registrations.SUBMITTED_BY) or []
+        who = await asyncio.to_thread(repo.person_name, people[0]) if people else "Партнёр"
+        for label, value in admin.call_slots(payload):
+            start = slots.valencia_start(value)
+            if start:
+                out.append((start, who, f.get(Registrations.DEALER_PROJECT_NAME) or "без названия",
+                            f"{label}: {value}"))
+    return sorted(out)
+
+
+async def _remind_calls(app: Application, admin_chat, morning: bool) -> None:
+    """Утром — звонки на сегодня; в течение дня — за час до начала окна."""
+    now = datetime.now(VALENCIA)
+    reminded: set = app.bot_data.setdefault("calls_reminded", set())
+    calls = await _calls(app)
+    if morning:
+        today = [c for c in calls if c[0].date() == now.date()]
+        if today:
+            await _send_html(app.bot, admin_chat, "📞 <b>Звонки сегодня</b>\n" + "\n".join(
+                f"• {c[0]:%H:%M} Валенсия · {escape(c[1])} · {escape(c[2])}\n  {escape(c[3])}" for c in today))
+        return
+    for start, who, name, line in calls:
+        key = (start.isoformat(), name)
+        if key in reminded or not (now < start <= now + CALL_REMIND_BEFORE):
+            continue
+        reminded.add(key)
+        await _send_html(app.bot, admin_chat, f"⏰ <b>Через {int((start - now).total_seconds() // 60)} мин — звонок</b>\n"
+                                              f"{escape(who)} · {escape(name)}\n{escape(line)}")
 
 
 READY_REPEAT_DAYS = 7   # «условия выполнены» по одному менеджеру — не чаще раза в неделю
@@ -1557,6 +1597,11 @@ async def _alerts_loop(app: Application) -> None:
                 app.bot_data["summary_day"] = now.date().isoformat()
                 await _warn_expired(app, admin_chat)
                 await _warn_ready(app, admin_chat)
+                await _remind_calls(app, admin_chat, morning=True)
+            last = app.bot_data.get("calls_checked")
+            if not last or now - last >= timedelta(minutes=10):
+                app.bot_data["calls_checked"] = now
+                await _remind_calls(app, admin_chat, morning=False)
         except Exception:
             # Не log.exception — иначе ошибка отправки сама станет «ошибкой бота» по кругу
             log.warning("Не удалось отправить оповещение Егору", exc_info=True)

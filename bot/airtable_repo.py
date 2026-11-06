@@ -564,6 +564,14 @@ class AirtableRepo:
                                           Projects.REGISTERED, Projects.STATUS_EXPIRY],
                                   sort=[Projects.PPR_REF])
 
+    def recent_calls(self, days: int = 14) -> list[dict]:
+        """Заявки последних дней, где партнёр выбрал время звонка (Call Slot в Payload)."""
+        formula = (f"AND(FIND('Call Slot', {{{Registrations.PAYLOAD}}}), "
+                   f"IS_AFTER({{{Registrations.SUBMITTED_AT}}}, DATEADD(TODAY(), -{days}, 'days')))")
+        return self._registrations.all(formula=formula, use_field_ids=True,
+                                       fields=[Registrations.DEALER_PROJECT_NAME, Registrations.PAYLOAD,
+                                               Registrations.SUBMITTED_BY])
+
     def ready_for_upgrade(self) -> list[dict]:
         """Живые проекты полного трека без регистрации, где для следующего этапа всё есть (PPR Next Step Missing пуст)."""
         formula = (f"AND({{{Projects.PPR_NEXT_MISSING}}}='', COUNTA({{{Projects.REGISTERED}}})=0, "

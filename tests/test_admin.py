@@ -10,7 +10,7 @@ def test_request_card_and_search_words():
                                   "Object Address": "ул. Лесная, 9", "PL Volume": 31000}, ensure_ascii=False)}
     card = request_card(reg, "recX")
     assert "🛠 <b>📥 Новая заявка · уведомление</b>" in card and "🏗 <b>Пао — Символ</b>" in card
-    assert "Объём по прайсу: 31 000 €" in card
+    assert "Объём AW по прайсу: 31 000 €" in card
     assert "recX" not in card
 
 

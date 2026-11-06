@@ -41,6 +41,7 @@ ACTION_NAME = "name"
 # Принять с комментарием: сначала текст, потом обычный выбор проекта
 ACTION_ACCEPT_NOTE = "accn"
 ACTION_DECLINE_BARE = "decn"   # отказ без комментария
+ACTION_CALL_OK, ACTION_CALL_OTHER = "cok", "cot"   # звонок, предложенный партнёром: подтвердить / другое время
 # Повышение статуса без заявки: ad:up:<проект>:<менеджер>:pre|reg; список /upgrade и выбор пары
 ACTION_UP, ACTION_UP_NO, ACTION_UP_LIST, ACTION_UP_PICK = "up", "upno", "upl", "ups"
 # Подтверждение несмотря на незаполненные ответы: те же действия с флагом «точно»
@@ -310,6 +311,20 @@ def _ru(key: str, value) -> str:
     return str(value)
 
 
+CALL_KEYS = ("Call Slot 15", "Call Slot 30")
+
+
+def call_slots(payload: dict) -> list[tuple[str, str]]:
+    """Предложенные партнёром звонки: [(«Звонок 15 минут», «05.11.2026 Чт, 14:00–16:00 Мск (Валенсия …)»)]."""
+    out = []
+    for key in CALL_KEYS:
+        value = payload.get(key)
+        if value not in (None, "", []):
+            q = _QUESTIONS.get(key)
+            out.append((q.title if q else key, str(value)))
+    return out
+
+
 def _card_body(rtype: str, payload: dict) -> list[str]:
     body: list[str] = []
     if payload.get("Dealer News"):
@@ -323,27 +338,26 @@ def _card_body(rtype: str, payload: dict) -> list[str]:
                 title = _QUESTIONS[k].title if k in _QUESTIONS else _EXTRA_TITLES.get(k, k)
                 body.append(f"• {escape(title)}: {escape(_ru(k, v))[:300]}")
         return body
-    pl = payload.get("PL Volume")
-    stage = _ru("Project Stage", payload["Project Stage"]) if payload.get("Project Stage") else ""
-    part = payload.get("Object Part")
-    obj = _v(payload, "Object Name") + (f" · {escape(str(part))}" if part and part != "Весь объект" else "")
-    for row in (
-        _pair(("Клиент", _v(payload, "End Client"))),
-        _pair(("Объект", obj)),
-        _pair(("Город", _v(payload, "City")), ("Стадия", escape(stage))),
-        _pair(("AW в проекте бюро", _v(payload, "AW Origin"))),
-        _pair(("Бюро", _v(payload, "Bureau") or _v(payload, "Specifier"))),
-        _pair(("ГАП", _v(payload, "Lead Architect"))),
-        _pair(("Объём по прайсу", f"{pl:,.0f} €".replace(",", " ") if isinstance(pl, (int, float)) else "")),
-        _pair(("Альтернативы AW", escape(_ru("AW Alternatives", payload["AW Alternatives"]))
-               if payload.get("AW Alternatives") else "")),
-        _pair(("Уровень контакта", escape(_ru("Contact Level", payload["Contact Level"]))
-               if payload.get("Contact Level") else "")),
-        _pair(("Причина", _v(payload, "Lost Reason"))),
-        _pair(("Заказ / проформа", _v(payload, "Order / Proforma №"))),
-    ):
-        if row:
-            body.append(row)
+    # Всё, что партнёр ответил боту, — полностью, в порядке анкеты; звонок — отдельной строкой сверху
+    calls = call_slots(payload)
+    for label, value in calls:
+        body.append(f"📞 <b>{escape(label)}: {escape(value)}</b>")
+    if calls:
+        body.append("")
+    shown = set(CALL_KEYS)
+    for key, q in _QUESTIONS.items():
+        if key in shown or key not in payload or key.startswith("_"):
+            continue
+        shown.add(key)
+        value = payload[key]
+        text = "пропущено" if value in (None, "", []) else _ru(key, value)
+        mark = " ⚠️" if isinstance(value, str) and q.label_for(value) is None and is_vague(key, value) else ""
+        body.append(f"• {escape(q.title)}: {escape(text)}{mark}")
+    for key, value in payload.items():
+        if key in shown or key.startswith("_") or key in _META_KEYS or value in (None, "", []):
+            continue
+        title = _EXTRA_TITLES.get(key, key)
+        body.append(f"• {escape(title)}: {escape(_ru(key, value))}")
     if rtype == "Update — Lost" and payload.get("Project Log"):
         body.append(escape(payload["Project Log"])[:300])
     if rtype in STATUS_REQUESTS and payload.get("Contact Level") == "Declared":
@@ -353,7 +367,6 @@ def _card_body(rtype: str, payload: dict) -> list[str]:
 
 
 UPGRADE_REQUESTS = {"Upgrade — Pre-registration", "Upgrade — Registration"}
-LOG_TAIL = 1200   # сколько последних символов Project Log показывать в карточке повышения
 
 
 def project_digest(project: dict, manager: str, companies: dict) -> list[str]:
@@ -394,8 +407,7 @@ def project_digest(project: dict, manager: str, companies: dict) -> list[str]:
     lines += others_line(project, manager, dealer_status(project, manager))
     log_text = str(project.get(Projects.PROJECT_LOG) or "").strip()
     if log_text:
-        tail = log_text[:LOG_TAIL] + ("…" if len(log_text) > LOG_TAIL else "")
-        lines += ["", "<b>Журнал проекта — последние записи</b>", escape(tail)]
+        lines += ["", "<b>Журнал проекта</b>", escape(log_text)]
     return lines
 
 
@@ -444,6 +456,68 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
     return "\n".join(lines)
 
 
+TG_LIMIT = 3800   # запас до 4096 символов сообщения Telegram
+
+
+def split_message(text: str, limit: int = TG_LIMIT) -> list[str]:
+    """Длинная карточка — на части по строкам (теги в карточке не переходят через строку)."""
+    parts, cur = [], ""
+    for line in text.split("\n"):
+        while len(line) > limit:   # одна очень длинная строка — режем по месту
+            if cur:
+                parts.append(cur)
+                cur = ""
+            parts.append(line[:limit])
+            line = line[limit:]
+        if cur and len(cur) + 1 + len(line) > limit:
+            parts.append(cur)
+            cur = line
+        else:
+            cur = f"{cur}\n{line}" if cur else line
+    if cur:
+        parts.append(cur)
+    return parts or [""]
+
+
+async def send_card(bot, chat_id, text: str, markup=None) -> None:
+    """Карточка целиком, без сокращений: части подряд, кнопки — под последней."""
+    parts = split_message(text)
+    for i, part in enumerate(parts):
+        await bot.send_message(chat_id, part, parse_mode=ParseMode.HTML,
+                               reply_markup=markup if i == len(parts) - 1 else None)
+
+
+def _call_text(reg: dict, idx: int) -> tuple[str, str, str]:
+    """(подпись, время, название проекта) звонка №idx из заявки."""
+    calls = call_slots(_payload(reg))
+    label, value = calls[idx] if 0 <= idx < len(calls) else ("Звонок", "—")
+    return label, value, reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+
+
+async def send_call_offer(bot, chat_id, reg_id: str, reg: dict, author: str | None) -> None:
+    """Партнёр выбрал время звонка — отдельным сообщением, чтобы не потерялось: подтвердить или другое время."""
+    for idx, (label, value) in enumerate(call_slots(_payload(reg))):
+        name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+        await bot.send_message(
+            chat_id,
+            f"📞 <b>{escape(author or 'Партнёр')} предлагает звонок</b> · {escape(label.lower())}\n"
+            f"🏗 {escape(name)}\n🕑 <b>{escape(value)}</b>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Подтвердить", callback_data=f"{CB_ADMIN}{ACTION_CALL_OK}:{reg_id}:{idx}"),
+                InlineKeyboardButton("🕑 Другое время", callback_data=f"{CB_ADMIN}{ACTION_CALL_OTHER}:{reg_id}:{idx}"),
+            ]]),
+        )
+
+
+async def _tell_partner(ctx: ContextTypes.DEFAULT_TYPE, reg: dict, text: str) -> bool:
+    repo = ctx.bot_data["repo"]
+    chats = await asyncio.to_thread(repo.chat_ids_for_people, reg.get(Registrations.SUBMITTED_BY) or [])
+    for chat_id in chats:
+        await ctx.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+    return bool(chats)
+
+
 async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_admin(update, ctx):
         return
@@ -460,14 +534,16 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.effective_chat.send_message(f"🛠 Заявок без решения: {len(recs)}")
     for rec in recs:
-        await update.effective_chat.send_message(
+        await send_card(
+            ctx.bot, update.effective_chat.id,
             request_card(rec["fields"], rec["id"], await _author(repo, rec["fields"]),
                          rec["fields"].get(Registrations.ANALYSIS), await _dealer(repo, rec["fields"]),
                          await upgrade_digest(repo, rec["fields"]))
             + age_line(rec["fields"].get(Registrations.SUBMITTED_AT)),
-            parse_mode=ParseMode.HTML,
-            reply_markup=decision_markup(ctx, rec["id"], await merge_candidates(repo, rec["fields"])),
+            decision_markup(ctx, rec["id"], await merge_candidates(repo, rec["fields"])),
         )
+        await send_call_offer(ctx.bot, update.effective_chat.id, rec["id"], rec["fields"],
+                              await _author(repo, rec["fields"]))
 
 
 def age_hours(submitted_at: str | None, now: datetime | None = None) -> float:
@@ -589,6 +665,23 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     if action == ACTION_CANCEL:
         await drop_pending(update, ctx)
         await chat.send_message("🛠 Отменено.")
+        return
+
+    if action in (ACTION_CALL_OK, ACTION_CALL_OTHER) and project_id.isdigit():
+        reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+        label, value, name = _call_text(reg, int(project_id))
+        if action == ACTION_CALL_OTHER:
+            pending[chat.id] = (ACTION_CALL_OTHER, reg_id, project_id)
+            await chat.send_message(f"🛠 «{escape(name)}»: напиши, какое время звонка предложить, — уйдёт партнёру.",
+                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                                        "Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]))
+            return
+        who = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
+        sent = await _tell_partner(ctx, reg, f"📞 {who} подтверждает звонок по «{escape(name)}»: <b>{escape(value)}</b>. "
+                                             "До связи!")
+        ctx.bot_data.setdefault("calls_confirmed", set()).add((reg_id, int(project_id)))
+        await chat.send_message(f"🛠 Звонок по «{escape(name)}» подтверждён: {escape(value)}. "
+                                + ("Партнёру написал. Напомню за час." if sent else "⚠️ Партнёра нет в боте — не написал."))
         return
 
     # Повышение статуса без заявки — по проекту и менеджеру, не по записи Inbox
@@ -946,6 +1039,19 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         return False  # бот ничего не ждёт — текст идёт дальше, в обычный диалог
     action, reg_id, reply_id = item
     chat = update.effective_chat
+    if action == ACTION_CALL_OTHER:
+        if not text.strip():
+            pending[chat.id] = item
+            await chat.send_message("🛠 Пустой текст — напиши время.")
+            return True
+        reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+        _, value, name = _call_text(reg, int(reply_id or 0))
+        who = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
+        sent = await _tell_partner(ctx, reg, f"📞 По звонку по «{escape(name)}» ({escape(value)}) {who} предлагает "
+                                             f"другое время: <b>{escape(text.strip())}</b>. Если не подходит — "
+                                             f"напиши {who} напрямую.")
+        await chat.send_message("🛠 Партнёру отправил." if sent else "🛠 ⚠️ Партнёра нет в боте — не отправил.")
+        return True
     if action in _ROLLBACK:
         reason = text.strip()
         if not reason:

@@ -931,3 +931,25 @@ def test_contested_registration_requires_materials():
     r = engine.handle_text(r.state, "https://disk.yandex.ru/d/abc")
     r = engine.handle_callback(r.state, engine.CB_DONE)
     assert "запрос регистрации с материалами" in r.screens[-1].text
+
+
+def test_call_slot_valencia_start():
+    from bot import slots
+    s = slots.valencia_start("05.11.2026 Чт, 14:00–16:00 Мск (Валенсия 12:00–14:00)")
+    assert (s.day, s.month, s.hour, s.minute) == (5, 11, 12, 0)
+    s = slots.valencia_start("06.11.2026 Пт, 10:00–12:00 Валенсия")
+    assert (s.day, s.hour) == (6, 10)
+    assert slots.valencia_start("в любое время после обеда") is None
+
+
+def test_admin_card_puts_call_on_top_and_shows_all():
+    import json
+    from bot.admin import request_card
+    from bot.airtable_ids import Registrations as R
+    payload = {"End Client": "PV Smart", "Call Slot 15": "05.11.2026 Чт, 14:00–16:00 Мск (Валенсия 12:00–14:00)",
+               "Decision Maker": "Генеральный директор PV Smart"}
+    text = request_card({R.DEALER_PROJECT_NAME: "X", R.REQUEST_TYPE: "New — Pre-registration",
+                         R.PAYLOAD: json.dumps(payload, ensure_ascii=False)}, "r")
+    body = text.split("\n")
+    assert any(l.startswith("📞") and "05.11.2026" in l for l in body)
+    assert "Генеральный директор PV Smart" in text

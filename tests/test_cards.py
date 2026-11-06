@@ -140,4 +140,4 @@ def test_admin_card_shows_aw_origin():
     reg = {R.DEALER_PROJECT_NAME: "Медалл", R.REQUEST_TYPE: "New — Notification",
            R.PAYLOAD: json.dumps({"Specifier": "UNK Project", "AW Origin": "Нет — AW предлагает дилер взамен продукта бюро"},
                                  ensure_ascii=False)}
-    assert "AW в проекте бюро: Нет — AW предлагает дилер взамен продукта бюро" in plain(request_card(reg, "recR"))
+    assert "AW в проекте бюро: Нет — AW предлагаем мы взамен" in plain(request_card(reg, "recR"))
