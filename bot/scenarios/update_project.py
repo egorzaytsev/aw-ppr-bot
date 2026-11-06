@@ -231,15 +231,26 @@ def _ask_only(q: Question) -> Question:
     return replace(q, ask_if=ask_if)
 
 
+CONTESTED = "_contested"   # запрос регистрации при чужих предрегистрациях — материалы обязательны
+
+
 FILL_QUESTIONS = tuple(_ask_only(q) for q in QUESTIONS) + (
     Question(
         key=EXTRA_FILES_KEY,
         label="Материалы",
         prompt="Обязательные поля по проекту заполнены — дополнять нечего. Есть новые материалы?",
-        hint="Визуализации, планировки, документы бюро. Файлы по одному, больше 5 МБ — ссылкой. "
-             "Когда закончишь — «Готово». Нечего добавить — «Новых материалов нет»",
+        prompt_fn=lambda a: ("Пришли материалы к запросу регистрации" if a.get(CONTESTED) else
+                             "Обязательные поля по проекту заполнены — дополнять нечего. Есть новые материалы?"),
+        hint_fn=lambda a: ("Предрегистрация на проекте есть и у других партнёров — регистрацию получит тот, "
+                           "у кого подтверждения сильнее: документы бюро или заказчика с датой, визуализации, "
+                           "планировки, ведомость. Файлы по одному, больше 5 МБ — ссылкой. Когда закончишь — «Готово»"
+                           if a.get(CONTESTED) else
+                           "Визуализации, планировки, ведомость, документы бюро — пригодятся, если за регистрацию "
+                           "будут спорить несколько партнёров. Файлы по одному, больше 5 МБ — ссылкой. "
+                           "Когда закончишь — «Готово». Нечего добавить — «Новых материалов нет»"),
         kind="files",
         optional=True,
+        optional_fn=lambda a: not a.get(CONTESTED),
         skip_label="Новых материалов нет",
         ask_if=lambda a: bool(a.get("_files_only")),
     ),
@@ -366,7 +377,8 @@ FILL = Scenario(
     questions=FILL_QUESTIONS,
     flat_numbering=True,
     phase_titles={1: "Уведомление", 2: "Предрегистрация", 3: "Регистрация"},
-    stage=lambda p, a, m: (RequestType.UPDATE_FIELDS, "дополнение по проекту"),
+    stage=lambda p, a, m: ((RequestType.UPGRADE_REGISTRATION, "запрос регистрации с материалами") if a.get(CONTESTED)
+                           else (RequestType.UPDATE_FIELDS, "дополнение по проекту")),
     derive=_fill_derive,
     verdict=lambda a, s, m: _plain_verdict(s),
     project_name_key="Dealer Project Name",

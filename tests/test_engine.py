@@ -921,3 +921,13 @@ def test_fill_files_only_can_be_skipped_without_sending():
 def test_fill_intro_lists_missing_fields():
     r = engine.start("project_fill", {"_target": {"id": "recX", "name": "X"}, "_ask": ["Object Address", "Contact Level"]})
     assert "Не хватает:" in r.screens[0].text
+
+
+def test_contested_registration_requires_materials():
+    from bot.scenarios.update_project import CONTESTED
+    r = engine.start("project_fill", {"_target": {"id": "recX", "name": "X"}, "_files_only": True, CONTESTED: True})
+    q = r.screens[-1]
+    assert "запросу регистрации" in q.text and not [b for row in q.buttons for b in row if b[1] == engine.CB_SKIP]
+    r = engine.handle_text(r.state, "https://disk.yandex.ru/d/abc")
+    r = engine.handle_callback(r.state, engine.CB_DONE)
+    assert "запрос регистрации с материалами" in r.screens[-1].text

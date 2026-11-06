@@ -36,7 +36,7 @@ from .airtable_repo import (
 from .config import load_settings
 from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, QUOTE, WON
 from .scenarios.new_project import SOLO_ARCHITECT
-from .scenarios.update_project import fill_preset
+from .scenarios.update_project import CONTESTED, fill_preset
 from .slots import VALENCIA
 from .dropbox_store import DropboxStore
 from .records_inbox import RecordsInbox
@@ -717,6 +717,12 @@ async def _request_next_stage(update: Update, ctx: ContextTypes.DEFAULT_TYPE, pe
         await update.effective_chat.send_message(why, reply_markup=MENU_KEYBOARD)
         return
     what = NEXT_LABEL[p.ppr_status]
+    rivals = set(p.fields.get(Projects.PRE_REGISTERED) or []) - {person.record_id}
+    if request_type == RequestType.UPGRADE_REGISTRATION and rivals:
+        # Спор за регистрацию: запрос уходит только вместе с материалами
+        preset = {"_target": {"id": p.record_id, "name": p.name}, "_files_only": True, CONTESTED: True}
+        await _start_scenario(update, ctx, person, FILL.code, preset)
+        return
     if not confirmed:
         await _send(update, [engine.Screen(
             f"Запросить {what} по «{escape(p.name)}»? Все данные для этапа есть — Егор посмотрит и ответит.",
