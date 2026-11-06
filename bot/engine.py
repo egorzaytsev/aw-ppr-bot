@@ -642,8 +642,7 @@ def handle_callback(state: DialogState, data: str) -> Result:
     if state.awaiting == AWAIT_ANSWER:
         q = _current_q(state)
         if data == CB_SKIP and q.optional and not _no_skip(state, q):
-            if q.kind == "files" and not any(v not in (None, "", []) for k, v in state.answers.items()
-                                             if not k.startswith("_")):
+            if q.kind == "files" and state.answers.get("_files_only") and not state.answers.get(q.key):
                 # «Новых материалов нет» при пустой анкете — отправлять нечего
                 return Result(None, [Screen("Понял, новых материалов нет — ничего не отправляю. "
                                             "Всё по проекту и так на месте.")])

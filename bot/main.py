@@ -36,7 +36,7 @@ from .airtable_repo import (
 from .config import load_settings
 from .scenarios import FILL, INFO_REPLY, LOST, NEW_PROJECT, NEWS, QUOTE, WON
 from .scenarios.new_project import SOLO_ARCHITECT
-from .scenarios.update_project import CONTESTED, fill_preset
+from .scenarios.update_project import CONTESTED, EXTRA_FILES_KEY, fill_preset
 from .slots import VALENCIA
 from .dropbox_store import DropboxStore
 from .records_inbox import RecordsInbox
@@ -220,7 +220,12 @@ def _hello(person: Person) -> str:
 
 
 def _has_answers(state) -> bool:
-    return any(not k.startswith("_") for k in state.answers)
+    """Партнёр что-то ввёл сам. В «Дополнить» ответы, подставленные из проекта, не считаются."""
+    a = state.answers
+    if "_ask" in a or a.get("_files_only"):
+        asked = set(a.get("_ask") or ()) | {EXTRA_FILES_KEY}
+        return any(a.get(k) not in (None, "", []) for k in asked)
+    return any(not k.startswith("_") for k in a)
 
 
 def _dialog_name(state) -> str:
@@ -237,8 +242,8 @@ async def _blocked(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Perso
         await _save(ctx, person, None)
         return False
     await _send(update, [engine.Screen(
-        f"У тебя есть незаконченная заявка: {escape(_dialog_name(person.state))}.",
-        [[("Продолжить её", CB_MENU_RESUME)], [("Отменить её и перейти", f"{CB_DROP_AND_GO}{pending}")]],
+        f"Ты не закончил «{escape(_dialog_name(person.state))}» — она ещё не отправлена.",
+        [[("↩️ Вернуться к ней", CB_MENU_RESUME)], [("➡️ Не отправлять, перейти дальше", f"{CB_DROP_AND_GO}{pending}")]],
     )])
     return True
 
@@ -261,8 +266,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if person.state:
         if _has_answers(person.state):
             await _send(update, [engine.Screen(
-                f"У тебя есть незаконченная заявка: {escape(_dialog_name(person.state))}.",
-                [[("Продолжить её", CB_MENU_RESUME)], [("Отменить её", CB_DROP_AND_GO)]],
+                f"Ты не закончил «{escape(_dialog_name(person.state))}» — она ещё не отправлена.",
+                [[("↩️ Вернуться к ней", CB_MENU_RESUME)], [("🗑 Не отправлять", CB_DROP_AND_GO)]],
             )])
         else:
             await _save(ctx, person, None)
@@ -774,6 +779,12 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
     payload = engine.build_payload(state)
     name = payload.get(sc.project_name_key) if sc.project_name_key else None
     files = engine.collected_files(state)
+    if sc.code == FILL.code and not files and not _has_answers(state):
+        # «Дополнить», где ничего не добавили, — пустую заявку Егору не шлём
+        await _save(ctx, person, None)
+        await update.effective_chat.send_message("Новых данных нет — ничего не отправляю. По проекту всё на месте.",
+                                                 reply_markup=MENU_KEYBOARD)
+        return
     if files:
         await update.effective_chat.send_message("Сохраняю заявку и файлы…")
     try:

@@ -953,3 +953,11 @@ def test_admin_card_puts_call_on_top_and_shows_all():
     body = text.split("\n")
     assert any(l.startswith("📞") and "05.11.2026" in l for l in body)
     assert "Генеральный директор PV Smart" in text
+
+
+def test_fill_skip_closes_even_with_project_answers():
+    # «Дополнить» по заполненному проекту: в ответах есть подставленные из проекта значения — всё равно не шлём
+    r = engine.start("project_fill", {"_target": {"id": "recX", "name": "X"}, "_files_only": True,
+                                      "Country": "Russia", "City": "Moscow"})
+    r = engine.handle_callback(r.state, engine.CB_SKIP)
+    assert r.state is None and "ничего не отправляю" in r.screens[0].text
