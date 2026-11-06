@@ -109,15 +109,13 @@ def test_admin_request_card_russian_values_warning_and_changes():
     assert "• Уровень контакта: Готов к совместной встрече" in t2 and "Dealer Project Name" not in t2
 
 
-def test_decision_markup_merge_buttons():
+def test_decision_markup_two_buttons():
     from types import SimpleNamespace
     from bot.admin import decision_markup
     ctx = SimpleNamespace(bot_data={"base_id": "appX"})
-    rows = decision_markup(ctx, "recR", [("recA", "Petrovitch"), ("recB", "Technodom")]).inline_keyboard
-    labels = [b.text for row in rows for b in row]
-    assert labels[:3] == ["🔗 Слить с: Petrovitch", "🔗 Слить с: Technodom", "🆕 Принять как новый"]
-    assert rows[0][0].callback_data == "ad:pick:recR:recA"
-    assert [b.text for b in decision_markup(ctx, "recR").inline_keyboard[0]] == ["Принять"]
+    rows = decision_markup(ctx, "recR", [("recA", "Petrovitch")]).inline_keyboard
+    assert [b.text for row in rows for b in row] == ["✅ Принять", "❌ Отклонить"]
+    assert rows[0][0].callback_data == "ad:accn:recR" and rows[0][1].callback_data == "ad:dec:recR"
 
 
 def test_declined_upgrade_card():

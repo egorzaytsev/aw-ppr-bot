@@ -83,7 +83,9 @@ def test_accept_without_target_project_blocked():
 
 
 def test_decline_and_need_info_need_note():
-    assert plan(reg("Decline"), None).blocked
+    pl = plan(reg("Decline"), None)          # отказ без комментария — можно
+    assert not pl.blocked and pl.dealer_text.endswith("отказ.")
+    assert plan(reg("Need more info"), None).blocked
     pl = plan(reg("Decline", note="Объект уже зарегистрирован"), None)
     assert pl.registration_updates[R.REG_STATUS] == "Declined"
     assert "По запросу «Петрович — офис»: отказ." in pl.dealer_text and "Объект уже зарегистрирован" in pl.dealer_text

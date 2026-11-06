@@ -40,6 +40,7 @@ ACTION_ASK = "ask"
 ACTION_NAME = "name"
 # Принять с комментарием: сначала текст, потом обычный выбор проекта
 ACTION_ACCEPT_NOTE = "accn"
+ACTION_DECLINE_BARE = "decn"   # отказ без комментария
 # Повышение статуса без заявки: ad:up:<проект>:<менеджер>:pre|reg; список /upgrade и выбор пары
 ACTION_UP, ACTION_UP_NO, ACTION_UP_LIST, ACTION_UP_PICK = "up", "upno", "upl", "ups"
 # Подтверждение несмотря на незаполненные ответы: те же действия с флагом «точно»
@@ -203,20 +204,12 @@ def record_url(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> str:
 
 def decision_markup(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str,
                     candidates: list | None = None) -> InlineKeyboardMarkup:
-    """Совпадения есть — «Слить с: …» на каждое и «Принять как новый»; нет — просто «Принять»."""
-    rows = [[InlineKeyboardButton(f"🔗 Слить с: {name[:40]}",
-                                  callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{pid}")]
-            for pid, name in (candidates or [])]
-    if candidates:
-        rows.append([InlineKeyboardButton("🆕 Принять как новый", callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-")])
-    else:
-        rows.append([InlineKeyboardButton("Принять", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}")])
-    rows.append([InlineKeyboardButton("💬 Принять с комментарием",
-                                      callback_data=f"{CB_ADMIN}{ACTION_ACCEPT_NOTE}:{reg_id}")])
-    return InlineKeyboardMarkup(rows + [
-        [InlineKeyboardButton("❓ Спросить партнёра", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
-        [InlineKeyboardButton("❌ Отклонить с причиной", callback_data=f"{CB_ADMIN}{ACTION_DECLINE}:{reg_id}")],
-    ])
+    """Два решения: «Принять» и «Отклонить». После нажатия — комментарий партнёру или «без комментария»;
+    в какой проект (совпадения, новый) бот спросит после этого."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Принять", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT_NOTE}:{reg_id}"),
+        InlineKeyboardButton("❌ Отклонить", callback_data=f"{CB_ADMIN}{ACTION_DECLINE}:{reg_id}"),
+    ]])
 
 
 REQUEST_LABELS = {
@@ -654,7 +647,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         return
     # Кнопка под ответом дилера — решение по исходной заявке, ответ закрывается вместе с ней
     original = _payload(reg).get("In Reply To")
-    if original and action in (ACTION_ACCEPT, ACTION_DECLINE, ACTION_INFO, ACTION_ACCEPT_NOTE):
+    if original and action in (ACTION_ACCEPT, ACTION_DECLINE, ACTION_INFO, ACTION_ACCEPT_NOTE, ACTION_DECLINE_BARE):
         reply_id, reg_id = reg_id, original
         try:
             reg = await asyncio.to_thread(repo.registration_fields, reg_id)
@@ -696,21 +689,32 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     if action == ACTION_ACCEPT_NOTE:
         pending[chat.id] = (action, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
+        tail = f"::{reply_id}" if reply_id else ""
         await chat.send_message(
-            f"🛠 «{name}»: напиши комментарий — он уйдёт дилеру строкой 💬 в карточке. Потом выберешь проект.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
+            f"🛠 «{name}» — принимаем. Напиши комментарий партнёру или отправь без него.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Отправить без комментария", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}{tail}")],
+                [InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
         )
+        return
+
+    if action == ACTION_DECLINE_BARE:
+        pending[chat.id] = (ACTION_DECLINE, reg_id, reply_id)
+        await on_admin_text(update, ctx, "", resume=False)
         return
 
     if action in (ACTION_DECLINE, ACTION_INFO):
         pending[chat.id] = (action, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
-        what = ("причину отказа — заявка закроется" if action == ACTION_DECLINE
-                else "вопрос — заявка подождёт ответа партнёра, он ответит кнопкой в боте")
-        await chat.send_message(
-            f"🛠 «{name}»: напиши {what}. Текст уйдёт партнёру как есть.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
-        )
+        rows = [[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]
+        if action == ACTION_DECLINE:
+            text = f"🛠 «{name}» — отклоняем. Напиши причину партнёру или отправь без комментария."
+            tail = f"::{reply_id}" if reply_id else ""
+            rows.insert(0, [InlineKeyboardButton("Отправить без комментария",
+                                                 callback_data=f"{CB_ADMIN}{ACTION_DECLINE_BARE}:{reg_id}{tail}")])
+        else:
+            text = f"🛠 «{name}»: напиши вопрос — он уйдёт партнёру, ответ придёт сюда."
+        await chat.send_message(text, reply_markup=InlineKeyboardMarkup(rows))
         return
 
     if action == ACTION_COMPANY and len(parts) >= 3 and parts[1].isdigit() and int(parts[1]) < len(_COMPANY_KEYS):
@@ -955,7 +959,7 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     if action != ACTION_REMIND_USER:
         await asyncio.to_thread(repo.clear_awaiting, reg_id)
     text = text.strip()
-    if not text:
+    if not text and action != ACTION_DECLINE:   # отказ — можно без комментария
         pending[chat.id] = item
         await chat.send_message("🛠 Пустой текст — напиши ещё раз.")
         return True

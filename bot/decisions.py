@@ -341,7 +341,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
     done = {Registrations.BOT_PROCESSED: processed_mark(decision)}
 
     if decision in (Decision.DECLINE, Decision.NEED_INFO):
-        if not note:
+        if not note and decision == Decision.NEED_INFO:   # отказ можно и без комментария
             return _blocked(reg, decision, f"для «{decision}» заполни Decision Note — он уходит дилеру.")
         if decision == Decision.DECLINE and request_type in UPGRADE_TYPES:
             # Отказ в пред/регистрации: любое обращение всё равно фиксируется уведомлением
