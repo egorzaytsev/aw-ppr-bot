@@ -235,17 +235,15 @@ def _dialog_name(state) -> str:
 
 
 async def _blocked(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, pending: str) -> bool:
-    """Открыт другой диалог. Пустой — тихо закрываем; с ответами — спрашиваем, что делать."""
+    """Открыт другой диалог — новое действие всегда в приоритете: старый закрываем (с ответами — одной строкой
+    сообщаем, что он не отправлен). Никогда не блокирует."""
     if not person.state:
         return False
-    if not _has_answers(person.state):
-        await _save(ctx, person, None)
-        return False
-    await _send(update, [engine.Screen(
-        f"Ты не закончил «{escape(_dialog_name(person.state))}» — она ещё не отправлена.",
-        [[("↩️ Вернуться к ней", CB_MENU_RESUME)], [("➡️ Не отправлять, перейти дальше", f"{CB_DROP_AND_GO}{pending}")]],
-    )])
-    return True
+    if _has_answers(person.state):
+        await update.effective_chat.send_message(
+            f"«{_dialog_name(person.state)}» не был отправлен — закрыл, начинаем новое.")
+    await _save(ctx, person, None)
+    return False
 
 
 # ---------- команды ----------
