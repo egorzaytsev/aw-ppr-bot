@@ -233,7 +233,8 @@ def question_screen(state: DialogState) -> Screen:
     if q.optional and not _no_skip(state, q):
         buttons.append([(q.skip_label, CB_SKIP)])
     elif _can_stop(state, q):
-        buttons.append([("Пока не знаю — отправить без этого", CB_STOP)])
+        stop = "Пока не знаю — пропустить" if state.scenario == "project_fill" else "Пока не знаю — отправить без этого"
+        buttons.append([(stop, CB_STOP)])
     return Screen("\n".join(lines), buttons)
 
 
@@ -648,6 +649,9 @@ def handle_callback(state: DialogState, data: str) -> Result:
                                             "Всё по проекту и так на месте.")])
             return _accept(state, q, None)
         if data == CB_STOP and _can_stop(state, q):
+            if state.scenario == "project_fill":
+                # «Дополнить»: не знаю — пропускаем только этот вопрос, остальные задаём дальше
+                return _accept(state, q, None)
             state.declined_gate = state.phase
             return _to_summary(state)
         if data == CB_DONE and q.kind == "files":

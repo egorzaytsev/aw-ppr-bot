@@ -961,3 +961,13 @@ def test_fill_skip_closes_even_with_project_answers():
                                       "Country": "Russia", "City": "Moscow"})
     r = engine.handle_callback(r.state, engine.CB_SKIP)
     assert r.state is None and "ничего не отправляю" in r.screens[0].text
+
+
+def test_fill_stop_skips_only_that_question():
+    from bot.scenarios.update_project import fill_preset
+    from bot.airtable_ids import Projects as P
+    r = engine.start("project_fill", {"_target": {"id": "recX", "name": "X"}, "_ask": ["Contact Level", "Order Month"]})
+    first = r.state.step
+    assert ("Пока не знаю — пропустить", engine.CB_STOP) in [b for row in r.screens[-1].buttons for b in row]
+    r = engine.handle_callback(r.state, engine.CB_STOP)
+    assert r.state.step != first and r.state.awaiting == "answer"   # следующий вопрос, не итог
