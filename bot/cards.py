@@ -112,7 +112,9 @@ def next_step_body(project: dict, dealer: str) -> list[str]:
     if project.get(Projects.PROJECT_STAGE) == "Architect selection":
         lines = [ARCHITECT_PENDING if ln == "🏛 Архитектурное бюро." else ln for ln in lines]
     if not lines:
-        return ["✔️ Все данные для следующего этапа есть. Нажми «Обновить проект» → «Запросить следующий этап»."]
+        what = "регистрации" if status == "pre_registered" else "предрегистрации"
+        return [f"✔️ Условия для {what} выполнены — запроси {target}: "
+                "«Обновить проект» → «Запросить предрегистрацию / регистрацию»."]
     return [f"➡️ Для перехода на {target} не хватает:", "", *lines, "",
             "👉 Всё это можно добавить через «Обновить проект» → «Дополнить материалы»."]
 

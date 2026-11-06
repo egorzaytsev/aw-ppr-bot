@@ -41,7 +41,7 @@ def test_header_and_full_track_missing_lines():
 
 def test_all_data_present_and_no_tail_on_repeat():
     text = plain(cards.accept_card(project(), D, "STATIO", {}, first_time=False))
-    assert "✔️ Все данные для следующего этапа есть. Нажми «Обновить проект» → «Запросить следующий этап»." in text
+    assert "✔️ Условия для предрегистрации выполнены — запроси предрегистрацию: «Обновить проект» → «Запросить предрегистрацию / регистрацию»." in text
     assert "✉️" not in text
 
 

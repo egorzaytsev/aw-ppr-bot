@@ -91,7 +91,7 @@ STAGE_LABELS = {
 }
 CARD_ACTIONS = {"fill": FILL, "news": NEWS, "won": WON, "lost": LOST, "quote": QUOTE}
 # Следующий этап по текущему статусу дилера
-NEXT_LABEL = {PPR_NOTIFIED: ("предрегистрацию", "предрегистрации"), PPR_PRE_REGISTERED: ("регистрацию", "регистрации")}
+NEXT_FORMS = {PPR_NOTIFIED: ("предрегистрацию", "предрегистрации"), PPR_PRE_REGISTERED: ("регистрацию", "регистрации")}
 NEXT_REQUEST = {PPR_NOTIFIED: RequestType.UPGRADE_PRE_REGISTRATION, PPR_PRE_REGISTERED: RequestType.UPGRADE_REGISTRATION}
 NEXT_LABEL = {PPR_NOTIFIED: "предрегистрацию", PPR_PRE_REGISTERED: "регистрацию"}
 SIMPLIFIED = "Simplified (<30k)"
@@ -357,7 +357,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await _send(update, [engine.Screen("Что делаем?", [
                 [("Дополнить материалы", f"{CB_UPDATE_MODE}{MODE_FILL}")],
                 [("Сообщить новость", f"{CB_UPDATE_MODE}{MODE_NEWS}")],
-                [("⏭ Запросить следующий этап", f"{CB_UPDATE_MODE}{MODE_NEXT}")],
+                [("⏭ Запросить предрегистрацию / регистрацию", f"{CB_UPDATE_MODE}{MODE_NEXT}")],
             ])])
         return
     await _handle_answer_text(update, ctx, text)
@@ -521,8 +521,10 @@ def _sorted(projects: list[DealerProject]) -> list[DealerProject]:
     return sorted(projects, key=key)
 
 
-def _button_label(p: DealerProject) -> str:
+def _button_label(p: DealerProject, mode: str = "") -> str:
     label = f"{cards.name_ref(p.name[:40], p.fields.get(Projects.PPR_REF) or '')} · {PPR_LABELS[p.ppr_status].lower()}"
+    if mode == MODE_NEXT and _next_request_type(p):
+        return f"{label} → ✔️ {NEXT_LABEL[p.ppr_status]}"
     days = _days_left(p)
     if days is not None:
         label += f" · {days} дн." if days >= 0 else " · срок истёк"
@@ -549,7 +551,7 @@ async def _show_project_list(
     pages = (len(projects) + PAGE_SIZE - 1) // PAGE_SIZE
     page = max(0, min(page, pages - 1))
     chunk = projects[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
-    buttons = [[(_button_label(p), f"{CB_PICK}{mode}:{p.record_id}")] for p in chunk]
+    buttons = [[(_button_label(p, mode), f"{CB_PICK}{mode}:{p.record_id}")] for p in chunk]
     nav = []
     if page > 0:
         nav.append(("← Назад", f"{CB_LIST}{mode}:{page - 1}"))
@@ -561,7 +563,7 @@ async def _show_project_list(
         MODE_MY: "Твои проекты",
         MODE_FILL: "Какой проект дополнить?",
         MODE_NEWS: "По какому проекту новость?",
-        MODE_NEXT: "По какому проекту запросить следующий этап?",
+        MODE_NEXT: "По какому проекту запросить? ✔️ — условия выполнены",
     }.get(mode, "Твои проекты")
     if pages > 1:
         title += f" ({page + 1}/{pages})"
@@ -627,8 +629,11 @@ async def _show_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Per
         lines += ["", "Срок подходит к концу. Если по проекту есть прогресс — нажми «Сообщить новость», "
                       "чтобы запросить продление."]
     pid = p.record_id
+    ready = NEXT_FORMS[p.ppr_status] if _next_request_type(p) else None
+    if ready:
+        lines += ["", f"✔️ Условия для {ready[1]} выполнены"]
     buttons = [
-        *([[("⏭ Запросить следующий этап", f"{CB_CARD}next:{pid}")]] if _next_request_type(p) else []),
+        *([[(f"⏭ Запросить {ready[0]}", f"{CB_CARD}next:{pid}")]] if ready else []),
         # До 30 000 €: регистрация = номер квотации бэк-офиса
         *([[("🧾 Прислать номер квотации", f"{CB_CARD}quote:{pid}")]] if p.track == SIMPLIFIED else []),
         [("Дополнить материалы", f"{CB_CARD}fill:{pid}")],
@@ -660,7 +665,7 @@ async def _start_action(
     preset = fill_preset(target, p.fields, p.ppr_status) if action == "fill" else {"_target": target}
     if preset.get("_files_only") and not materials_only and _next_request_type(p):
         # Дополнять нечего, а для следующего этапа всё есть — предложить запросить его
-        what = NEXT_LABEL[p.ppr_status]
+        what = NEXT_FORMS[p.ppr_status]
         await _send(update, [engine.Screen(
             f"🏗 {cards.project_line(p.fields)}\nОбязательные поля заполнены — для {what[1]} по проекту есть всё. "
             f"Запроси {what[0]}, Егор проверит.",
