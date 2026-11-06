@@ -395,7 +395,7 @@ def project_digest(project: dict, manager: str, companies: dict) -> list[str]:
     log_text = str(project.get(Projects.PROJECT_LOG) or "").strip()
     if log_text:
         tail = log_text[:LOG_TAIL] + ("…" if len(log_text) > LOG_TAIL else "")
-        lines += ["", "<b>Лог проекта (последнее)</b>", escape(tail)]
+        lines += ["", "<b>Журнал проекта — последние записи</b>", escape(tail)]
     return lines
 
 

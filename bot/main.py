@@ -1226,7 +1226,7 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
         if note:
             company_notes.append(note)
     if pl.log_lines and target:
-        header = f"{datetime.now(VALENCIA):%d.%m.%Y} · {dealer_name} (заявка бота):"
+        header = f"{datetime.now(VALENCIA):%d.%m.%Y} · {dealer_name} — ответы из заявки партнёра:"
         await asyncio.to_thread(repo.append_project_log, target[0],
                                 (project or {}).get(Projects.PROJECT_LOG), header, pl.log_lines)
     # Карточка дилеру — по свежему состоянию проекта после записи
