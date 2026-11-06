@@ -311,7 +311,8 @@ def gaps_for(project_fields: dict, ppr_status: str) -> tuple[list[str], dict]:
         checks = (
             (Projects.EXW_POTENTIAL, "EXW Potential"), (Projects.EXPECTED_ORDER_DATE, "Expected Order Date"),
             (Projects.OBJECT_ADDRESS, "Object Address"), (Projects.SPECIFIER, "Specifier"),
-            (Projects.CONTACT_LEVEL, "Contact Level"), (Projects.AW_ALTERNATIVES, "AW Alternatives"),
+            *(((Projects.CONTACT_LEVEL, "Contact Level"),) if ppr_status == "pre_registered" else ()),
+            (Projects.AW_ALTERNATIVES, "AW Alternatives"),
             (Projects.PARALLEL_REGISTRATIONS, "Parallel Registrations"), (Projects.DOSSIER_FILES, "Dossier Files"),
         )
         # Досье — файлы или ссылки

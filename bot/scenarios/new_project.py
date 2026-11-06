@@ -321,7 +321,10 @@ PHASE_2 = (
         key="Contact Level",
         label="Уровень контакта",
         prompt="Чем подтверждён твой контакт с клиентом?",
+        hint="Для предрегистрации не обязателен, для регистрации — нужен подтверждённый контакт с клиентом",
         kind="choice",
+        optional=True,
+        skip_label="Контакта с клиентом пока нет",
         # Значения = варианты поля Contact Level в Projects
         choices=CONTACT_CHOICES,
         # AW не заложен бюро (или бюро нет) — документы бюро его не подтверждают
@@ -570,7 +573,8 @@ def stage(phase_reached: int, a: dict, missing_phase1: list) -> tuple[str, str]:
         return RequestType.QUOTE_SIMPLIFIED, STAGE_SIMPLIFIED
     if track(a) != TRACK_FULL or missing_phase1 or phase_reached == 1:
         return RequestType.NEW_NOTIFICATION, STAGE_NOTIFICATION
-    if phase_reached == 2:
+    # Регистрация — только с подтверждённым контактом с клиентом; без него — предрегистрация
+    if phase_reached == 2 or a.get("Contact Level") in (None, "", "Declared"):
         return RequestType.NEW_PRE_REGISTRATION, STAGE_PRE_REGISTRATION
     return RequestType.NEW_REGISTRATION, STAGE_REGISTRATION
 
