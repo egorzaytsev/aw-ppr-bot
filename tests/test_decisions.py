@@ -54,7 +54,7 @@ def test_pre_registration_blocked_by_missing_fields_admin_once():
     pl = plan(reg(rtype="New — Pre-registration"), project)
     assert pl.blocked and not pl.project_updates and not pl.dealer_text
     assert "нельзя поставить Pre-registered" in pl.admin_text
-    assert "Contact Level; Dossier Files" in pl.admin_text
+    assert "не хватает Dossier Files" in pl.admin_text            # контакт для предрегистрации не обязателен
     assert pl.registration_updates[R.BOT_PROCESSED] == "blocked:Accept"
     again = plan(reg(rtype="New — Pre-registration", processed="blocked:Accept"), project)
     assert again.blocked and again.admin_text is None                 # админу — один раз
@@ -63,7 +63,9 @@ def test_pre_registration_blocked_by_missing_fields_admin_once():
 def test_registration_needs_quotation_and_single_slot():
     pl = plan(reg(rtype="Upgrade — Registration"), dict(FULL))
     assert pl.blocked and "Quotation / Proforma №" in pl.admin_text
-    with_q = {**FULL, P.QUOTATION: "Q-1", P.PRE_REGISTERED: [DEALER, OTHER1]}
+    assert "Contact Level" in pl.admin_text                          # «Declared» для регистрации мало
+    with_q = {**FULL, P.QUOTATION: "Q-1", P.PRE_REGISTERED: [DEALER, OTHER1],
+              P.CONTACT_LEVEL: "Verifiable (email/contact)"}
     pl = plan(reg(rtype="Upgrade — Registration"), with_q)
     assert pl.project_updates[P.REGISTERED] == [DEALER]
     assert pl.project_updates[P.PRE_REGISTERED] == [OTHER1]

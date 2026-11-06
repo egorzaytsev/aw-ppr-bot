@@ -43,7 +43,6 @@ _PPR_REQUIRED = (
     (Projects.EXPECTED_ORDER_DATE, "Expected Order Date"),
     (Projects.OBJECT_ADDRESS, "Object Address"),
     (Projects.SPECIFIER, "Specifier"),
-    (Projects.CONTACT_LEVEL, "Contact Level"),
     (Projects.AW_ALTERNATIVES, "AW Alternatives"),
     (Projects.PARALLEL_REGISTRATIONS, "Parallel Registrations"),
     (Projects.DOSSIER_FILES, "Dossier Files"),
@@ -241,8 +240,13 @@ def ppr_missing(project: dict, status: str, filled: dict | None = None, provided
         return not _empty(project.get(fid)) or not _empty(filled.get(fid)) or fid in provided
 
     missing = [name for fid, name in _PPR_REQUIRED if not has(fid)]
-    if status == PPR_REG and not has(Projects.QUOTATION):
-        missing.append("Quotation / Proforma №")
+    if status == PPR_REG:
+        # Контакт с клиентом: для предрегистрации не обязателен, для регистрации — подтверждённый (не «Declared»)
+        contact = filled.get(Projects.CONTACT_LEVEL) or project.get(Projects.CONTACT_LEVEL)
+        if (_empty(contact) or contact == "Declared") and Projects.CONTACT_LEVEL not in provided:
+            missing.append("Contact Level")
+        if not has(Projects.QUOTATION):
+            missing.append("Quotation / Proforma №")
     return missing
 
 
@@ -312,7 +316,7 @@ def _blocked(reg: dict, decision: str, reason: str, ask_text: str | None = None)
 
 # Недостающее для статуса → как спросить дилера
 ASK_RU = {
-    "Contact Level": "подтверждение контакта с клиентом или бюро (документ, переписка или контакт)",
+    "Contact Level": "подтверждение контакта с клиентом (переписка, контакт или готовность к совместной встрече)",
     "Dossier Files": "файлы досье — визуализации, планировки, список серий",
     "Expected Order Date": "месяц размещения заказа",
     "EXW Potential": "уточнённый объём",
