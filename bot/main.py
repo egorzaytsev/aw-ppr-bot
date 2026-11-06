@@ -162,13 +162,11 @@ async def _unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     admin_chat = ctx.bot_data.get("admin_chat_id")
     if admin_chat:
         who = f"@{escape(username)}" if username else "без username"
-        how = (f"Добавь в People с Telegram Username <code>{escape(username)}</code>" if username
-               else f"Username нет — впиши в People Telegram Chat ID <code>{chat_id}</code>")
+        how = (f"Telegram <code>{escape(username)}</code>" if username else f"Telegram ID <code>{chat_id}</code>")
         await _send_html(ctx.bot, admin_chat,
                          f"👋 <b>Новый человек в боте</b>: {escape(full_name) or '—'} · {who}\n"
-                         f"{how} — я сам замечу и напишу ему. Ждём {UNKNOWN_EXPIRY_DAYS} дней.",
-                         InlineKeyboardMarkup([[InlineKeyboardButton("Открыть в Airtable",
-                                                                     url=admin.record_url(ctx, reg_id))]]))
+                         f"Чтобы подключить — попроси Claude внести его в базу ({how}) и скажи компанию. "
+                         f"Я сам замечу и напишу ему. Ждём {UNKNOWN_EXPIRY_DAYS} дней.")
 
 
 async def _check_unknown_users(app: Application) -> None:
@@ -829,9 +827,14 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
                 Registrations.REQUEST_TYPE: request_type,
                 Registrations.PAYLOAD: json.dumps(payload, ensure_ascii=False),
             }
+            extra = []
+            if request_type in admin.UPGRADE_REQUESTS:
+                reg = await asyncio.to_thread(_repo(ctx).registration_fields, reg_id)
+                extra = await admin.upgrade_digest(_repo(ctx), reg)
             await ctx.bot.send_message(
                 admin_chat,
-                admin.request_card(card_fields, reg_id, person.name, analysis, _sender_label(ctx, person, payload)),
+                admin.request_card(card_fields, reg_id, person.name, analysis, _sender_label(ctx, person, payload),
+                                   extra),
                 parse_mode=ParseMode.HTML,
                 reply_markup=admin.decision_markup(ctx, reg_id, candidates),
             )
