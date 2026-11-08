@@ -11,14 +11,14 @@ from dataclasses import replace
 from ..airtable_ids import Projects, RequestType
 from .base import DETAIL, Question, Scenario
 from .new_project import (
-    NO_BUREAU, ORIGIN_BUREAU, ORIGIN_OWN, OWN_DESIGN, QUESTIONS, SOLO, STAGE_ARCHITECT_SELECTION, current_pl, exw, location,
-    project_log,
-    specifier,
+    NO_BUREAU, NO_BUREAU_YET, ORIGIN_BUREAU, ORIGIN_OWN, OWN_DESIGN, QUESTIONS, SOLO, STAGE_ARCHITECT_SELECTION,
+    current_pl, exw, location, project_log, specifier,
 )
 
-CONFIRMED_BY_EGOR = "Принято, Егор подтвердит."
-NEWS_DONE = "Принято, разберу и свяжу с проектом."
-FILL_DONE = "Информацию по проекту получили. Ответ дадим в течение 72 часов — придёт сюда."
+# {reviewer} — дательный падеж проверяющего по маршруту («Егору» / «Лоле»), подставляет main
+CONFIRMED_BY_REVIEWER = "Записал, передал {reviewer} — подтверждение придёт сюда."
+NEWS_DONE = "Записал новость, передал {reviewer}."
+FILL_DONE = "Получил информацию по проекту. Ответ — в течение 72 часов, придёт сюда."
 
 
 def _target_name(a: dict) -> str:
@@ -96,7 +96,7 @@ INFO_REPLY = Scenario(
     derive=_reply_derive,
     verdict=lambda a, s, m: _plain_verdict(s),
     project_name_key="Dealer Project Name",
-    done_text="Принято, ответ передан Егору.",
+    done_text="Ответ передал {reviewer}. Решение придёт сюда.",
     auto_submit=True,
 )
 
@@ -119,7 +119,8 @@ QUOTE = Scenario(
             key="Quotation / Proforma №",
             label="Квотация AW №",
             prompt="Номер квотации?",
-            hint="Квотацию запрашивай в бэк-офисе, Егор в копии",
+            hint="Квотацию запрашивай в бэк-офисе, Егор в копии. Номер — например, 20101446",
+            unknown_label="Номера пока нет",
         ),
     ),
     phase_titles={1: "Квотация"},
@@ -127,7 +128,7 @@ QUOTE = Scenario(
     derive=_quote_derive,
     verdict=lambda a, s, m: _plain_verdict(s),
     project_name_key="Dealer Project Name",
-    done_text="Номер квотации получил — передал Егору.",
+    done_text="Номер квотации получил — передал {reviewer}.",
     auto_submit=True,
 )
 
@@ -151,7 +152,7 @@ WON = Scenario(
     derive=lambda a: {"Dealer Project Name": _target_name(a)},
     verdict=lambda a, s, m: _plain_verdict(s),
     project_name_key="Dealer Project Name",
-    done_text=CONFIRMED_BY_EGOR,
+    done_text=CONFIRMED_BY_REVIEWER,
     auto_submit=True,
 )
 
@@ -195,7 +196,7 @@ LOST = Scenario(
     derive=_lost_derive,
     verdict=lambda a, s, m: _plain_verdict(s),
     project_name_key="Dealer Project Name",
-    done_text=CONFIRMED_BY_EGOR,
+    done_text=CONFIRMED_BY_REVIEWER,
     auto_submit=True,
     payload_skip=("Lost Reason Answer",),  # → Lost Reason или строка Project Log
 )
@@ -207,8 +208,6 @@ MATERIAL_KEYS = ("Materials",)
 EXTRA_FILES_KEY = "Extra Materials"
 
 
-# «Бюро ещё не выбрано» — только в «Дополнить»: формула пропусков требует бюро и на выборе архитектора
-NO_BUREAU_YET = "__no_bureau__"
 # Ответы предрегистрации без полей в Projects — живут в Project Log строкой «Заголовок: …»
 LOG_GAP_KEYS = ("Decision Maker Company", "Influencers", "Competing Dealers")
 
@@ -216,10 +215,10 @@ LOG_GAP_KEYS = ("Decision Maker Company", "Influencers", "Competing Dealers")
 def _ask_only(q: Question) -> Question:
     """Вопрос сценария «Новый проект», который задаётся, только если поле пустое в проекте."""
     if q.key == "AW Origin":
-        return replace(q, ask_if=lambda a: "AW Origin" in a.get("_ask", ()) and a.get("Specifier") != NO_BUREAU)
+        return replace(q, ask_if=lambda a: "AW Origin" in a.get("_ask", ())
+                       and a.get("Specifier") not in (NO_BUREAU, NO_BUREAU_YET))
     if q.key == "Specifier":
-        return replace(q, choices=q.choices + (("Бюро ещё не выбрано", NO_BUREAU_YET),),
-                       ask_if=lambda a: "Specifier" in a.get("_ask", ()) and a.get("AW Origin") != ORIGIN_OWN)
+        return replace(q, ask_if=lambda a: "Specifier" in a.get("_ask", ()) and a.get("AW Origin") != ORIGIN_OWN)
     if q.key == "Lead Architect":
         # ГАП — только если AW заложил архитектор (или ответа о бюро в этот раз не было); частному — всегда
         return replace(q, ask_if=lambda a: "Lead Architect" in a.get("_ask", ())
@@ -358,15 +357,11 @@ def _fill_derive(a: dict) -> dict:
     if "Object Location" in a:
         out.update(location(a))
     out.update(specifier(a))
-    if a.get("Specifier") == NO_BUREAU_YET:
-        out["Specifier"] = None
     pl = current_pl(a)
     if pl is not None:
         out["PL Volume"] = pl
         out["EXW Potential"] = exw(pl)
     log = project_log(a)
-    if a.get("Specifier") == NO_BUREAU_YET:
-        log.append("Архбюро: ещё не выбрано")
     if log:
         out["Project Log"] = "\n".join(log)
     return out
@@ -374,7 +369,7 @@ def _fill_derive(a: dict) -> dict:
 
 FILL = Scenario(
     code="project_fill",
-    title="Дополнить",
+    title="Дополнить материалы",
     questions=FILL_QUESTIONS,
     flat_numbering=True,
     phase_titles={1: "Уведомление", 2: "Предрегистрация", 3: "Регистрация"},

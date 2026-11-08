@@ -28,16 +28,26 @@ class ParseError(ValueError):
     """Ответ не подходит — текст ошибки уходит пользователю."""
 
 
-# Ответ без информации: «пока нет», «не знаю», «—»… Такое в анкету не принимаем — вопрос пропускают кнопкой.
-VAGUE = re.compile(r"^(нет\b|—$|-$|\?+$|не знаю|пока\b|н/д\b|нд$)|неизвест|не получил|нет данных|уточня", re.I)
-# «Нет» здесь — полноценный ответ, а не пропуск
-NO_IS_ANSWER = frozenset({"Parallel Registrations", "AW Alternatives", "Competing Dealers", "Area Source"})
-VAGUE_HINT = "Это не ответ — нужна реальная информация. Не знаешь — нажми кнопку под вопросом."
+# Ответ без информации: короткий (до трёх слов) и только из стоп-слов — «не знаю», «пока нет», «неизвестно».
+# «Нет изменений, клиент выбрал…», «Сбербанк, филиал уточняется» — содержательные, их принимаем.
+VAGUE_PHRASES = frozenset({
+    "нет", "не знаю", "пока не знаю", "пока нет", "неизвестно", "не известно", "пока неизвестно", "нет данных",
+    "н/д", "нд", "уточняется", "пока уточняется", "не уточнили", "пока", "—", "-", "?", "??", "???", "не скажу",
+})
+# «Нет» здесь — полноценный ответ, а не пропуск (в ответе на запрос «нет» — тоже ответ)
+NO_IS_ANSWER = frozenset({"Parallel Registrations", "AW Alternatives", "Competing Dealers", "Area Source",
+                          "Dealer News"})
+VAGUE_HINT = "Напиши, что известно. Если пока ничего — нажми «{button}»."
+UNKNOWN = "Пока не знаю"
 
 
 def is_vague(key: str, text: str) -> bool:
-    t = (text or "").strip()
-    return bool(VAGUE.search(t)) and not (key in NO_IS_ANSWER and t.lower().rstrip(".") == "нет")
+    t = re.sub(r"[.,!…]+$", "", (text or "").strip().lower()).strip()
+    if not t or len(t.split()) > 3:
+        return False
+    if key in NO_IS_ANSWER and t == "нет":
+        return False
+    return t in VAGUE_PHRASES
 
 
 @dataclass(frozen=True)
@@ -57,6 +67,8 @@ class Question:
     # Можно пропустить кнопкой «Пропустить» (подпись — skip_label)
     optional: bool = False
     skip_label: str = "Пропустить"
+    # Кнопка выхода на обязательном вопросе: пропустить его («не указано» в сводке); "" — без кнопки
+    unknown_label: str = UNKNOWN
     # Обязательность и текст вопроса, зависящие от прошлых ответов
     optional_fn: Optional[Callable[[dict], bool]] = None
     # Задавать ли вопрос при текущих ответах; None — всегда
@@ -111,6 +123,14 @@ class Question:
     @property
     def title(self) -> str:
         return self.label or self.key
+
+    def exit_label(self) -> str:
+        """Подпись кнопки выхода: «Пропустить»-подобная у необязательных, «Пока не знаю» у обязательных."""
+        if self.optional:
+            return self.skip_label
+        if self.unknown_label and self.unknown_label != UNKNOWN:
+            return self.unknown_label
+        return "Пока не знаю — пропустить" if self.phase >= 2 else UNKNOWN
 
     def label_for(self, value: Value, choices: tuple[Choice, ...] | None = None) -> str | None:
         for lbl, val in (choices if choices is not None else self.choices):
@@ -247,7 +267,7 @@ def parse_answer(q: Question, text: str) -> Value:
         if problem:
             raise ParseError(problem)
     if isinstance(value, str) and value == text and is_vague(q.key, text):
-        raise ParseError(VAGUE_HINT)
+        raise ParseError(VAGUE_HINT.format(button=q.exit_label()))
     return value
 
 

@@ -29,6 +29,10 @@ CONTACT_BUREAU_DOCS = "Indirect (bureau docs)"
 MATERIALS_KEY = "Materials"
 BUREAU_DOCS_KEY = "Bureau Documents"  # обязательны, если AW предлагаем взамен продукта бюро
 NO_BUREAU = "__no_bureau_own__"
+NO_BUREAU_YET = "__no_bureau__"   # бюро ещё не выбрано
+NOT_YET_BUREAU = (None, OWN_DESIGN, NO_BUREAU, NO_BUREAU_YET)
+# Имя проверяющего в творительном падеже — для вопроса о звонке (ставит main по маршруту)
+REVIEWER_WITH = "_reviewer_with"
 THIRD_PARTY_KEY = "Third-party Statement"  # все документы третьей стороны одним вопросом
 # Месяц размещения заказа на регистрации — заменяет Expected Order Date
 ORDER_MONTH_FINAL = "Order Month Final"
@@ -38,8 +42,8 @@ WANTS_QUOTE = "_simplified_quote"
 
 
 _REGION_WORDS = ("област", "обл.", "край", "район", "республик", "округ")
-_COMMENT_WORDS = ("возможно", "будет", "так как", "уточн", "но ", "пока ", "примерно")
-MAX_ADDRESS_LEN = 80
+_COMMENT_RE = re.compile(r"\b(возможно|будет|так как|уточн\w*|но|пока|примерно)\b", re.I)
+MAX_ADDRESS_LEN = 120
 
 
 _NOT_A_NAME = re.compile(r"^(нет|не знаю|неизвест|пока|—|-)", re.I)
@@ -66,8 +70,7 @@ def check_city(text: str) -> str | None:
 
 def check_address(text: str) -> str | None:
     """Только адрес, без пояснений: длинный текст или слова-оговорки — переспросить."""
-    low = f" {text.lower()} "
-    if len(text) > MAX_ADDRESS_LEN or any(w in low for w in _COMMENT_WORDS):
+    if len(text) > MAX_ADDRESS_LEN or _COMMENT_RE.search(text):
         return ("Здесь только адрес — улица, дом, корпус. "
                 "Пояснения напиши потом в «Обновить проект» → «Сообщить новость».")
     return None
@@ -78,14 +81,27 @@ def materials_prompt(a: dict) -> str:
     items = ["визуализации", "планировки", "твоя презентация для клиента"]
     if origin(a) not in (ORIGIN_DEALER, ORIGIN_OWN):
         items.append("ведомость или спецификация бюро")
-    items += ["твоя спецификация", "квотация Andreu World"]
+    items += ["твоя спецификация"]
     return "Пришли материалы по проекту — всё, что есть:\n" + "\n".join(f"• {i}" for i in items)
+# Документы бюро контакт с клиентом не подтверждают (решение Егора 08.11) — их собирает вопрос о материалах
 CONTACT_CHOICES = (
-    ("Пока ничем — только моё слово", "Declared"),
-    ("Документы от бюро", CONTACT_BUREAU_DOCS),
     ("Переписка или прямой контакт с клиентом", "Verifiable (email/contact)"),
-    ("Готов к встрече с клиентом вместе с AW", "Joint meeting with AW"),
+    ("Готов к встрече с клиентом вместе с Andreu World", "Joint meeting with AW"),
+    ("Контакт есть, подтвердить пока нечем", "Declared"),
 )
+CONFIRMED_CONTACT = ("Verifiable (email/contact)", "Joint meeting with AW")
+
+
+def contact_confirmed(a: dict) -> bool:
+    """Подтверждённый контакт с клиентом: переписка с файлом или ссылкой, либо готовность к встрече."""
+    level = a.get("Contact Level")
+    if level == "Joint meeting with AW":
+        return True
+    return level == "Verifiable (email/contact)" and isinstance(a.get("Contact Evidence"), list)
+
+
+def _with(a: dict) -> str:
+    return a.get(REVIEWER_WITH) or "Егором"
 WHOLE_OBJECT = "Весь объект"
 STAGE_ARCHITECT_SELECTION = "Architect selection"
 LOC_MOSCOW, LOC_SPB, LOC_OTHER = "moscow", "spb", "other"
@@ -229,9 +245,11 @@ PHASE_1 = (
         key="Specifier",
         label="Архбюро",
         prompt="Какое бюро делает дизайн-проект?",
-        hint="Архитектор работает сам — «Частный архитектор». Дизайн-проекта нет — «Бюро нет»",
-        choices=((SOLO_ARCHITECT, SOLO), ("Бюро нет — проект ведём мы", NO_BUREAU)),
-        validate=lambda t: check_name(t, "Напиши название бюро. Бюро нет — нажми «Бюро нет»."),
+        hint="Архитектор работает сам — «Частный архитектор». Дизайн-проекта нет — «Бюро нет — проект ведём мы»",
+        choices=((SOLO_ARCHITECT, SOLO), ("Бюро нет — проект ведём мы", NO_BUREAU),
+                 ("Бюро ещё не выбрано", NO_BUREAU_YET)),
+        validate=lambda t: check_name(t, "Напиши название бюро. Бюро нет — нажми «Бюро нет — проект ведём мы», "
+                                         "ещё не выбрано — «Бюро ещё не выбрано»."),
         # На выборе архитектора бюро ещё нет — не спрашиваем
         ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION,
     ),
@@ -247,23 +265,28 @@ PHASE_1 = (
             ("Да, заложен бюро", ORIGIN_BUREAU),
             ("Нет — AW предлагаем мы взамен", ORIGIN_DEALER),
         ),
-        # Бюро нет — ответ ясен без вопроса: проект ведёт дилер (origin)
-        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION and a.get("Specifier") != NO_BUREAU,
+        choices_fn=lambda a: ((("Да, заложен архитектором" if a.get("Specifier") == SOLO else "Да, заложен бюро"),
+                               ORIGIN_BUREAU), ("Нет — AW предлагаем мы взамен", ORIGIN_DEALER)),
+        # Бюро нет (или ещё не выбрано) — вопрос не задаём
+        ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION
+        and a.get("Specifier") not in (NO_BUREAU, NO_BUREAU_YET),
     ),
     Question(
         key="Lead Architect",
-        label="ГАП",
-        prompt="Кто ГАП проекта?",
-        hint="Имя главного архитектора",
+        label="Главный архитектор проекта",
+        prompt="Кто главный архитектор проекта?",
+        hint="Имя и фамилия",
         # Частный архитектор: имя — единственное, что о нём известно, поэтому обязательно
-        prompt_fn=lambda a: "Как зовут архитектора?" if a.get("Specifier") == SOLO else "Кто ГАП проекта?",
+        prompt_fn=lambda a: "Как зовут архитектора?" if a.get("Specifier") == SOLO
+        else "Кто главный архитектор проекта?",
         optional_fn=lambda a: a.get("Specifier") != SOLO,
-        validate=lambda t: check_name(t, "Нужно имя. Архитектора нет — вернись к вопросу о бюро и нажми «Бюро нет»."),
-        skip_label="Пока не знаю",
+        validate=lambda t: check_name(t, "Нужно имя. Если пока неизвестно — нажми «Архитектор пока неизвестен»."),
+        skip_label="Архитектор пока неизвестен",
+        unknown_label="Архитектор пока неизвестен",
         missing_label="пока не известен",
         # ГАП нужен, только если AW заложил сам архитектор; частному архитектору — всегда (это его имя)
         ask_if=lambda a: a.get("Project Stage") != STAGE_ARCHITECT_SELECTION
-        and a.get("Specifier") not in (None, OWN_DESIGN, NO_BUREAU)
+        and a.get("Specifier") not in NOT_YET_BUREAU
         and (origin(a) == ORIGIN_BUREAU or a.get("Specifier") == SOLO),
     ),
     Question(
@@ -321,18 +344,16 @@ PHASE_2 = (
         key="Contact Level",
         label="Уровень контакта",
         prompt="Чем подтверждён твой контакт с клиентом?",
-        hint="Для предрегистрации не обязателен, для регистрации — нужен подтверждённый контакт с клиентом",
+        hint="Для предрегистрации не обязателен, для регистрации нужен подтверждённый. "
+             "Переписка — например, письмо клиента о закупке",
         kind="choice",
         optional=True,
         skip_label="Контакта с клиентом пока нет",
         # Значения = варианты поля Contact Level в Projects
         choices=CONTACT_CHOICES,
-        # AW не заложен бюро (или бюро нет) — документы бюро его не подтверждают
-        choices_fn=lambda a: tuple(c for c in CONTACT_CHOICES if c[1] != CONTACT_BUREAU_DOCS
-                                   or origin(a) not in (ORIGIN_DEALER, ORIGIN_OWN)),
-        evidence_for=("Indirect (bureau docs)", "Verifiable (email/contact)", "Joint meeting with AW"),
+        evidence_for=("Verifiable (email/contact)",),
         evidence_key="Contact Evidence",
-        evidence_prompt="Пришли подтверждение — файл или ссылку.",
+        evidence_prompt="Пришли переписку с клиентом или его контакт — файл, скриншот или ссылку.",
     ),
     Question(
         phase=2,
@@ -366,13 +387,8 @@ PHASE_2 = (
         optional=True,
         missing_label="не присланы",
     ),
-    Question(
-        phase=2,
-        key="Call Slot 15",
-        label="Звонок 15 минут",
-        prompt="Когда удобен звонок на 15 минут?",
-        kind="slot",
-    ),
+    # Звонок — после документов бюро: настоящий вопрос в конце списка (CALL_LATE), этот не задаётся
+    Question(phase=2, key="Call Slot 15", label="Звонок 15 минут", prompt="", kind="slot", ask_if=lambda a: False),
 )
 
 # ---------- фаза 3: регистрация ----------
@@ -383,6 +399,8 @@ PHASE_3 = (
         key="Quotation / Proforma №",
         label="Квотация AW №",
         prompt="Номер квотации Andreu World?",
+        hint="Номер из квотации, например 20101446",
+        unknown_label="",   # дилер только что сказал, что квотация есть
     ),
     Question(
         phase=3,
@@ -413,15 +431,19 @@ PHASE_3 = (
         key=ORDER_MONTH_FINAL,
         label="Месяц размещения заказа",
         prompt="В каком месяце размещение заказа?",
-        hint_fn=lambda a: (f"Раньше был {_month(a['Order Month'])}. Не изменился — выбери его же"
+        hint_fn=lambda a: (f"Раньше был {_month(a['Order Month'])}. Не изменился — нажми «Не изменился»"
                            if a.get("Order Month") else ""),
+        choices_fn=lambda a: (("Не изменился", CONFIRM),) if a.get("Order Month") else (),
+        resolve=lambda v, a: a.get("Order Month") if v == CONFIRM else v,
         kind="month",
     ),
     Question(
         phase=3,
         key="Call Slot 30",
         label="Звонок 30 минут",
-        prompt="Когда удобен звонок на 30 минут?",
+        prompt="Звонок на 30 минут перед регистрацией. Когда удобно?",
+        prompt_fn=lambda a: f"Звонок с {_with(a)} на 30 минут перед регистрацией — пройтись по деталям проекта. "
+                            "Когда удобно?",
         kind="slot",
     ),
 )
@@ -434,7 +456,8 @@ SIMPLIFIED_EXTRA = (
         key=SIMPLIFIED_QUOTE,
         label="Квотация AW №",
         prompt="Номер квотации?",
-        hint="Квотацию запрашивай в бэк-офисе, Егор в копии",
+        hint="Номер из квотации бэк-офиса, например 20101446",
+        unknown_label="Номера пока нет",
         # Только после «Номер квотации есть» на предложении зарегистрировать
         ask_if=lambda a: bool(a.get(WANTS_QUOTE)) and track(a) == TRACK_SIMPLIFIED,
     ),
@@ -454,12 +477,24 @@ BUREAU_EXTRA = (
     ),
 )
 
-QUESTIONS = PHASE_1 + PHASE_2 + PHASE_3 + SIMPLIFIED_EXTRA + BUREAU_EXTRA
+# Звонок 15 минут — последним в фазе 2, после документов бюро
+CALL_LATE = (
+    Question(
+        phase=2,
+        key="Call Slot 15",
+        label="Звонок 15 минут",
+        prompt="Звонок на 15 минут — познакомиться с проектом. Когда удобно?",
+        prompt_fn=lambda a: f"Звонок с {_with(a)} на 15 минут — познакомиться с проектом. Когда удобно?",
+        kind="slot",
+    ),
+)
+
+QUESTIONS = PHASE_1 + PHASE_2 + PHASE_3 + SIMPLIFIED_EXTRA + BUREAU_EXTRA + CALL_LATE
 _BY_KEY = {q.key: q for q in QUESTIONS}
 
 GATES = {
     1: Gate(
-        prompt="Хочешь подать на предрегистрацию? Это ещё девять вопросов и материалы по проекту.",
+        prompt="Хочешь подать на предрегистрацию? Это ещё {n} и материалы по проекту.",
         yes="Да",
         no="Пока только уведомление",
         summary_button="Подать на предрегистрацию",
@@ -512,6 +547,8 @@ def specifier(a: dict) -> dict:
 
     Проект ведёт сам дилер — Specifier = «Собственная проработка» (в проект ставится компания дилера).
     """
+    if a.get("Specifier") == NO_BUREAU_YET:
+        return {"Specifier": None}   # в Project Log — «Архбюро: ещё не выбрано»
     if origin(a) == ORIGIN_OWN:
         return {"Specifier": OWN_DESIGN, "AW Origin": ORIGIN_OWN}
     if origin(a) == ORIGIN_DEALER:
@@ -546,7 +583,8 @@ def track(a: dict) -> str | None:
 
 
 SIMPLIFIED_GATE = Gate(
-    prompt="Давай зарегистрируем! Для этого отправь запрос на квотацию и пришли мне номер квотации.",
+    prompt="Для проектов до 30 000 € по прайсу действует регистрация по упрощённой схеме: защита — номер квотации "
+           "на срок её действия. Запроси квотацию в бэк-офисе (Егор в копии) и пришли мне её номер.",
     yes="Номер квотации есть",
     no="Пока только уведомление",
     summary_button="Прислать номер квотации",
@@ -565,7 +603,8 @@ def gate_open(n: int, a: dict, missing_all: list, missing_required: list) -> boo
         return False
     if n == 1:
         return True  # пропуски фазы 1 дилер дозаполнит сразу после «Да» (engine: prefill)
-    return not missing_required
+    # Р15: регистрацию предлагаем только с подтверждённым контактом с клиентом
+    return not missing_required and contact_confirmed(a)
 
 
 def stage(phase_reached: int, a: dict, missing_phase1: list) -> tuple[str, str]:
@@ -574,7 +613,7 @@ def stage(phase_reached: int, a: dict, missing_phase1: list) -> tuple[str, str]:
     if track(a) != TRACK_FULL or missing_phase1 or phase_reached == 1:
         return RequestType.NEW_NOTIFICATION, STAGE_NOTIFICATION
     # Регистрация — только с подтверждённым контактом с клиентом; без него — предрегистрация
-    if phase_reached == 2 or a.get("Contact Level") in (None, "", "Declared"):
+    if phase_reached == 2 or not contact_confirmed(a):
         return RequestType.NEW_PRE_REGISTRATION, STAGE_PRE_REGISTRATION
     return RequestType.NEW_REGISTRATION, STAGE_REGISTRATION
 
@@ -601,6 +640,8 @@ def project_log(a: dict) -> list[str]:
     bureau = bureau_name(a)
     if bureau:
         lines.append(f"Архбюро (AW не закладывало): {bureau}")
+    if a.get("Specifier") == NO_BUREAU_YET:
+        lines.append("Архбюро: ещё не выбрано")
     if a.get("Area m2") is not None:
         area = format_value(_BY_KEY["Area m2"], a["Area m2"])
         src = a.get("Area Source")
@@ -645,8 +686,12 @@ def verdict(a: dict, stage_label: str, missing_phase1: list) -> list[str]:
     if missing_phase1 and track(a) == TRACK_FULL:
         lines.append(
             "Для предрегистрации не хватает: " + ", ".join(missing_phase1) + ". "
-            "Дозаполни сейчас или позже через «Обновить проект»."
+            "Дозаполни сейчас или позже через «Обновить проект» → «Дополнить материалы»."
         )
+    # Р15: без подтверждённого контакта регистрацию не предлагаем — сказать, как её получить потом
+    if stage_label == STAGE_PRE_REGISTRATION and not contact_confirmed(a):
+        lines.append("Для регистрации нужен подтверждённый контакт с клиентом — добавишь позже через "
+                     "«Дополнить материалы».")
     return lines
 
 

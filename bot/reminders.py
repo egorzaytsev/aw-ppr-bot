@@ -13,6 +13,7 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from .airtable_ids import Projects
+from .labels import missing_ru
 
 EXPIRY_DAYS = 7  # до конца статуса или квотации — напоминаем за неделю
 STALE_DAYS = 21
@@ -51,8 +52,8 @@ EXPIRY, GAPS, STALE = "expiry", "gaps", "stale"
 SECTIONS = (
     (EXPIRY, "⏳ <b>Срок подходит к концу</b>",
      "Если есть прогресс — «Сообщить новость», чтобы запросить продление."),
-    (GAPS, "📝 <b>Не хватает данных для следующего этапа</b>", "Дополнить — «Дополнить материалы»."),
-    (STALE, f"💤 <b>Нет новостей больше {STALE_DAYS} дней</b>", "Расскажи, что нового, — «Сообщить новость»."),
+    (GAPS, "📝 <b>Не хватает данных для следующего этапа</b>", "Добавь через «Обновить проект» → «Дополнить материалы»."),
+    (STALE, f"💤 <b>Нет новостей больше {STALE_DAYS} дня</b>", "Расскажи, что нового, — «Сообщить новость»."),
 )
 STATUS_NAME = {"registered": "регистрация", "pre_registered": "предрегистрация"}
 
@@ -65,26 +66,13 @@ class Item:
     reasons: dict
 
 
-# PPR Next Step Missing → коротко по-русски (порядок — как в формуле)
-NEXT_STEP_RU = (
-    ("EXW Potential", "объём"),
-    ("Expected Order Date", "месяц заказа"),
-    ("Object Address", "адрес"),
-    ("Specifier", "бюро"),
-    ("Contact Level", "подтверждение контакта"),
-    ("AW Alternatives", "альтернативы AW"),
-    ("Parallel Registrations", "заявлено ли у других производителей"),
-    ("Dossier Files", "материалы"),
-    ("Quotation №", "номер квотации"),
-)
-
-
-def next_step_gaps(raw: str | None) -> list[str]:
-    """«Object Address; Dossier Files;» → ["адрес", "материалы"]; упрощённый трек и пусто — ничего."""
-    raw = raw or ""
-    if raw.startswith("Simplified"):
-        return []
-    return [ru for key, ru in NEXT_STEP_RU if key in raw]
+def next_step_gaps(raw: str | None, stage: str | None = None) -> list[str]:
+    """«Object Address; Dossier Files;» → ["адрес", "материалы"]; упрощённый трек и пусто — ничего.
+    На выборе архитектора бюро ещё нет — не просим."""
+    gaps = missing_ru(raw)
+    if stage == "Architect selection":
+        gaps = [g for g in gaps if g != "бюро"]
+    return gaps
 
 
 def project_item(project, today: date, last_news: date | None, quote_valid: str | None = None) -> Item | None:
@@ -99,24 +87,25 @@ def project_item(project, today: date, last_news: date | None, quote_valid: str 
     if project.ppr_status in STATUS_NAME and project.status_expiry:
         expiry = date.fromisoformat(project.status_expiry[:10])
         days = (expiry - today).days
-        if days <= EXPIRY_DAYS:
+        # Истёкший срок — в одном напоминании после даты истечения, не каждую неделю
+        if -REMIND_EVERY_DAYS < days <= EXPIRY_DAYS:
             left = f"осталось {days} дн." if days >= 0 else "срок истёк"
             status_line = f"{STATUS_NAME[project.ppr_status]} до {expiry:%d.%m.%Y}, {left}"
             reasons[EXPIRY] = f"{status_line}; {reasons[EXPIRY]}" if EXPIRY in reasons else status_line
     # Только то, что считает PPR Next Step Missing: старые проекты законно не имеют многих полей анкеты
-    gaps = next_step_gaps(project.fields.get(Projects.PPR_NEXT_MISSING))
+    gaps = next_step_gaps(project.fields.get(Projects.PPR_NEXT_MISSING), project.fields.get(Projects.PROJECT_STAGE))
     if gaps:
         reasons[GAPS] = ", ".join(gaps)
     if last_news is None:
         reasons[STALE] = "новостей ещё не было"
     elif (today - last_news).days >= STALE_DAYS:
-        reasons[STALE] = f"последняя {last_news:%d.%m}"
+        reasons[STALE] = f"последняя новость — {last_news:%d.%m.%Y}"
     return Item(project.record_id, project.name, reasons) if reasons else None
 
 
 def digest_text(items: list[Item], intro: str | None = None) -> str:
     """Сообщение, сгруппированное по причинам; пустые группы не показываем."""
-    parts = [f"<b>{escape(intro or 'Напоминание по твоим плейсментам')}</b>"]
+    parts = [f"<b>{escape(intro or 'Напоминание по твоим плейсментам')}</b>"]  # REM-01
     for reason, title, hint in SECTIONS:
         rows = [f"• {escape(it.name)} — {escape(it.reasons[reason])}" for it in items if reason in it.reasons]
         if rows:

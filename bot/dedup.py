@@ -74,6 +74,12 @@ class Candidate:
     name: str
     score: int
     reasons: list[str] = field(default_factory=list)
+    ref: str = ""
+
+    @property
+    def title(self) -> str:
+        """«PVSMART InsaitBC FL3 AW260250»"""
+        return " ".join(x for x in (self.name, self.ref) if x)
 
 
 def find(payload: dict, dealer_project_name: str, projects: list[dict], limit: int = 3) -> list[Candidate]:
@@ -97,7 +103,7 @@ def find(payload: dict, dealer_project_name: str, projects: list[dict], limit: i
             score += 2
             reasons.append("клиент")
         if score >= 2:
-            out.append(Candidate(p["id"], p.get("name") or "Без названия", score, reasons))
+            out.append(Candidate(p["id"], p.get("name") or "Без названия", score, reasons, p.get("ref") or ""))
     out.sort(key=lambda c: (-c.score, c.name.lower()))
     return out[:limit]
 
@@ -105,8 +111,8 @@ def find(payload: dict, dealer_project_name: str, projects: list[dict], limit: i
 def analysis_text(candidates: list[Candidate]) -> str:
     if not candidates:
         return "Совпадений с проектами в базе не найдено (проверены объект, клиент, адрес)."
-    lines = ["Возможные совпадения:"]
-    lines += [f"• {c.name} — совпадает: {', '.join(c.reasons)} (баллы {c.score})" for c in candidates]
+    lines = ["Возможные совпадения с проектами в базе:"]
+    lines += [f"• {c.title} — совпадает: {', '.join(c.reasons)}" for c in candidates]
     return "\n".join(lines)
 
 

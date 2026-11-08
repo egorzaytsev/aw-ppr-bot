@@ -61,6 +61,7 @@ class Projects:
     PPR_REF = "fld9H3DLTtTOTluOb"            # формула AW-YY-####
     PPR_NEXT_MISSING = "fldVIAWgivyBeKX4a"   # формула: чего не хватает для следующего этапа
     PROBABILITY = "fldHldhYLswedJe8s"
+    LOST_REASON = "fldLZlBO3hIW9Irk0"
     # Статусы PPR — у менеджера дилера (ссылки на People); компания получает скидку через него.
     # Старые поля по компаниям (Notified fldiKRdTlngI6AXK8, Pre-registered fldSXoNH5rwWCYaWT,
     # Registered fld75C5ApwGwVCT5N) не читаем и не пишем

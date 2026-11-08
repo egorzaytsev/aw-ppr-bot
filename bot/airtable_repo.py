@@ -375,12 +375,14 @@ class AirtableRepo:
         names = {r["id"]: r["fields"].get(Companies.NAME, "")
                  for r in self._companies.all(fields=[Companies.NAME], use_field_ids=True)}
         recs = self._projects.all(
-            fields=[Projects.NAME, Projects.OBJECT_NAME, Projects.OBJECT_ADDRESS, Projects.END_CLIENT],
+            fields=[Projects.NAME, Projects.OBJECT_NAME, Projects.OBJECT_ADDRESS, Projects.END_CLIENT,
+                    Projects.PPR_REF],
             use_field_ids=True,
         )
         projects = [{
             "id": r["id"],
             "name": (r["fields"].get(Projects.NAME) or "").strip(),
+            "ref": r["fields"].get(Projects.PPR_REF) or "",
             "object": r["fields"].get(Projects.OBJECT_NAME) or "",
             "address": r["fields"].get(Projects.OBJECT_ADDRESS) or "",
             "clients": [names.get(c, "") for c in r["fields"].get(Projects.END_CLIENT) or []],
@@ -467,6 +469,12 @@ class AirtableRepo:
             "people": [(r["fields"].get(People.NAME, ""), r["fields"].get(People.REMINDER_SLOT),
                         r["fields"].get(People.LAST_REMINDER)) for r in people],
         }
+
+    def blocked_registrations(self) -> list[dict]:
+        """Решения, которые не прошли (Bot Processed = blocked:…), — для «Показать» в сводке."""
+        return self._registrations.all(formula=f"LEFT({{{Registrations.BOT_PROCESSED}}}, 8)='blocked:'",
+                                       fields=[Registrations.DEALER_PROJECT_NAME, Registrations.DEALER],
+                                       use_field_ids=True)
 
     def person_name(self, person_id: str) -> str:
         try:
@@ -588,6 +596,39 @@ class AirtableRepo:
             return self._people.get(person_id, use_field_ids=True)["fields"].get(People.COMPANY) or []
         except Exception:
             return []
+
+    # ---------- память бота: ожидания, которые не привязаны к заявке ----------
+    # Одна служебная запись в Registrations (без Reg Status и Decision — ни в какие очереди не попадает):
+    # откат статуса, подтверждённые и напомненные звонки, предложения «условия выполнены», шаги проверки.
+
+    MEMO_NAME = "Пепе — память бота (служебная запись, не удалять)"
+
+    def _memo_record(self) -> dict:
+        cached = getattr(self, "_memo_cache", None)
+        if cached:
+            return cached
+        recs = self._registrations.all(formula=f"{{{Registrations.NAME}}}={_quote(self.MEMO_NAME)}",
+                                       fields=[Registrations.PAYLOAD], use_field_ids=True, max_records=1)
+        if recs:
+            rec = recs[0]
+        else:
+            rec = self._registrations.create({Registrations.NAME: self.MEMO_NAME, Registrations.PAYLOAD: "{}",
+                                              Registrations.PROCESSED: True})
+        self._memo_cache = rec
+        return rec
+
+    def memo_load(self) -> dict:
+        try:
+            data = json.loads(self._memo_record().get("fields", {}).get(Registrations.PAYLOAD) or "{}")
+        except ValueError:
+            data = {}
+        return data if isinstance(data, dict) else {}
+
+    def memo_save(self, data: dict) -> None:
+        rec = self._memo_record()
+        text = json.dumps(data, ensure_ascii=False)
+        self._registrations.update(rec["id"], {Registrations.PAYLOAD: text})
+        rec.setdefault("fields", {})[Registrations.PAYLOAD] = text
 
     def clear_awaiting(self, reg_id: str) -> None:
         self._registrations.update(reg_id, {Registrations.BOT_PROCESSED: ""})

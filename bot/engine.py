@@ -13,7 +13,7 @@ from html import escape
 from . import phrases, slots
 from .scenarios import SCENARIOS
 from .scenarios.base import (
-    DETAIL, VAGUE_HINT, Gate, ParseError, Question, Scenario, describe_items, find_links, format_value,
+    DETAIL, Gate, ParseError, Question, Scenario, describe_items, find_links, format_value,
     is_vague, match_choice, parse_answer,
 )
 from .state import (
@@ -23,7 +23,10 @@ from .state import (
 
 # callback_data кнопок
 CB_SKIP = "skip"
-CB_STOP = "stop"       # обязательный вопрос фазы 2–3: «пока не знаю» — отправить на этапе ниже
+CB_STOP = "stop"       # обязательный вопрос: «Пока не знаю» — пропустить только его («не указано» в сводке)
+CB_BACK = "back"       # из уточнения / подтверждения — назад к вопросу
+CB_LATER = "later"     # подтверждение контакта: «Пришлю позже»
+CB_TO_SUMMARY = "tosum"  # из «Что исправить?» — назад к сводке
 CB_CHOICE = "ch:"      # + индекс варианта в Question.choices
 CB_QUALIFIER = "qf:"   # + индекс варианта в Question.qualifiers
 CB_DONE = "done"       # конец загрузки файлов
@@ -47,6 +50,18 @@ PICKER_YEARS = 3  # текущий и два следующих
 
 COMPLETENESS_NOTE = "Чем полнее данные, тем выше приоритет при совпадении с другим партнёром."
 SUMMARY_VALUE_LIMIT = 300  # символов на ответ в сводке — укладываемся в 4096 Telegram
+UNKNOWN_KEY = "_unknown"     # обязательные вопросы, пропущенные кнопкой «Пока не знаю»
+LATER = "пришлю позже"       # подтверждение контакта обещано позже — уровень без подтверждения
+# Номер квотации: «Номера пока нет» — выйти без потери ответов
+NO_QUOTE_KEYS = ("Simplified Quote №",)
+NOTHING_NEW = "Новых материалов нет — ничего не отправил. Можно запросить следующий этап или сообщить новость."
+PICK_BUTTON = "Выбери вариант кнопкой."
+
+
+def nothing_new_buttons(project_id: str | None) -> list:
+    if not project_id:
+        return []
+    return [[("⏭ Запросить следующий этап", f"cd:next:{project_id}")], [("Сообщить новость", f"cd:news:{project_id}")]]
 
 Buttons = list[list[tuple[str, str]]]
 
@@ -97,6 +112,10 @@ def applicable(state: DialogState, phase: int | None = None) -> list[int]:
     ]
 
 
+def _unknown(state: DialogState) -> list:
+    return state.answers.get(UNKNOWN_KEY) or []
+
+
 def _is_filled(q: Question, answers: dict) -> bool:
     if q.key not in answers:
         return False
@@ -143,14 +162,18 @@ def _gate_open(state: DialogState, n: int) -> bool:
     )
 
 
-def stage_of(state: DialogState) -> tuple[str, str]:
-    """(Request Type, подпись этапа) по последней фазе, где все обязательные ответы есть."""
+def _reached(state: DialogState) -> int:
     reached = 1
     for n in range(2, state.phase + 1):
         if missing(state, required_only=True, phase=n):
             break
         reached = n
-    return scenario_of(state).stage(reached, state.answers, _titles(state, missing(state, phase=1)))
+    return reached
+
+
+def stage_of(state: DialogState) -> tuple[str, str]:
+    """(Request Type, подпись этапа) по последней фазе, где все обязательные ответы есть."""
+    return scenario_of(state).stage(_reached(state), state.answers, _titles(state, missing(state, phase=1)))
 
 
 # ---------- экраны ----------
@@ -186,13 +209,6 @@ def _units(state: DialogState, phase: int) -> list[list[int]]:
     return units
 
 
-def _group_members(state: DialogState, q: Question) -> list[int]:
-    for unit in _units(state, q.phase):
-        if _qs(state)[unit[0]].group == q.group:
-            return unit
-    return []
-
-
 def question_screen(state: DialogState) -> Screen:
     sc = scenario_of(state)
     q = _current_q(state)
@@ -214,7 +230,9 @@ def question_screen(state: DialogState) -> Screen:
     lines = [f"<b>{escape(head)}</b>"] + ([escape(rest)] if rest else [])  # список под вопросом — обычным
     if q.hint:
         lines.append(f"<i>{escape(q.hint)}</i>")
-    if not first and left in phrases.LAST_STEPS and not state.editing and not state.filling:
+    # «Последний вопрос» — только если после этой фазы не будет предложения перейти дальше
+    gate_ahead = q.phase in sc.gates or (sc.gate_for is not None and sc.gate_for(q.phase, state.answers))
+    if not first and left in phrases.LAST_STEPS and not state.editing and not state.filling and not gate_ahead:
         lines.append(f"<i>{phrases.LAST_STEPS[left]}</i>")
     choice_buttons = [(lbl, f"{CB_CHOICE}{i}") for i, (lbl, _) in enumerate(q.choices)]
     per_row = 1 if any(len(lbl) > 16 for lbl, _ in q.choices) else 2
@@ -224,24 +242,34 @@ def question_screen(state: DialogState) -> Screen:
         this_year = date.today().year
         buttons += _rows([(str(y), f"{CB_YEAR}{y}") for y in range(this_year, this_year + PICKER_YEARS)], 3)
     if q.kind == "slot":
-        zone = slots.zone_name(_country(state))
+        zone = slots.zone_label(_country(state))
         lines.append(f"<i>Выбери день или напиши текстом удобные дату и время ({escape(zone)})</i>")
         days = slots.next_workdays()
         buttons += _rows([(slots.day_label(d), f"{CB_DAY}{d.isoformat()}") for d in days], 2)
     if q.kind == "files" and isinstance(state.answers.get(q.key), list) and state.answers[q.key]:
         buttons.append([("Готово", CB_DONE)])
-    if q.optional and not _no_skip(state, q):
+    if q.optional:
         buttons.append([(q.skip_label, CB_SKIP)])
-    elif _can_stop(state, q):
-        stop = "Пока не знаю — пропустить" if state.scenario == "project_fill" else "Пока не знаю — отправить без этого"
-        buttons.append([(stop, CB_STOP)])
+    elif sc.auto_submit:
+        buttons.append([("Отмена", CB_CANCEL)])   # новость / ответ без ответа не отправить — только выйти
+    elif q.unknown_label:
+        buttons.append([(q.exit_label(), CB_STOP)])
     return Screen("\n".join(lines), buttons)
+
+
+def _files_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} файл"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} файла"
+    return f"{n} файлов"
 
 
 def _files_progress(state: DialogState) -> Screen:
     items = state.answers.get(_current_q(state).key) or []
     return Screen(
-        f"{phrases.pick(phrases.GOT_FILE)} Уже {len(items)}. Пришли ещё файл или ссылку — или нажми «Готово».",
+        f"{phrases.pick(phrases.GOT_FILE)} Уже {_files_word(len(items))}. Пришли ещё файл или ссылку — "
+        "или нажми «Готово».",
         [[("Готово", CB_DONE)]],
     )
 
@@ -263,10 +291,10 @@ def slot_screen(state: DialogState) -> Screen:
     d = date.fromisoformat(state.pick_date)
     country = _country(state)
     items = [(slots.window_label(d, i, country), f"{CB_WINDOW}{i}") for i in range(len(slots.WINDOWS))]
-    zone = slots.zone_name(country)
+    zone = slots.zone_label(country)
     return Screen(
         f"{escape(slots.day_label(d))} — выбери время ({escape(zone)}) или напиши текстом:",
-        _rows(items, 2),
+        _rows(items, 2) + [[("← Другой день", CB_DAY_BACK)]],
     )
 
 
@@ -277,17 +305,28 @@ def qualifier_screen(state: DialogState) -> Screen:
 
 
 def detail_screen(state: DialogState) -> Screen:
-    return Screen(escape(_current_q(state).detail_prompt))
+    return Screen(escape(_current_q(state).detail_prompt), [[("← Назад", CB_BACK)]])
 
 
 def evidence_screen(state: DialogState) -> Screen:
-    return Screen(escape(_current_q(state).evidence_prompt))
+    return Screen(escape(_current_q(state).evidence_prompt),
+                  [[("Пришлю позже", CB_LATER)], [("← Назад к выбору", CB_BACK)]])
+
+
+def _next_phase_count(state: DialogState) -> int:
+    """Сколько вопросов (кроме материалов) в следующей фазе при текущих ответах — для текста гейта."""
+    nxt = state.phase + 1
+    return sum(1 for q in _qs(state) if q.phase == nxt and q.applies(state.answers) and q.kind != "files")
 
 
 def gate_screen(state: DialogState) -> Screen:
     gate = _gate(state)
-    text = escape(gate.prompt)
-    gaps = _titles(state, missing(state, phase=state.phase)) if state.phase == PREFILL_PHASE else []
+    n = _next_phase_count(state)
+    word = "вопрос" if n % 10 == 1 and n % 100 != 11 else \
+        "вопроса" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "вопросов"
+    text = escape(gate.prompt.format(n=f"{n} {word}"))
+    gaps = _titles(state, missing(state, phase=state.phase)) \
+        if state.phase == PREFILL_PHASE and not gate.on_yes else []
     if gaps:
         text += "\n<i>Сначала дополним: " + escape(", ".join(gaps)) + ".</i>"
     return Screen(text, [[(gate.yes, CB_GATE_YES), (gate.no, CB_GATE_NO)]])
@@ -295,6 +334,7 @@ def gate_screen(state: DialogState) -> Screen:
 
 # Пропуски дозаполняются перед предрегистрацией (фаза 1 → 2); дальше необязательное остаётся необязательным
 PREFILL_PHASE = 1
+WANTS_QUOTE_KEY = "_simplified_quote"
 
 
 def _gate(state: DialogState) -> Gate:
@@ -321,12 +361,9 @@ def _to_next_phase(state: DialogState) -> Result:
 
 
 def _can_stop(state: DialogState, q: Question) -> bool:
-    """Обязательный вопрос фазы 2–3 новой заявки: можно остановиться — заявка уйдёт на этапе ниже."""
-    return q.phase >= 2 and not q.bind(state.answers).optional and not state.editing
-
-
-def _no_skip(state: DialogState, q: Question) -> bool:
-    return state.prefill and q.phase == state.phase
+    """Обязательный вопрос с кнопкой выхода «Пока не знаю»."""
+    q = q.bind(state.answers)
+    return not q.optional and bool(q.unknown_label) and not scenario_of(state).auto_submit
 
 
 def current_screen(state: DialogState) -> Screen:
@@ -347,13 +384,14 @@ def current_screen(state: DialogState) -> Screen:
 def _display(q: Question, answers: dict) -> str:
     q = q.bind(answers)
     if q.key not in answers:
-        return q.missing_label
+        return "не указано" if q.key in (answers.get(UNKNOWN_KEY) or []) else q.missing_label
     text = format_value(q, answers[q.key])
     if q.qualifier_key and answers.get(q.qualifier_key):
         qual = q.label_for(answers[q.qualifier_key], q.qualifiers) or answers[q.qualifier_key]
         text += f" ({qual.lower()})"
     if q.evidence_key and answers.get(q.evidence_key):
-        text += f" — подтверждение: {describe_items(answers[q.evidence_key])}"
+        ev = answers[q.evidence_key]
+        text += f" — подтверждение: {describe_items(ev) if isinstance(ev, list) else 'пришлю позже (без подтверждения)'}"
     if len(text) > SUMMARY_VALUE_LIMIT:
         text = text[:SUMMARY_VALUE_LIMIT - 1] + "…"
     return text
@@ -382,12 +420,19 @@ def summary_screen(state: DialogState) -> Screen:
 
     gaps = _titles(state, missing(state))
     if gaps:
-        lines += ["", "Пропущено: " + escape(", ".join(gaps)) + ".", COMPLETENESS_NOTE]
+        lines += ["", "Не указано: " + escape(", ".join(gaps)) + ".", COMPLETENESS_NOTE]
     _, stage_label = stage_of(state)
     verdict = sc.verdict(state.answers, stage_label, _titles(state, missing(state, phase=1)))
     if verdict:
         # verdict — доверенный текст сценария с HTML-разметкой; подставленные значения — названия вопросов
         lines += [""] + verdict
+    # Р14: из-за «Пока не знаю» заявка уходит этапом ниже — сказать, чего не хватает
+    reached = _reached(state)
+    if sc.gates and state.phase > reached:
+        short = _titles(state, missing(state, required_only=True, phase=reached + 1))
+        nxt = {1: "предрегистрации", 2: "регистрации"}.get(reached, "следующего этапа")
+        if short:
+            lines.append(f"Подаётся как {escape(stage_label)}: для {nxt} не хватает — {escape(', '.join(short))}.")
 
     buttons: Buttons = [[("Отправить", CB_SUBMIT)]]
     if gaps:
@@ -401,7 +446,9 @@ def summary_screen(state: DialogState) -> Screen:
 def edit_picker(state: DialogState) -> Screen:
     qs = _qs(state)
     items = [(qs[i].title, f"{CB_EDIT_STEP}{i}") for i in applicable(state)]
-    return Screen("Что исправить?", _rows(items))
+    note = ("\n<i>Если исправишь вопрос с файлами — файлы этого вопроса придётся прислать заново.</i>"
+            if any(qs[i].kind == "files" and state.answers.get(qs[i].key) for i in applicable(state)) else "")
+    return Screen("Что исправить?" + note, _rows(items) + [[("← К сводке", CB_TO_SUMMARY)]])
 
 
 # ---------- переходы ----------
@@ -442,30 +489,12 @@ def _enter_next_phase(state: DialogState) -> Result:
     return _ask(state, nxt[0]) if nxt else _end_of_questions(state)
 
 
-def _group_empty(state: DialogState, q: Question) -> list[int] | None:
-    """Последний шаг группы пройден, а файлов/ссылок нет — вернуть шаги группы."""
-    if not q.group_min_one:
-        return None
-    members = _group_members(state, q)
-    if not members or state.step != members[-1]:
-        return None
-    qs = _qs(state)
-    if any(isinstance(state.answers.get(qs[i].key), list) for i in members):
-        return None
-    return members
-
-
-def _advance(state: DialogState) -> Result:
-    q = _current_q(state)
-    empty = _group_empty(state, q)
-    if empty:
-        note = Screen(f"⚠️ {escape(q.group)}: нужен хотя бы один файл или ссылка.")
-        return Result(state, [note] + _ask(state, empty[0]).screens)
+def _advance(state: DialogState, skipped: bool = False) -> Result:
     if state.filling:
         # Дозаполнение: только пропущенные, только вперёд — пропуск не зацикливается
         nxt = [i for i in missing(state) if i > state.step]
         if state.prefill:
-            nxt = [i for i in missing(state, phase=state.phase) if i != state.step]
+            nxt = [i for i in missing(state, phase=state.phase) if i > state.step]
             if not nxt:
                 state.prefill = False
                 state.filling = False
@@ -479,13 +508,15 @@ def _advance(state: DialogState) -> Result:
                 and not _is_filled(qs[nxt], state.answers)):
             return _ask(state, nxt)
         # После исправления могла открыться обязательная ветка (сменили стадию)
-        req = missing(state, required_only=True)
+        req = [i for i in missing(state, required_only=True) if _qs(state)[i].key not in _unknown(state)]
         return _ask(state, req[0]) if req else _to_summary(state)
-    nxt = [i for i in applicable(state) if i > state.step]
+    # Вперёд — только по своей фазе (поздние вопросы прошлых фаз стоят в конце списка); «Дополнить» — сквозной
+    pool = applicable(state) if scenario_of(state).flat_numbering else applicable(state, phase=state.phase)
+    nxt = [i for i in pool if i > state.step]
     if not nxt:
         return _end_of_questions(state)
     result = _ask(state, nxt[0])
-    ack = phrases.ack()
+    ack = None if skipped else phrases.ack()   # после «Пропустить» реакцию не ставим
     if ack and result.screens:
         result.screens[0].text = f"{ack}\n{result.screens[0].text}"
     return result
@@ -495,7 +526,9 @@ def _accept(state: DialogState, q: Question, value) -> Result:
     """Ответ принят: сохранить, спросить уточнение/подтверждение, иначе дальше."""
     if value is None:
         _clear(state, q)
-        return _advance(state)
+        return _advance(state, skipped=True)
+    if q.key in _unknown(state):
+        state.answers[UNKNOWN_KEY] = [k for k in _unknown(state) if k != q.key]
     if value == DETAIL:
         state.awaiting = AWAIT_DETAIL
         return Result(state, [detail_screen(state)])
@@ -580,7 +613,7 @@ def handle_text(state: DialogState, text: str) -> Result:
     if state.awaiting == AWAIT_CONFIRM:
         return Result(state, [Screen("Нажми кнопку под сводкой."), summary_screen(state)])
     if state.awaiting == AWAIT_GATE:
-        return Result(state, [gate_screen(state)])
+        return Result(state, [Screen(PICK_BUTTON), gate_screen(state)])
     q = _current_q(state)
     if _wants_items(state):
         links = find_links(text)
@@ -588,12 +621,13 @@ def handle_text(state: DialogState, text: str) -> Result:
         if not links and choice is not None:
             return _accept(state, q, choice)
         if not links:
-            return Result(state, [Screen("⚠️ Нужен файл или ссылка (https://…)."), current_screen(state)])
+            hint = " Нет под рукой — нажми «Пришлю позже»." if state.awaiting == AWAIT_EVIDENCE else ""
+            return Result(state, [Screen(f"⚠️ Нужен файл или ссылка (https://…).{hint}"), current_screen(state)])
         return _add_items(state, q, [{"kind": "link", "url": u} for u in links])
     if state.awaiting == AWAIT_QUALIFIER:
         value = match_choice(text, q.qualifiers)
         if value is None:
-            return Result(state, [qualifier_screen(state)])
+            return Result(state, [Screen(PICK_BUTTON), qualifier_screen(state)])
         state.answers[q.qualifier_key] = value
         return _advance(state)
     if state.awaiting in (AWAIT_MONTH, AWAIT_SLOT):
@@ -603,7 +637,7 @@ def handle_text(state: DialogState, text: str) -> Result:
             return Result(state, [detail_screen(state)])
         problem = q.validate(text.strip()) if q.validate else None
         if not problem and is_vague(q.key, text):
-            problem = VAGUE_HINT
+            problem = "Напиши, что известно. Если пока ничего — нажми «← Назад» и выбери другой вариант."
         if problem:
             return Result(state, [Screen(f"⚠️ {escape(problem)}"), detail_screen(state)])
         state.answers[q.key] = text.strip()
@@ -638,22 +672,47 @@ def handle_callback(state: DialogState, data: str) -> Result:
         if data == CB_GATE_NO:
             state.declined_gate = state.phase
             return _to_summary(state)
-        return Result(state, [gate_screen(state)])
+        return Result(state, [Screen(PICK_BUTTON), gate_screen(state)])
+
+    if state.awaiting in (AWAIT_DETAIL, AWAIT_EVIDENCE):
+        q = _current_q(state)
+        if data == CB_BACK:
+            if state.awaiting == AWAIT_EVIDENCE:
+                _clear(state, q)   # выбрать уровень заново
+            state.awaiting = AWAIT_ANSWER
+            return Result(state, [question_screen(state)])
+        if data == CB_LATER and state.awaiting == AWAIT_EVIDENCE:
+            state.answers[q.evidence_key] = LATER
+            return _advance(state)
+        return Result(state, [current_screen(state)])
 
     if state.awaiting == AWAIT_ANSWER:
         q = _current_q(state)
-        if data == CB_SKIP and q.optional and not _no_skip(state, q):
-            if q.kind == "files" and state.answers.get("_files_only") and not state.answers.get(q.key):
+        if data == CB_SKIP and q.optional:
+            if q.kind == "files" and state.answers.get("_files_only") and not state.answers.get(q.key) \
+                    and not any(k for k in state.answers if not k.startswith("_") and k != q.key
+                                and state.answers[k] not in (None, "", [])):
                 # «Новых материалов нет» при пустой анкете — отправлять нечего
-                return Result(None, [Screen("Понял, новых материалов нет — ничего не отправляю. "
-                                            "Всё по проекту и так на месте.")])
+                pid = (state.answers.get("_target") or {}).get("id")
+                return Result(None, [Screen(NOTHING_NEW, nothing_new_buttons(pid))])
             return _accept(state, q, None)
         if data == CB_STOP and _can_stop(state, q):
-            if state.scenario == "project_fill":
-                # «Дополнить»: не знаю — пропускаем только этот вопрос, остальные задаём дальше
-                return _accept(state, q, None)
-            state.declined_gate = state.phase
-            return _to_summary(state)
+            if state.scenario == "project_quote":
+                pid = (state.answers.get("_target") or {}).get("id")
+                return Result(None, [Screen("Хорошо, номер пришлёшь позже: «Мои проекты» → проект → "
+                                            "«🧾 Прислать номер квотации».",
+                                            [[("Открыть проект", f"pc:my:{pid}")]] if pid else [])])
+            if q.key in NO_QUOTE_KEYS:
+                # «Номера пока нет»: ответы сохраняются, заявка уходит без квотации
+                state.answers.pop(WANTS_QUOTE_KEY, None)
+                _clear(state, q)
+                state.declined_gate = state.phase
+                return _to_summary(state)
+            # Пропускаем только этот вопрос — в сводке «не указано», остальные задаём дальше (Р14)
+            unknown = _unknown(state)
+            if q.key not in unknown:
+                state.answers[UNKNOWN_KEY] = unknown + [q.key]
+            return _accept(state, q, None)
         if data == CB_DONE and q.kind == "files":
             if isinstance(state.answers.get(q.key), list) and state.answers[q.key]:
                 if q.qualifiers:
@@ -681,7 +740,7 @@ def handle_callback(state: DialogState, data: str) -> Result:
             if idx is not None:
                 return _accept(state, q, q.choices[idx][1])
         # Кнопка от старого сообщения — повторяем текущий вопрос
-        return Result(state, [question_screen(state)])
+        return Result(state, [Screen(PICK_BUTTON), question_screen(state)])
 
     if state.awaiting == AWAIT_QUALIFIER:
         q = _current_q(state)
@@ -717,12 +776,11 @@ def handle_callback(state: DialogState, data: str) -> Result:
                 return _accept(state, q, slots.slot_value(d, idx, _country(state)))
         return Result(state, [slot_screen(state)])
 
-    if state.awaiting in (AWAIT_DETAIL, AWAIT_EVIDENCE):
-        return Result(state, [current_screen(state)])
-
     # AWAIT_CONFIRM
+    if data == CB_TO_SUMMARY:
+        return _to_summary(state)
     if data == CB_SUBMIT:
-        req = missing(state, required_only=True)
+        req = [i for i in missing(state, required_only=True) if qs[i].key not in _unknown(state)]
         if req:
             state.editing = True
             first = _ask(state, req[0])
@@ -759,6 +817,9 @@ def build_payload(state: DialogState) -> dict:
     payload.update(sc.derive(state.answers))
     for key in sc.payload_skip:
         payload.pop(key, None)
+    unknown = [qs.title for qs in _qs(state) if qs.key in _unknown(state)]
+    if unknown:
+        payload["Not Known Yet"] = ", ".join(dict.fromkeys(unknown))   # проверяющему — что дилер пока не знает
     return {k: v for k, v in payload.items() if v is not None}
 
 

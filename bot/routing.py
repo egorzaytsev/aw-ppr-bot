@@ -58,7 +58,8 @@ def summary_line(who: str, decision: str, ref: str, name: str, status_label: str
     if declined_upgrade:
         return f"ℹ️ {person} {verb('отклонил', 'отклонила')} повышение статуса {what} — плейсмент зафиксирован уведомлением"
     if decision.startswith("Accept"):
-        tail = f" как {status_label}" if status_label else ""
+        acc = {"предрегистрация": "предрегистрацию", "регистрация": "регистрацию"}
+        tail = f" как {acc.get(status_label, status_label)}" if status_label else ""
         return f"ℹ️ {person} {verb('принял', 'приняла')} {what}{tail}"
     if decision == Decision.DECLINE:
         return f"ℹ️ {person} {verb('отклонил', 'отклонила')} {what}"

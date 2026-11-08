@@ -17,9 +17,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
-from . import dedup, routing
-from .cards import dealer_status, name_ref, others_line, project_line
+from . import dedup, memo, routing
+from .cards import STATUS_RU, dealer_status, name_ref, others_line, project_line
 from .decisions import COMPANY_PICKS, OWN_DESIGN, plan as decision_plan
+from .labels import DECISION_RU, date_ru, missing_text
 from .scenarios.base import describe_items, format_value, is_vague
 from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
 from .airtable_ids import Decision, Projects, Registrations
@@ -42,6 +43,14 @@ ACTION_NAME = "name"
 ACTION_ACCEPT_NOTE = "accn"
 ACTION_DECLINE_BARE = "decn"   # отказ без комментария
 ACTION_CALL_OK, ACTION_CALL_OTHER = "cok", "cot"   # звонок, предложенный партнёром: подтвердить / другое время
+ACTION_CALL_NONE = "cno"                           # звонок не нужен
+ACTION_ASK_SEND = "asks"                           # готовый запрос дилеру — после просмотра
+ACTION_SET_STATUS = "rst"                          # застрявшее решение: какой статус дать (ad:rst:<заявка>:<n|p|r>)
+ACTION_ACCEPT_LOWER = "acl"                        # не хватает данных — принять этапом ниже
+ACTION_NOTE_OK = "nok"                             # отправить предложенный комментарий как есть
+ACTION_DECLINE_CANCEL = "dcx"                      # отмена записанного отказа (выбор проекта для уведомления)
+# Пошаговое повышение: «Пока оставить» и «Отказать» — с комментарием дилеру
+ACTION_UP_KEEP, ACTION_UP_DENY, ACTION_UP_BARE = "upk", "upd", "upb"
 # Повышение статуса без заявки: ad:up:<проект>:<менеджер>:pre|reg; список /upgrade и выбор пары
 ACTION_UP, ACTION_UP_NO, ACTION_UP_LIST, ACTION_UP_PICK = "up", "upno", "upl", "ups"
 # Подтверждение несмотря на незаполненные ответы: те же действия с флагом «точно»
@@ -57,6 +66,8 @@ ACTION_COMPANY = "co"   # ad:co:<заявка>:<№ вопроса>:<id комп
 ACTION_RB, ACTION_RB_DOWN, ACTION_RB_CANCEL = "rb", "rbd", "rbc"
 _ROLLBACK = {ACTION_RB_DOWN: "down", ACTION_RB_CANCEL: "cancel"}
 _LOWER_RU = {"registered": "предрегистрацию", "pre_registered": "уведомление"}
+_STATUS_CODE = {"n": "Notification", "p": "Pre-registration", "r": "Registration"}
+_STATUS_CODE_RU = {"n": "уведомление", "p": "предрегистрацию", "r": "регистрацию"}
 UPGRADE_PAGE = 8
 _TARGET_RU = {"pre": "предрегистрацию", "reg": "регистрацию"}
 UPGRADE_REQUESTS = {"New — Pre-registration", "New — Registration",
@@ -81,20 +92,39 @@ async def reviewer_of(ctx: ContextTypes.DEFAULT_TYPE, reg: dict) -> str:
     return routing.resolve(ctx.bot_data, routing.route(types))[0]
 
 
-async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Админ нажал меню — незавершённый ввод отменяется (и в Airtable)."""
+# Ожидания ввода без заявки (откат, «Пока оставить», «Отказать», другое время звонка) — в памяти бота (memo)
+_MEMO_ACTIONS = {ACTION_RB_DOWN, ACTION_RB_CANCEL, ACTION_UP_KEEP, ACTION_UP_DENY, ACTION_CALL_OTHER}
+
+
+async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> tuple | None:
+    """Админ нажал меню или «Отмена» — незавершённый ввод отменяется (и в Airtable). Возвращает, что отменили."""
     if not is_admin(update, ctx):
-        return
-    item = _pending(ctx).pop(update.effective_chat.id, None)
+        return None
+    chat_id = update.effective_chat.id
+    item = _pending(ctx).pop(chat_id, None)
     repo = ctx.bot_data["repo"]
+    saved = await memo.pop(ctx.bot_data, "waits", str(chat_id))
+    if not item and saved:
+        item = tuple(saved)
     if not item:
-        item = await asyncio.to_thread(repo.find_awaiting, update.effective_chat.id)
-    if item and item[0] != ACTION_REMIND_USER and item[0] not in _ROLLBACK:
+        item = await asyncio.to_thread(repo.find_awaiting, chat_id)
+    if item and item[0] != ACTION_REMIND_USER and item[0] not in _MEMO_ACTIONS:
         await asyncio.to_thread(repo.clear_awaiting, item[1])
+    return item
 
 
 def _pending(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
     return ctx.bot_data.setdefault("admin_pending", {})
+
+
+async def _wait(ctx: ContextTypes.DEFAULT_TYPE, chat_id, item: tuple) -> None:
+    """Ожидание ввода без заявки — в память и в Airtable (переживает перезапуск)."""
+    _pending(ctx)[chat_id] = item
+    await memo.set_item(ctx.bot_data, "waits", str(chat_id), list(item))
+
+
+def cancel_row() -> list:
+    return [InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]
 
 
 # Новая заявка на предрег./рег. проверяется по шагам: уведомление (нет дублей) → предрегистрация → регистрация
@@ -110,29 +140,34 @@ async def _start_stepwise(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str, reg: dict
     await asyncio.to_thread(ctx.bot_data["repo"].update_registration, reg_id,
                             {Registrations.REQUEST_TYPE: "New — Notification"})
     reg[Registrations.REQUEST_TYPE] = "New — Notification"
-    ctx.bot_data.setdefault("stepwise", {})[reg_id] = {"final": STEPWISE[rtype], "payload": _payload(reg)}
+    await memo.set_item(ctx.bot_data, "stepwise", reg_id, {"final": STEPWISE[rtype], "payload": _payload(reg)})
 
 
-def step_offer(ref: str, name: str, step: str, final: str, payload: dict, missing: str = "") -> str:
-    """«Шаг 2 из 3 · предрегистрация?» — с пустыми ответами этой фазы."""
+def step_offer(ref: str, name: str, step: str, final: str, payload: dict, missing: str = "",
+               manager: str = "") -> str:
+    """«Шаг 2 из 3 · предрегистрация?» — кто просил, с пустыми ответами этой фазы и недостающим по-русски."""
     total = 3 if final == "reg" else 2
     n = 2 if step == "pre" else 3
     asked = "регистрацию" if final == "reg" else "предрегистрацию"
     weak = weak_answers(payload, _STEP_PHASE[step])
+    who = escape(manager) if manager else "Дилер"
     lines = [f"🛠 <b>Шаг {n} из {total}</b> · <code>{escape(name_ref(name, ref))}</code>",
-             f"Дилер просил {asked}. Подтверждаем {_TARGET_RU[step]}?"]
+             f"{who} просил(а) {asked}. Уведомление уже записано. Подтверждаем {_TARGET_RU[step]}?"]
     if weak:
         lines += ["Без ответа:"] + [f"• {escape(w)}" for w in weak]
-    if missing:
-        lines.append(f"По проекту не хватает: {escape(missing)}")
+    if missing and missing_text(missing):
+        lines.append(f"По проекту не хватает: {escape(missing_text(missing))}")
+    lines.append("«Пока оставить» и «Отказать» — дилеру уйдёт сообщение, сначала спрошу комментарий.")
     return "\n".join(lines)
 
 
 def upgrade_markup(project_id: str, person_id: str, target: str) -> InlineKeyboardMarkup:
     what = "предрегистрации" if target == "pre" else "регистрации"
+    tail = f"{project_id}:{person_id}:{target}"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"⬆️ Повысить до {what}", callback_data=f"{CB_ADMIN}{ACTION_UP}:{project_id}:{person_id}:{target}")],
-        [InlineKeyboardButton("Пока оставить", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")],
+        [InlineKeyboardButton(f"⬆️ Повысить до {what}", callback_data=f"{CB_ADMIN}{ACTION_UP}:{tail}")],
+        [InlineKeyboardButton("❌ Отказать", callback_data=f"{CB_ADMIN}{ACTION_UP_DENY}:{tail}"),
+         InlineKeyboardButton("Пока оставить", callback_data=f"{CB_ADMIN}{ACTION_UP_KEEP}:{tail}")],
     ])
 
 
@@ -160,7 +195,7 @@ async def _upgrade_pairs(ctx: ContextTypes.DEFAULT_TYPE) -> list[tuple]:
         for person, status in rows:
             if person not in names:
                 names[person] = (await asyncio.to_thread(repo.person_name, person)) or person
-            short = names[person].split()[0] if names[person] else "?"
+            short = names[person].split()[0] if names[person] else "менеджер без имени"
             label = f"{name_ref(pname, ref)} · {short} · {_SHORT_STATUS[status]}"
             out.append((r["id"], person, status, label))
     return out
@@ -176,7 +211,7 @@ async def cmd_upgrade(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _show_upgrade_list(chat, ctx: ContextTypes.DEFAULT_TYPE, page: int) -> None:
     pairs = await _upgrade_pairs(ctx)
     if not pairs:
-        await chat.send_message("🛠 В проектах нет менеджеров со статусом.")
+        await chat.send_message("🛠 Ни у одного менеджера нет статуса в действующих проектах — менять нечего.")
         return
     pages = (len(pairs) + UPGRADE_PAGE - 1) // UPGRADE_PAGE
     page = max(0, min(page, pages - 1))
@@ -189,14 +224,55 @@ async def _show_upgrade_list(chat, ctx: ContextTypes.DEFAULT_TYPE, page: int) ->
         nav.append(InlineKeyboardButton("Дальше →", callback_data=f"{CB_ADMIN}{ACTION_UP_LIST}:{page + 1}"))
     if nav:
         rows.append(nav)
-    await chat.send_message(f"🛠 Чей статус изменить — повысить или откатить? ({page + 1}/{pages})", reply_markup=InlineKeyboardMarkup(rows))
+    rows.append(cancel_row())
+    await chat.send_message(f"🛠 Чей статус изменить — повысить или откатить? Строка: проект · менеджер · "
+                            f"текущий статус ({page + 1}/{pages})", reply_markup=InlineKeyboardMarkup(rows))
 
 
-def ask_markup(reg_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📨 Запросить у дилера", callback_data=f"{CB_ADMIN}{ACTION_ASK}:{reg_id}")],
-        [InlineKeyboardButton("✏️ Свой текст запроса", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
-    ])
+_LOWER_STAGE = {"Registration": ("p", "предрегистрацию"), "Pre-registration": ("n", "уведомление")}
+
+
+def blocked_text(admin_text: str, ask: str | None = None) -> str:
+    """Застрявшее решение: причина по-русски, готовый запрос дилеру целиком, «Выбери:»."""
+    lines = [admin_text]
+    if ask:
+        lines += ["", "Дилеру уйдёт:", f"<i>{escape(ask)}</i>"]
+    lines += ["", "Выбери:"]
+    return "\n".join(lines)
+
+
+def blocked_markup(reg_id: str, kind: str, reg: dict, candidates: list | None = None,
+                   requested_status: str | None = None) -> InlineKeyboardMarkup | None:
+    """Р5: застрявшее решение — кнопками в боте, не через Airtable."""
+    rows: list = []
+    declined = reg.get(Registrations.DECISION) == Decision.DECLINE
+    if kind == "no_project":
+        pick, new = (ACTION_DPICK, ACTION_DNEW) if declined else (ACTION_PICK, ACTION_NEW)
+        rows += [[InlineKeyboardButton(f"В проект: {title[:50]}", callback_data=f"{CB_ADMIN}{pick}:{reg_id}:{pid}")]
+                 for pid, title in candidates or []]
+        rows.append([InlineKeyboardButton("Создать новый проект", callback_data=f"{CB_ADMIN}{new}:{reg_id}:-")])
+    elif kind == "no_status":
+        rows.append([InlineKeyboardButton(label.capitalize(), callback_data=f"{CB_ADMIN}{ACTION_SET_STATUS}:{reg_id}:{c}")
+                     for c, label in (("n", "уведомление"), ("p", "предрегистрация"), ("r", "регистрация"))])
+    elif kind == "missing":
+        rows.append([InlineKeyboardButton("📨 Отправить запрос", callback_data=f"{CB_ADMIN}{ACTION_ASK_SEND}:{reg_id}")])
+        rows.append([InlineKeyboardButton("✏️ Изменить текст", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")])
+        lower = _LOWER_STAGE.get(requested_status or "")
+        if lower:
+            rows.append([InlineKeyboardButton(f"Принять как {lower[1]}",
+                                              callback_data=f"{CB_ADMIN}{ACTION_SET_STATUS}:{reg_id}:{lower[0]}")])
+    elif kind in ("reg_taken", "pre_full"):
+        rows.append([InlineKeyboardButton("Принять как уведомление",
+                                          callback_data=f"{CB_ADMIN}{ACTION_SET_STATUS}:{reg_id}:n")])
+        rows.append([InlineKeyboardButton("❌ Отклонить", callback_data=f"{CB_ADMIN}{ACTION_DECLINE}:{reg_id}")])
+    elif kind == "no_author":
+        rows.append([InlineKeyboardButton("❌ Отклонить заявку", callback_data=f"{CB_ADMIN}{ACTION_DECLINE}:{reg_id}")])
+    elif kind == "no_note":
+        rows.append([InlineKeyboardButton("✏️ Написать вопрос дилеру", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")])
+    if not rows:
+        return None
+    rows.append(cancel_row())
+    return InlineKeyboardMarkup(rows)
 
 
 def record_url(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> str:
@@ -226,9 +302,11 @@ STAGE_LABELS = {
 }
 
 
-def _title(rtype: str, payload: dict) -> str:
+def _title(rtype: str, payload: dict, author: str | None = None, name: str = "", asked: str = "") -> str:
     if payload.get("In Reply To"):
-        return "💬 Ответ на твой запрос"
+        who = escape(author or "Дилер")
+        head = f"💬 {who} ответил(а) на твой запрос по «{escape(name)}»"
+        return head + (f": «{escape(asked)}»" if asked else "")
     if rtype == "Quotation — Simplified" and payload.get("Quotation / Proforma №"):
         return f"🧾 Упрощённая схема · квотация № {escape(str(payload['Quotation / Proforma №']))}"
     special = {
@@ -258,10 +336,10 @@ def _pair(*items: tuple) -> str | None:
 _QUESTIONS = {q.key: q for q in _NEW_PROJECT_QUESTIONS}
 
 CONTACT_RU = {
-    "Declared": "Заявляю (без подтверждения)",
-    "Indirect (bureau docs)": "Документы от бюро",
-    "Verifiable (email/contact)": "Переписка или контакт",
-    "Joint meeting with AW": "Готов к совместной встрече",
+    "Declared": "Контакт есть, подтвердить пока нечем",
+    "Indirect (bureau docs)": "Документы бюро (контакт с клиентом не подтверждают)",
+    "Verifiable (email/contact)": "Переписка или прямой контакт с клиентом",
+    "Joint meeting with AW": "Готов к встрече с клиентом вместе с Andreu World",
 }
 ALT_RU = {
     "No — AW only": "Нет, только AW",
@@ -276,7 +354,11 @@ _META_KEYS = {"Dealer Project Name", "Project Log", "PPR Track", "EXW Potential"
               "Specifier Type", "Dealer News Audio"}
 
 
-_EXTRA_TITLES = {"Bureau": "Архбюро (AW не закладывало)"}
+_EXTRA_TITLES = {"Bureau": "Архбюро (AW не закладывало)", "Not Known Yet": "Дилер пока не знает",
+                 "Order / Proforma №": "Заказ / проформа №", "Lost Reason": "Причина проигрыша",
+                 "Quotation / Proforma №": "Квотация AW №", "Extra Materials": "Материалы",
+                 "Dealer News": "Новость", "Contact Evidence": "Подтверждение контакта",
+                 "Area Source": "Откуда площадь", "Country": "Страна", "City": "Город"}
 
 # «Нет» здесь — полноценный ответ, а не пропуск
 
@@ -303,6 +385,11 @@ def _ru(key: str, value) -> str:
         return ALT_RU.get(value, str(value))
     if key == "Project Stage":
         return STAGE_LABELS.get(value, str(value))
+    if key == "Lost Reason":
+        from .decisions import LOST_REASON_RU
+        return LOST_REASON_RU.get(value, str(value))
+    if key == "Contact Evidence" and isinstance(value, str):
+        return "пришлёт позже — контакт пока без подтверждения"
     q = _QUESTIONS.get(key)
     if q is not None:
         return format_value(q, value)
@@ -354,16 +441,58 @@ def _card_body(rtype: str, payload: dict) -> list[str]:
         mark = " ⚠️" if isinstance(value, str) and q.label_for(value) is None and is_vague(key, value) else ""
         body.append(f"• {escape(q.title)}: {escape(text)}{mark}")
     for key, value in payload.items():
-        if key in shown or key.startswith("_") or key in _META_KEYS or value in (None, "", []):
+        if key in shown or key.startswith("_") or key in _META_KEYS or key == "Dealer News" or value in (None, "", []):
             continue
         title = _EXTRA_TITLES.get(key, key)
         body.append(f"• {escape(title)}: {escape(_ru(key, value))}")
     if rtype == "Update — Lost" and payload.get("Project Log"):
         body.append(escape(payload["Project Log"])[:300])
-    if rtype in STATUS_REQUESTS and payload.get("Contact Level") == "Declared":
-        body += ["", "⚠️ Уровень контакта — заявляю, без подтверждения. "
-                     "Для предрегистрации рекомендуется запросить документы"]
+    if rtype.startswith("New") and rtype in STATUS_REQUESTS and payload.get("Contact Level") in (None, "", "Declared"):
+        body += ["", "ℹ️ Контакт с клиентом не подтверждён: для предрегистрации он не нужен, "
+                     "для регистрации нужен подтверждённый."]
     return body
+
+
+def accept_effect(rtype: str, payload: dict, author: str | None = None) -> str:
+    """Что изменится в базе при «Принять» (правило 1.5)."""
+    who = escape(author or "дилер")
+    if payload.get("In Reply To"):
+        return "ответ запишу в журнал проекта и закрою вместе с исходной заявкой."
+    return {
+        "New — Notification": f"создам новый проект или добавлю в похожий; {who} получит уведомление о плейсменте.",
+        "New — Pre-registration": f"проверим по шагам: сначала запишу уведомление ({who}), "
+                                  "потом спрошу про предрегистрацию.",
+        "New — Registration": f"проверим по шагам: сначала запишу уведомление ({who}), "
+                              "потом спрошу про предрегистрацию и регистрацию.",
+        "Upgrade — Pre-registration": f"{who} получит предрегистрацию в проекте, срок — месяц с сегодняшнего дня.",
+        "Upgrade — Registration": f"{who} получит регистрацию в проекте, срок — месяц с сегодняшнего дня.",
+        "Update — fields": "запишу новые данные в пустые поля проекта (объём и стадию — заменю), статус не меняется.",
+        "Update — info only": "запишу новые данные в проект, статус не меняется.",
+        "Update — news": "запишу новость в журнал проекта, статус не меняется.",
+        "Update — Won": "проект станет «выигран», вероятность 100 %"
+                        + (f", номер заказа {escape(str(payload['Order / Proforma №']))} — в квотации проекта."
+                           if payload.get("Order / Proforma №") else "."),
+        "Update — Lost": "проект станет «проигран», вероятность 0 %, причина — в журнал проекта.",
+        "Quotation — Simplified": (f"запишу квотацию № {escape(str(payload['Quotation / Proforma №']))} в проект, "
+                                   f"{who} — в уведомлении; защита на срок квотации."
+                                   if payload.get("Quotation / Proforma №") else
+                                   "передам спецификацию на квотацию, статус не меняется."),
+    }.get(rtype, "запишу данные в проект.")
+
+
+def dealer_gets(rtype: str, payload: dict, name: str) -> str:
+    """Что получит дилер при «Принять» (правило 1.5): начало текста; комментарий — твой, если напишешь."""
+    title = escape(name)
+    if payload.get("In Reply To"):
+        return f"«Твой ответ по проекту {title} получили и добавили в проект.»"
+    if rtype == "Update — Won":
+        return f"«🏆 Записали: проект {title} выигран. Спасибо!»"
+    if rtype == "Update — Lost":
+        return f"«Записали: проект {title} проигран, причина — …»"
+    if rtype in STATUS_REQUESTS or rtype == "New — Notification":
+        return ("карточку «✅ Заявка принята»: проект с референсом, его статус, есть ли на объекте другие партнёры, "
+                "срок статуса и чего не хватает до следующего этапа.")
+    return "карточку «✅ Заявка принята»: проект с референсом, что внесли и что осталось до следующего этапа."
 
 
 UPGRADE_REQUESTS = {"Upgrade — Pre-registration", "Upgrade — Registration"}
@@ -391,7 +520,7 @@ def project_digest(project: dict, manager: str, companies: dict) -> list[str]:
         _pair(("Бюро", names(Projects.SPECIFIER))),
         _pair(("EXW", f"{exw:,.0f} €".replace(",", " ") if isinstance(exw, (int, float)) and exw else ""),
               ("по прайсу", f"{exw / 0.45:,.0f} €".replace(",", " ") if isinstance(exw, (int, float)) and exw else "")),
-        _pair(("Заказ", f"{order[8:10]}.{order[5:7]}.{order[:4]}" if order else "")),
+        _pair(("Заказ", date_ru(order) if order else "")),
         _pair(("Уровень контакта", escape(_ru("Contact Level", project[Projects.CONTACT_LEVEL]))
                if project.get(Projects.CONTACT_LEVEL) else "")),
         _pair(("Альтернативы AW", escape(_ru("AW Alternatives", project[Projects.AW_ALTERNATIVES]))
@@ -402,12 +531,14 @@ def project_digest(project: dict, manager: str, companies: dict) -> list[str]:
     ):
         if row:
             lines.append(row)
-    missing = project.get(Projects.PPR_NEXT_MISSING)
-    lines.append(f"⚠️ Не хватает: {escape(missing)}" if missing else "✔️ Условия этапа выполнены (PPR Next Step Missing пуст)")
-    lines += others_line(project, manager, dealer_status(project, manager))
-    log_text = str(project.get(Projects.PROJECT_LOG) or "").strip()
-    if log_text:
-        lines += ["", "<b>Журнал проекта</b>", escape(log_text)]
+    missing = missing_text(project.get(Projects.PPR_NEXT_MISSING))
+    lines.append(f"⚠️ Не хватает: {escape(missing)}" if missing else "✔️ Условия следующего этапа выполнены")
+    lines += [ln.replace("🔢 Твой номер", "🔢 Номер дилера")
+              for ln in others_line(project, manager, dealer_status(project, manager))]
+    entries = [e for e in re.split(r"\n\s*\n", str(project.get(Projects.PROJECT_LOG) or "").strip()) if e.strip()]
+    if entries:
+        head = "<b>Журнал проекта</b>" + (f" — последние 5 из {len(entries)}" if len(entries) > 5 else "")
+        lines += ["", head, escape("\n\n".join(entries[-5:]))]
     return lines
 
 
@@ -428,7 +559,9 @@ async def upgrade_digest(repo, reg: dict) -> list[str]:
 
 
 def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: str | None = None,
-                 dealer: str | None = None, extra: list[str] | None = None) -> str:
+                 dealer: str | None = None, extra: list[str] | None = None, asked: str = "",
+                 failed_files: list[str] | None = None) -> str:
+    """Карточка-вопрос проверяющему: что пришло, что изменится при «Принять», что получит дилер (правило 1.5)."""
     name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
     rtype = reg.get(Registrations.REQUEST_TYPE) or "—"
     try:
@@ -436,7 +569,7 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
     except ValueError:
         payload = {}
 
-    lines = [f"🛠 <b>{_title(rtype, payload)}</b>"]
+    lines = [f"🛠 <b>{_title(rtype, payload, author, name, asked)}</b>"]
     if dealer or author:
         who = f"<b>{escape(dealer)}</b>" if dealer else ""
         if author:
@@ -450,8 +583,14 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
         lines += [""] + body
     if extra:
         lines += extra
+    if failed_files:
+        lines += ["", f"⚠️ Не загрузились файлы ({len(failed_files)}): {escape(', '.join(failed_files))} — "
+                      "дилера попросил прислать их ссылкой."]
     if analysis:
         lines += ["", "🔎 " + escape(analysis)]
+    lines += ["", f"<b>При «Принять»:</b> {accept_effect(rtype, payload, author)}",
+              f"<b>Дилеру уйдёт:</b> {dealer_gets(rtype, payload, name)} При «Отклонить» — «Заявка по проекту "
+              f"{escape(name)} не принята» и как подать заново. Комментарий — твой, если напишешь."]
     # ID заявки в тексте не показываем
     return "\n".join(lines)
 
@@ -494,28 +633,66 @@ def _call_text(reg: dict, idx: int) -> tuple[str, str, str]:
     return label, value, reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
 
 
+CB_DEALER_CALL = "dc:"   # дилер отвечает на другое время звонка: dc:ok|other:<заявка>:<№>
+
+
+def call_offer_markup(reg_id: str, idx: int) -> InlineKeyboardMarkup:
+    tail = f"{reg_id}:{idx}"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Подтвердить", callback_data=f"{CB_ADMIN}{ACTION_CALL_OK}:{tail}"),
+         InlineKeyboardButton("🕑 Другое время", callback_data=f"{CB_ADMIN}{ACTION_CALL_OTHER}:{tail}")],
+        [InlineKeyboardButton("Звонок не нужен", callback_data=f"{CB_ADMIN}{ACTION_CALL_NONE}:{tail}")],
+    ])
+
+
 async def send_call_offer(bot, chat_id, reg_id: str, reg: dict, author: str | None) -> None:
     """Партнёр выбрал время звонка — отдельным сообщением, чтобы не потерялось: подтвердить или другое время."""
     for idx, (label, value) in enumerate(call_slots(_payload(reg))):
         name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
         await bot.send_message(
             chat_id,
-            f"📞 <b>{escape(author or 'Партнёр')} предлагает звонок</b> · {escape(label.lower())}\n"
-            f"🏗 {escape(name)}\n🕑 <b>{escape(value)}</b>",
+            f"📞 <b>{escape(author or 'Дилер')} предлагает звонок</b> · {escape(label.lower())}\n"
+            f"🏗 {escape(name)}\n🕑 <b>{escape(value)}</b>\n"
+            "Подтвердишь — дилеру уйдёт подтверждение, а я напомню тебе за час до звонка.",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Подтвердить", callback_data=f"{CB_ADMIN}{ACTION_CALL_OK}:{reg_id}:{idx}"),
-                InlineKeyboardButton("🕑 Другое время", callback_data=f"{CB_ADMIN}{ACTION_CALL_OTHER}:{reg_id}:{idx}"),
-            ]]),
+            reply_markup=call_offer_markup(reg_id, idx),
         )
 
 
-async def _tell_partner(ctx: ContextTypes.DEFAULT_TYPE, reg: dict, text: str) -> bool:
+async def _tell_partner(ctx: ContextTypes.DEFAULT_TYPE, reg: dict, text: str, markup=None) -> bool:
     repo = ctx.bot_data["repo"]
     chats = await asyncio.to_thread(repo.chat_ids_for_people, reg.get(Registrations.SUBMITTED_BY) or [])
     for chat_id in chats:
-        await ctx.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+        await ctx.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
     return bool(chats)
+
+
+async def confirm_call(bot_data: dict, reg_id: str, idx: int, value: str) -> None:
+    """Звонок подтверждён — в память бота (утренний список и напоминание за час — только по подтверждённым)."""
+    await memo.set_item(bot_data, "calls_confirmed", f"{reg_id}:{idx}", value)
+
+
+async def asked_of(repo, reg: dict) -> str:
+    """Для ответа дилера — твой исходный вопрос (Decision Note исходной заявки)."""
+    original = _payload(reg).get("In Reply To")
+    if not original:
+        return ""
+    try:
+        orig = await asyncio.to_thread(repo.registration_fields, original)
+    except Exception:
+        return ""
+    return str(orig.get(Registrations.DECISION_NOTE) or "").strip()
+
+
+async def send_request(ctx: ContextTypes.DEFAULT_TYPE, chat_id, reg_id: str, reg: dict, header: str = "") -> None:
+    """Карточка-вопрос по заявке (с кнопками решения и предложением звонка) — из /inbox, повторно, по 48 ч."""
+    repo = ctx.bot_data["repo"]
+    author = await _author(repo, reg)
+    text = request_card(reg, reg_id, author, reg.get(Registrations.ANALYSIS), await _dealer(repo, reg),
+                        await upgrade_digest(repo, reg), await asked_of(repo, reg))
+    await send_card(ctx.bot, chat_id, header + text + age_line(reg.get(Registrations.SUBMITTED_AT)),
+                    decision_markup(ctx, reg_id, await merge_candidates(repo, reg)))
+    await send_call_offer(ctx.bot, chat_id, reg_id, reg, author)
 
 
 async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -527,23 +704,11 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     me = routing.who_by_chat(ctx.bot_data, update.effective_chat.id)
     recs = [rec for rec in recs if await reviewer_of(ctx, rec["fields"]) == me]
     if not recs:
-        await update.effective_chat.send_message("🛠 В Inbox нет заявок без решения.")
+        await update.effective_chat.send_message("🛠 Заявок на проверке нет — делать ничего не нужно.")
         return
-    if not recs:
-        await update.effective_chat.send_message("🛠 В Inbox нет заявок без решения.")
-        return
-    await update.effective_chat.send_message(f"🛠 Заявок без решения: {len(recs)}")
+    await update.effective_chat.send_message(f"🛠 Заявок без решения: {len(recs)}. Присылаю по одной, старые первыми.")
     for rec in recs:
-        await send_card(
-            ctx.bot, update.effective_chat.id,
-            request_card(rec["fields"], rec["id"], await _author(repo, rec["fields"]),
-                         rec["fields"].get(Registrations.ANALYSIS), await _dealer(repo, rec["fields"]),
-                         await upgrade_digest(repo, rec["fields"]))
-            + age_line(rec["fields"].get(Registrations.SUBMITTED_AT)),
-            decision_markup(ctx, rec["id"], await merge_candidates(repo, rec["fields"])),
-        )
-        await send_call_offer(ctx.bot, update.effective_chat.id, rec["id"], rec["fields"],
-                              await _author(repo, rec["fields"]))
+        await send_request(ctx, update.effective_chat.id, rec["id"], rec["fields"])
 
 
 def age_hours(submitted_at: str | None, now: datetime | None = None) -> float:
@@ -569,7 +734,7 @@ async def merge_candidates(repo, reg: dict) -> list:
         return []
     projects = await asyncio.to_thread(repo.dedup_projects)
     found = dedup.find(_payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "", projects)
-    return [(c.project_id, c.name) for c in found]
+    return [(c.project_id, c.title) for c in found]
 
 
 async def _dealer(repo, reg: dict) -> str | None:
@@ -648,6 +813,137 @@ async def _apply_now(ctx: ContextTypes.DEFAULT_TYPE) -> None:
         log.exception("Ошибка немедленной обработки решения")
 
 
+
+
+# ---------- что отменили ----------
+
+_CANCEL_WHAT = {
+    ACTION_ACCEPT_NOTE: "принятие — решения нет",
+    ACTION_DECLINE: "отказ — решения нет",
+    ACTION_INFO: "запрос дилеру — ничего не ушло",
+    ACTION_NEW: "создание нового проекта — решения нет",
+    ACTION_DNEW: "создание нового проекта",
+    ACTION_RENAME: "переименование проекта — решения нет",
+    ACTION_RB_DOWN: "откат — статус не менялся",
+    ACTION_RB_CANCEL: "аннулирование — статус не менялся",
+    ACTION_UP_KEEP: "сообщение дилеру — ничего не ушло, статус не менялся",
+    ACTION_UP_DENY: "отказ — ничего не ушло, статус не менялся",
+    ACTION_CALL_OTHER: "другое время звонка — дилеру ничего не ушло",
+    ACTION_REMIND_USER: "просмотр напоминания",
+    "notecont": "принятие — решения нет",
+}
+_REG_ACTIONS = {ACTION_ACCEPT_NOTE, ACTION_DECLINE, ACTION_INFO, ACTION_NEW, ACTION_DNEW, ACTION_RENAME,
+                ACTION_DPICK, "notecont"}
+
+
+async def _cancel_text(ctx: ContextTypes.DEFAULT_TYPE, item: tuple | None) -> str:
+    if not item:
+        return "🛠 Отменено. Ничего не изменилось."
+    what = _CANCEL_WHAT.get(item[0], "ввод")
+    text = f"🛠 Отменено: {what}."
+    if item[0] in _REG_ACTIONS and item[1]:
+        try:
+            reg = await asyncio.to_thread(ctx.bot_data["repo"].registration_fields, item[1])
+            name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+            text += f" Заявка «{escape(name)}» по-прежнему ждёт решения — /inbox пришлёт её снова."
+        except Exception:
+            pass
+    return text
+
+
+# ---------- «Пока оставить» / «Отказать» на шаге повышения (Р1, Р2) ----------
+
+def _step_dealer_text(project: dict, person_id: str, target: str, mode: str, comment: str) -> str:
+    title = escape(name_ref(project.get(Projects.NAME) or "", project.get(Projects.PPR_REF) or ""))
+    status = dealer_status(project, person_id)
+    current = "уведомление о плейсменте" if status in (None, "notified") else STATUS_RU[status]
+    note = f"\n💬 Комментарий: {escape(comment)}" if comment else ""
+    if mode == "deny":
+        asked = "Предрегистрация" if target == "pre" else "Регистрация"
+        return (f"❌ {asked} по проекту <code>{title}</code> не подтверждена. Статус остаётся «{current}».{note}\n"
+                "Если появятся новые данные — «Обновить проект» → «Дополнить материалы».")
+    return (f"По проекту <code>{title}</code> статус пока остаётся «{current}».{note}\n"
+            "Когда появятся новые данные — «Обновить проект» → «Дополнить материалы».")
+
+
+async def step_decision(ctx: ContextTypes.DEFAULT_TYPE, chat, project_id: str, person_id: str, target: str,
+                        mode: str, comment: str) -> None:
+    """Проверяющий оставил статус или отказал в повышении — дилеру сообщение, в журнал строка."""
+    repo = ctx.bot_data["repo"]
+    project = await asyncio.to_thread(repo.project_fields, project_id)
+    text = _step_dealer_text(project, person_id, target, mode, comment)
+    chats = await asyncio.to_thread(repo.chat_ids_for_people, [person_id])
+    for c in chats:
+        await ctx.bot.send_message(c, text, parse_mode=ParseMode.HTML)
+    person = await asyncio.to_thread(repo.person_name, person_id) or "менеджер"
+    what = (f"отказ в {'предрегистрации' if target == 'pre' else 'регистрации'}" if mode == "deny"
+            else "статус пока оставлен")
+    try:
+        await asyncio.to_thread(repo.append_project_log, project_id, project.get(Projects.PROJECT_LOG),
+                                f"{datetime.now(timezone.utc):%d.%m.%Y} · проверка:",
+                                [f"{person}: {what}" + (f". Комментарий: {comment}" if comment else "")])
+    except Exception:
+        log.exception("Журнал проекта: решение по шагу")
+    await memo.pop(ctx.bot_data, "stepwise_next", f"{project_id}:{person_id}")
+    sent = "Дилеру отправлено:" if chats else "⚠️ У дилера нет Telegram в базе — не отправлено:"
+    await chat.send_message(f"🛠 {escape(person)} · {project_line(project)}: {what}.\n{sent}\n<i>{text}</i>",
+                            parse_mode=ParseMode.HTML)
+
+
+# ---------- звонок: ответ дилера на другое время (Р7) ----------
+
+async def reviewer_chat(ctx: ContextTypes.DEFAULT_TYPE, reg: dict) -> str | None:
+    return routing.resolve(ctx.bot_data, await reviewer_of(ctx, reg))[1]
+
+
+async def dealer_call_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str) -> None:
+    """Дилер: «✅ Подходит» / «🕑 Предложить другое» под предложенным временем звонка."""
+    action, _, rest = data[len(CB_DEALER_CALL):].partition(":")
+    reg_id, _, idx = rest.partition(":")
+    repo = ctx.bot_data["repo"]
+    try:
+        reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+    except Exception:
+        await update.effective_chat.send_message("Эта заявка уже закрыта. Выбери действие внизу.")
+        return
+    name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+    proposed = (await memo.get(ctx.bot_data, "calls_proposed", {})).get(f"{reg_id}:{idx}", "")
+    author = await _author(repo, reg) or "Дилер"
+    target = await reviewer_chat(ctx, reg)
+    if action == "ok":
+        await confirm_call(ctx.bot_data, reg_id, int(idx or 0), proposed)
+        await update.effective_chat.send_message(f"📞 Договорились: звонок по «{escape(name)}» — {escape(proposed)}. "
+                                                 "До связи!", parse_mode=ParseMode.HTML)
+        if target:
+            await ctx.bot.send_message(target, f"📞 {escape(author)} подтвердил(а) звонок по «{escape(name)}»: "
+                                               f"<b>{escape(proposed)}</b>. Напомню за час.", parse_mode=ParseMode.HTML)
+        return
+    await memo.set_item(ctx.bot_data, "waits", f"dealer:{update.effective_chat.id}", ["callalt", reg_id, idx])
+    await update.effective_chat.send_message("Напиши, когда тебе удобно, — дату и время. Передам на проверку.")
+
+
+async def dealer_call_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    """Дилер написал своё время звонка. True — обработано."""
+    item = await memo.pop(ctx.bot_data, "waits", f"dealer:{update.effective_chat.id}")
+    if not item or item[0] != "callalt":
+        return False
+    _, reg_id, idx = item
+    repo = ctx.bot_data["repo"]
+    reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+    name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+    await memo.set_item(ctx.bot_data, "calls_proposed", f"{reg_id}:{idx}", text.strip())
+    target = await reviewer_chat(ctx, reg)
+    author = await _author(repo, reg) or "Дилер"
+    if target:
+        await ctx.bot.send_message(target, f"📞 <b>{escape(author)} предлагает другое время звонка</b>\n"
+                                           f"🏗 {escape(name)}\n🕑 <b>{escape(text.strip())}</b>",
+                                   parse_mode=ParseMode.HTML, reply_markup=call_offer_markup(reg_id, int(idx or 0)))
+    await update.effective_chat.send_message("Передал. Ответ — подтверждение или другое время — придёт сюда.")
+    return True
+
+
+# ---------- кнопки проверяющего ----------
+
 async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data: str) -> None:
     chat = update.effective_chat
     if not is_admin(update, ctx):
@@ -661,38 +957,70 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     pending = _pending(ctx)
     force = action in FORCE
     action = FORCE.get(action, action)
+    who_name = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
 
     if action == ACTION_CANCEL:
-        await drop_pending(update, ctx)
-        await chat.send_message("🛠 Отменено.")
+        await chat.send_message(await _cancel_text(ctx, await drop_pending(update, ctx)))
         return
 
-    if action in (ACTION_CALL_OK, ACTION_CALL_OTHER) and project_id.isdigit():
+    if action in (ACTION_CALL_OK, ACTION_CALL_OTHER, ACTION_CALL_NONE) and project_id.isdigit():
         reg = await asyncio.to_thread(repo.registration_fields, reg_id)
         label, value, name = _call_text(reg, int(project_id))
+        proposed = (await memo.get(ctx.bot_data, "calls_proposed", {})).get(f"{reg_id}:{project_id}")
+        value = proposed or value
         if action == ACTION_CALL_OTHER:
-            pending[chat.id] = (ACTION_CALL_OTHER, reg_id, project_id)
-            await chat.send_message(f"🛠 «{escape(name)}»: напиши, какое время звонка предложить, — уйдёт партнёру.",
-                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
-                                        "Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]))
+            await _wait(ctx, chat.id, (ACTION_CALL_OTHER, reg_id, project_id))
+            await chat.send_message(f"🛠 «{escape(name)}»: напиши, какое время звонка предложить. Дилеру уйдёт "
+                                    "оно с кнопками «Подходит» / «Предложить другое».",
+                                    reply_markup=InlineKeyboardMarkup([cancel_row()]))
             return
-        who = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
-        sent = await _tell_partner(ctx, reg, f"📞 {who} подтверждает звонок по «{escape(name)}»: <b>{escape(value)}</b>. "
-                                             "До связи!")
-        ctx.bot_data.setdefault("calls_confirmed", set()).add((reg_id, int(project_id)))
+        if action == ACTION_CALL_NONE:
+            sent = await _tell_partner(ctx, reg, f"📞 Звонок по проекту «{escape(name)}» не понадобится, "
+                                                 "ответ придёт сюда.")
+            await chat.send_message(f"🛠 «{escape(name)}»: звонок не нужен. "
+                                    + ("Дилеру написал." if sent else "⚠️ У дилера нет Telegram в базе — не написал."))
+            return
+        sent = await _tell_partner(ctx, reg, f"📞 {who_name} подтверждает звонок по «{escape(name)}»: "
+                                             f"<b>{escape(value)}</b>. До связи!")
+        await confirm_call(ctx.bot_data, reg_id, int(project_id), value)
+        from .slots import valencia_start
+        remind = "Напомню за час." if valencia_start(value) else \
+            "Время указано текстом — напомнить за час не смогу, запиши себе."
         await chat.send_message(f"🛠 Звонок по «{escape(name)}» подтверждён: {escape(value)}. "
-                                + ("Партнёру написал. Напомню за час." if sent else "⚠️ Партнёра нет в боте — не написал."))
+                                + ("Дилеру написал. " if sent else "⚠️ У дилера нет Telegram в базе — не написал. ")
+                                + remind)
         return
 
     # Повышение статуса без заявки — по проекту и менеджеру, не по записи Inbox
-    if action == ACTION_UP_NO:
-        await chat.send_message("🛠 Оставил как есть. Повысить позже — /upgrade.")
+    if action == ACTION_UP_NO:   # кнопка старых сообщений
+        await chat.send_message("🛠 Статус не менял. Повысить позже — /upgrade.")
+        return
+    if action in (ACTION_UP_KEEP, ACTION_UP_DENY) and len(parts) >= 3:
+        mode = "deny" if action == ACTION_UP_DENY else "keep"
+        project = await asyncio.to_thread(repo.project_fields, parts[0])
+        await _wait(ctx, chat.id, (action, f"{parts[0]}:{parts[1]}", parts[2]))
+        preview = _step_dealer_text(project, parts[1], parts[2], mode, "")
+        head = "отказываем в повышении" if mode == "deny" else "статус пока оставляем"
+        await chat.send_message(
+            f"🛠 {project_line(project)}: {head}. Напиши комментарий дилеру или отправь без него.\n"
+            f"Дилеру уйдёт:\n<i>{preview}</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Отправить без комментария",
+                                      callback_data=f"{CB_ADMIN}{ACTION_UP_BARE}:{parts[0]}:{parts[1]}:{parts[2]}:{mode[0]}")],
+                cancel_row()]))
+        return
+    if action == ACTION_UP_BARE and len(parts) >= 4:
+        pending.pop(chat.id, None)
+        await memo.pop(ctx.bot_data, "waits", str(chat.id))
+        await step_decision(ctx, chat, parts[0], parts[1], parts[2], "deny" if parts[3] == "d" else "keep", "")
         return
     if action == ACTION_UP_LIST:
         await _show_upgrade_list(chat, ctx, int(parts[0]) if parts and parts[0].isdigit() else 0)
         return
     if action == ACTION_UP_PICK and len(parts) >= 2:
         project = await asyncio.to_thread(repo.project_fields, parts[0])
+        person = await asyncio.to_thread(repo.person_name, parts[1]) or "менеджер без имени"
         status = dealer_status(project, parts[1])
         targets = ["pre", "reg"] if status == "notified" else ["reg"] if status == "pre_registered" else []
         if project.get(Projects.REGISTERED):
@@ -702,17 +1030,26 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         if status:
             rows.append([InlineKeyboardButton("↩️ Откатить / аннулировать",
                                               callback_data=f"{CB_ADMIN}{ACTION_RB}:{parts[0]}:{parts[1]}")])
-        rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")])
-        missing = project.get(Projects.PPR_NEXT_MISSING) or ""
-        hint = f"\nДля следующего этапа не хватает: {escape(missing)}" if missing else ""
-        await chat.send_message(f"🛠 {project_line(project)}: на какой статус?{hint}",
+        rows.append(cancel_row())
+        now = "нет статуса" if not status else STATUS_RU[status]
+        if targets:
+            missing = missing_text(project.get(Projects.PPR_NEXT_MISSING))
+            hint = f"\nДля следующего этапа не хватает: {escape(missing)}" if missing else ""
+            question = "На какой статус?"
+        else:
+            why = ("у него уже регистрация — это последний этап" if status == "registered"
+                   else "регистрация на объекте уже у другого партнёра")
+            hint, question = "", f"Повышать некуда: {why}. Можно только откатить."
+        await chat.send_message(f"🛠 {project_line(project)} · {escape(person)} — сейчас {now}.\n{question}{hint}",
                                 reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
         return
     if action == ACTION_RB and len(parts) >= 2:
         project = await asyncio.to_thread(repo.project_fields, parts[0])
+        person = await asyncio.to_thread(repo.person_name, parts[1]) or "менеджер без имени"
         status = dealer_status(project, parts[1])
         if not status:
-            await chat.send_message("🛠 У этого менеджера в проекте уже нет статуса.")
+            await chat.send_message(f"🛠 У {escape(person)} в {project_line(project)} уже нет статуса — откатывать нечего.",
+                                    parse_mode="HTML")
             return
         rows = []
         if status in _LOWER_RU:
@@ -720,13 +1057,16 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
                                               callback_data=f"{CB_ADMIN}{ACTION_RB_DOWN}:{parts[0]}:{parts[1]}")])
         rows.append([InlineKeyboardButton("✖️ Аннулировать — снять статус",
                                           callback_data=f"{CB_ADMIN}{ACTION_RB_CANCEL}:{parts[0]}:{parts[1]}")])
-        rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_UP_NO}:")])
-        await chat.send_message(f"🛠 {project_line(project)}: что сделать со статусом?",
+        rows.append(cancel_row())
+        await chat.send_message(f"🛠 {project_line(project)} · {escape(person)} — сейчас {STATUS_RU[status]}. "
+                                "Что сделать со статусом?",
                                 reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
         return
     if action in _ROLLBACK and len(parts) >= 2:
-        pending[chat.id] = (action, parts[0], parts[1])  # только в памяти: ожидание в Airtable — у заявок
-        await chat.send_message("🛠 Напиши причину — она уйдёт менеджеру. Передумал — нажми меню внизу.")
+        person = await asyncio.to_thread(repo.person_name, parts[1]) or "менеджер"
+        await _wait(ctx, chat.id, (action, parts[0], parts[1]))
+        await chat.send_message(f"🛠 Напиши причину — она уйдёт менеджеру ({escape(person)}) вместе с новым статусом.",
+                                reply_markup=InlineKeyboardMarkup([cancel_row()]))
         return
     if action == ACTION_UP and len(parts) >= 3 and parts[2] in _TARGET_RU:
         who = routing.who_by_chat(ctx.bot_data, chat.id)
@@ -736,7 +1076,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     try:
         reg = await asyncio.to_thread(repo.registration_fields, reg_id)
     except Exception:
-        await chat.send_message("Заявка не найдена.")
+        await chat.send_message("🛠 Этой заявки больше нет в базе — делать ничего не нужно.")
         return
     # Кнопка под ответом дилера — решение по исходной заявке, ответ закрывается вместе с ней
     original = _payload(reg).get("In Reply To")
@@ -745,37 +1085,58 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         try:
             reg = await asyncio.to_thread(repo.registration_fields, reg_id)
         except Exception:
-            await chat.send_message("Исходная заявка не найдена.")
+            await chat.send_message("🛠 Исходной заявки больше нет в базе — ответ дилера закрыть не к чему.")
             return
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
     _mark_decider(ctx, update, reg_id)
     decided = reg.get(Registrations.DECISION)
-    # Заблокированное решение ещё можно заменить запросом дилеру
-    stuck = str(reg.get(Registrations.BOT_PROCESSED) or "").startswith("blocked:") and action in (ACTION_ASK, ACTION_INFO)
+    # Застрявшее решение можно доделать кнопками (Р5)
+    stuck = str(reg.get(Registrations.BOT_PROCESSED) or "").startswith("blocked:") and action in (
+        ACTION_ASK, ACTION_ASK_SEND, ACTION_INFO, ACTION_NEW, ACTION_SET_STATUS, ACTION_DECLINE, ACTION_DECLINE_BARE)
     if decided and decided != Decision.NEED_INFO and not stuck \
-            and action not in (ACTION_PICK, ACTION_DPICK, ACTION_DNEW, ACTION_NAME):
+            and action not in (ACTION_PICK, ACTION_DPICK, ACTION_DNEW, ACTION_NAME, ACTION_NOTE_OK,
+                               ACTION_DECLINE_CANCEL):
+        decided_ru = DECISION_RU.get(decided, decided)
         if reply_id:
             # Исходная заявка уже решена — ответ дилера закрываем, чтобы не висел в /inbox
             target = reg.get(Registrations.TARGET_PROJECT) or []
             await asyncio.to_thread(repo.close_reply, reply_id, target[0] if target else None)
             await chat.send_message(
-                f"🛠 По «{name}» решение уже стоит: {escape(decided)}. "
-                "Ответ дилера закрыт" + (" и добавлен в проект." if target else ".")
+                f"🛠 Заявка «{name}» уже {decided_ru}. Ответ дилера закрыт"
+                + (" и добавлен в проект." if target else ".") + " Делать ничего не нужно."
             )
             await _apply_now(ctx)
             return
-        await chat.send_message(f"🛠 По «{name}» решение уже стоит: {escape(decided)}.")
+        await chat.send_message(f"🛠 Заявка «{name}» уже {decided_ru} — делать ничего не нужно.")
         return
 
-    if action == ACTION_ASK:
+    if action in (ACTION_ASK, ACTION_ASK_SEND):
         target = reg.get(Registrations.TARGET_PROJECT) or []
         project = await asyncio.to_thread(repo.project_fields, target[0]) if target else None
         text = decision_plan(reg, project).ask_text
         if not text:
-            await chat.send_message(f"🛠 По «{name}» данных уже хватает — нажми решение ещё раз.")
+            await chat.send_message(f"🛠 По «{name}» данных уже хватает — запрашивать нечего. Реши заявку:")
+            await send_request(ctx, chat.id, reg_id, reg)
+            return
+        if action == ACTION_ASK:   # старая кнопка: сначала показать текст
+            await chat.send_message(blocked_text(f"🛠 Запрос дилеру по «{name}».", text), parse_mode=ParseMode.HTML,
+                                    reply_markup=blocked_markup(reg_id, "missing", reg))
             return
         await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.BOT_PROCESSED: ""})
         await asyncio.to_thread(repo.set_decision, reg_id, Decision.NEED_INFO, text)
+        await _apply_now(ctx)
+        await chat.send_message(f"🛠 Запрос по «{name}» отправлен дилеру. Ответ придёт сюда.")
+        return
+
+    if action == ACTION_SET_STATUS and project_id in _STATUS_CODE:
+        status = _STATUS_CODE[project_id]
+        fields = {Registrations.REG_STATUS: status, Registrations.BOT_REG_STATUS: status,
+                  Registrations.BOT_PROCESSED: ""}
+        if reg.get(Registrations.DECISION) not in (Decision.ACCEPT, Decision.ACCEPT_MERGE):
+            fields[Registrations.DECISION] = Decision.ACCEPT_MERGE if reg.get(Registrations.TARGET_PROJECT) \
+                else Decision.ACCEPT
+        await asyncio.to_thread(repo.update_registration, reg_id, fields)
+        await chat.send_message(f"🛠 «{name}»: принимаю как {_STATUS_CODE_RU[project_id]}.")
         await _apply_now(ctx)
         return
 
@@ -783,11 +1144,19 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         pending[chat.id] = (action, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
         tail = f"::{reply_id}" if reply_id else ""
+        rtype = reg.get(Registrations.REQUEST_TYPE) or ""
+        stage = REQUEST_LABELS.get(rtype, "заявку")
+        lines = [f"🛠 Принимаем «{name}» как {_ACC.get(stage, stage)}."]
+        if rtype in STEPWISE:
+            lines.append("Проверим по шагам: сначала запишу уведомление, потом спрошу про предрегистрацию"
+                         + (" и регистрацию." if STEPWISE[rtype] == "reg" else "."))
+        lines.append(f"Дилеру уйдёт: {dealer_gets(rtype, _payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or '')}")
+        lines.append("Напиши комментарий дилеру или отправь без него.")
         await chat.send_message(
-            f"🛠 «{name}» — принимаем. Напиши комментарий партнёру или отправь без него.",
+            "\n".join(lines),
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("Отправить без комментария", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}{tail}")],
-                [InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]),
+                cancel_row()]),
         )
         return
 
@@ -799,15 +1168,27 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     if action in (ACTION_DECLINE, ACTION_INFO):
         pending[chat.id] = (action, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
-        rows = [[InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]
+        rows = [cancel_row()]
         if action == ACTION_DECLINE:
-            text = f"🛠 «{name}» — отклоняем. Напиши причину партнёру или отправь без комментария."
+            again = "«Новый проект»" if str(reg.get(Registrations.REQUEST_TYPE) or "").startswith("New") \
+                else "«Обновить проект»"
+            text = (f"🛠 «{name}» — отклоняем. Дилеру уйдёт: «Заявка по проекту {name} не принята. "
+                    f"Если появятся новые данные — подай заново через {again}». "
+                    "Напиши причину или отправь без комментария.")
             tail = f"::{reply_id}" if reply_id else ""
             rows.insert(0, [InlineKeyboardButton("Отправить без комментария",
                                                  callback_data=f"{CB_ADMIN}{ACTION_DECLINE_BARE}:{reg_id}{tail}")])
         else:
-            text = f"🛠 «{name}»: напиши вопрос — он уйдёт партнёру, ответ придёт сюда."
+            text = (f"🛠 «{name}»: напиши вопрос. Дилеру уйдёт «❓ По проекту {name} нужна дополнительная "
+                    "информация: {твой текст}» с кнопкой «Ответить». Ответ придёт сюда.")
         await chat.send_message(text, reply_markup=InlineKeyboardMarkup(rows))
+        return
+
+    if action == ACTION_DECLINE_CANCEL:
+        # Отказ в повышении записан, а проект для уведомления не выбран — отменить отказ целиком
+        await asyncio.to_thread(repo.update_registration, reg_id, {
+            Registrations.DECISION: None, Registrations.DECISION_NOTE: "", Registrations.BOT_PROCESSED: ""})
+        await chat.send_message(f"🛠 Отказ по «{name}» отменён. Заявка снова ждёт решения — /inbox пришлёт её.")
         return
 
     if action == ACTION_COMPANY and len(parts) >= 3 and parts[1].isdigit() and int(parts[1]) < len(_COMPANY_KEYS):
@@ -819,7 +1200,23 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         if resume:
             await on_admin_callback(update, ctx, resume)   # дальше — следующий вопрос или само решение
         else:
-            await chat.send_message("🛠 Записал. Нажми решение по заявке ещё раз.")
+            await chat.send_message("🛠 Записал компанию. Вот заявка снова — реши её:")
+            reg[Registrations.PAYLOAD] = json.dumps(payload, ensure_ascii=False)
+            await send_request(ctx, chat.id, reg_id, reg)
+        return
+
+    if action == ACTION_NOTE_OK:
+        # Предложенный комментарий (принято этапом ниже): parts[1] — «1» отправить его, «0» — без комментария
+        saved = ctx.bot_data.setdefault("note_resume", {}).pop(reg_id, None)
+        pending.pop(chat.id, None)
+        await asyncio.to_thread(repo.clear_awaiting, reg_id)
+        if not saved:
+            await chat.send_message("🛠 Это предложение уже неактуально. Реши заявку:")
+            await send_request(ctx, chat.id, reg_id, reg)
+            return
+        if project_id == "1":
+            ctx.bot_data.setdefault("accept_notes", {})[reg_id] = saved["note"]
+        await on_admin_callback(update, ctx, saved["resume"])
         return
 
     target_now = (reg.get(Registrations.TARGET_PROJECT) or [""])[0]
@@ -844,22 +1241,25 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
             return
         projects = await asyncio.to_thread(repo.dedup_projects)
         found = dedup.find(_payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "", projects)
-        candidates = [(c.project_id, f"{c.name} ({', '.join(c.reasons)})") for c in found]
         tail = f":{reply_id}" if reply_id else ""
-        rows = [[InlineKeyboardButton(f"В проект: {pname[:40]}",
-                                      callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{pid}{tail}")]
-                for pid, pname in candidates]
+        rows = [[InlineKeyboardButton(f"В проект: {c.title[:50]}",
+                                      callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{c.project_id}{tail}")]
+                for c in found]
         rows.append([InlineKeyboardButton("Создать новый проект",
                                           callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-{tail}")])
-        rows.append([InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")])
-        hint = ("Похожие проекты в базе (по объекту, клиенту, адресу):" if candidates
-                else "Похожих проектов по объекту, клиенту и адресу не нашёл.")
+        rows.append(cancel_row())
+        if found:
+            hint = "Похожие проекты в базе:\n" + "\n".join(
+                f"• {escape(c.title)} — совпадает: {escape(', '.join(c.reasons))}" for c in found)
+        else:
+            hint = "Похожих проектов по объекту, клиенту и адресу не нашёл."
         await chat.send_message(f"🛠 «{name}»: в какой проект?\n{hint}", reply_markup=InlineKeyboardMarkup(rows))
         return
 
     if action == ACTION_DPICK and project_id:
         await asyncio.to_thread(repo.clear_awaiting, reg_id)
-        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id]})
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id],
+                                                                   Registrations.BOT_PROCESSED: ""})
         await _apply_now(ctx)
         return
 
@@ -883,7 +1283,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     if action == ACTION_DNEW:
         pending[chat.id] = (ACTION_DNEW, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DNEW, reply_id, chat.id)
-        await chat.send_message(f"🛠 «{name}»: напиши название нового проекта латиницей. Передумал — нажми меню внизу.",
+        await chat.send_message(f"🛠 «{name}»: напиши название нового проекта латиницей — {NAME_SAMPLE}.",
                                 reply_markup=name_markup(reg, reg_id, ACTION_DNEW, reply_id))
         return
 
@@ -893,6 +1293,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         if await _ask_rename(ctx, chat, reg_id, project_id, reply_id):
             return
         await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, _accept_note(ctx, reg_id), project_id)
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.BOT_PROCESSED: ""})
         if reply_id:
             await asyncio.to_thread(repo.close_reply, reply_id, project_id)
         await _apply_now(ctx)
@@ -900,14 +1301,28 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action in DOWNGRADE:
         rtype = reg.get(Registrations.REQUEST_TYPE)
+        tail = f":{reply_id}" if reply_id else ""
+        resume = f"{CB_ADMIN}{DOWNGRADE[action]}:{reg_id}:{project_id or '-'}{tail}"
         if rtype in _PRE_OF:
             await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.REQUEST_TYPE: _PRE_OF[rtype]})
             missing = "; ".join(w.split(" — «")[0] for w in weak_answers(_payload(reg)))
-            notes = ctx.bot_data.setdefault("accept_notes", {})
             note = "Принято как предрегистрация." + (f" Для регистрации не хватает: {missing}." if missing else "")
-            notes[reg_id] = (notes[reg_id] + "\n" if notes.get(reg_id) else "") + note
-        tail = f":{reply_id}" if reply_id else ""
-        await on_admin_callback(update, ctx, f"{CB_ADMIN}{DOWNGRADE[action]}:{reg_id}:{project_id or '-'}{tail}")
+            prev = ctx.bot_data.setdefault("accept_notes", {}).pop(reg_id, "")
+            note = f"{prev}\n{note}" if prev else note
+            # Правило 1.4: автокомментарий дилеру — только после просмотра
+            ctx.bot_data.setdefault("note_resume", {})[reg_id] = {"note": note, "resume": resume}
+            pending[chat.id] = ("notecont", reg_id, reply_id)
+            await asyncio.to_thread(repo.set_awaiting, reg_id, "notecont", reply_id, chat.id)
+            await chat.send_message(
+                f"🛠 Принимаем «{name}» как предрегистрацию. Дилеру уйдёт комментарий:\n<i>{escape(note)}</i>\n"
+                "Отправить его, без комментария — или напиши свой текст.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Отправить этот комментарий", callback_data=f"{CB_ADMIN}{ACTION_NOTE_OK}:{reg_id}:1")],
+                    [InlineKeyboardButton("Без комментария", callback_data=f"{CB_ADMIN}{ACTION_NOTE_OK}:{reg_id}:0")],
+                    cancel_row()]))
+            return
+        await on_admin_callback(update, ctx, resume)
         return
 
     if action == ACTION_NEW:
@@ -918,12 +1333,16 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         pending[chat.id] = (ACTION_NEW, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id, chat.id)
         await chat.send_message(
-            f"🛠 «{name}»: напиши название нового проекта латиницей, как оно будет в Projects "
-            "(образец: PVSMART InsaitBC FL3 — клиент, объект с кодом типа, этаж)"
-            + (" — или возьми вариант кнопкой" if dedup.latin_name(_payload(reg)) else "")
-            + ". Передумал — просто нажми меню внизу.",
+            f"🛠 «{name}»: напиши название нового проекта латиницей — {NAME_SAMPLE}"
+            + (" — или возьми вариант кнопкой" if dedup.latin_name(_payload(reg)) else "") + ".",
             reply_markup=name_markup(reg, reg_id, ACTION_NEW, reply_id),
         )
+
+
+NAME_SAMPLE = "образец: PVSMART InsaitBC FL3 (клиент, объект с кодом типа, этаж)"
+# Вин. падеж для «Принимаем как …», «Точно подтверждаешь …?»
+_ACC = {"уведомление": "уведомление", "предрегистрация": "предрегистрацию", "регистрация": "регистрацию",
+        "переход на предрегистрацию": "переход на предрегистрацию", "переход на регистрацию": "переход на регистрацию"}
 
 
 async def _confirm_weak(chat, reg: dict, force_action: str, reg_id: str, project_id: str, reply_id: str,
@@ -937,19 +1356,20 @@ async def _confirm_weak(chat, reg: dict, force_action: str, reg_id: str, project
     weak = weak_answers(_payload(reg))
     if not weak:
         return False
+    what = _ACC.get(REQUEST_LABELS.get(rtype, ""), "статус")
     data = f"{CB_ADMIN}{force_action}:{reg_id}:{project_id}" + (f":{reply_id}" if reply_id else "")
-    rows = [[InlineKeyboardButton(f"✅ Да, подтверждаю {REQUEST_LABELS.get(rtype, 'статус')}", callback_data=data)]]
+    rows = [[InlineKeyboardButton(f"✅ Да, подтверждаю {what}", callback_data=data)]]
     if rtype in _PRE_OF:
         down = f"{CB_ADMIN}{_DOWN_OF[force_action]}:{reg_id}:{project_id}" + (f":{reply_id}" if reply_id else "")
         rows.append([InlineKeyboardButton("⬇️ Принять как предрегистрацию", callback_data=down)])
     rows += [[InlineKeyboardButton("✏️ Запросить у дилера", callback_data=f"{CB_ADMIN}{ACTION_INFO}:{reg_id}")],
-            [InlineKeyboardButton("Отмена", callback_data=f"{CB_ADMIN}{ACTION_CANCEL}:")]]
+             cancel_row()]
     name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
     head = (f"🛠 «{name}» → новый проект <b>{escape(new_name)}</b> (референс присвоится при создании)"
             if new_name else f"🛠 «{name}»")
     await chat.send_message(
-        f"{head}: не заполнены поля:\n" + "\n".join(f"• {escape(w)}" for w in weak)
-        + f"\n\nТочно подтверждаешь {REQUEST_LABELS.get(rtype, 'статус')}?",
+        f"{head}: дилер не ответил на вопросы:\n" + "\n".join(f"• {escape(w)}" for w in weak)
+        + f"\n\nТочно подтверждаешь {what}?",
         reply_markup=InlineKeyboardMarkup(rows), parse_mode="HTML")
     return True
 
@@ -968,10 +1388,11 @@ async def _ask_rename(ctx: ContextTypes.DEFAULT_TYPE, chat, reg_id: str, project
     suggestion = dedup.to_latin(name)
     ctx.bot_data.setdefault("rename_suggest", {})[reg_id] = suggestion
     markup = InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ {suggestion[:60]}",
-                                                         callback_data=f"{CB_ADMIN}{ACTION_RENAME}:{reg_id}")]])
+                                                         callback_data=f"{CB_ADMIN}{ACTION_RENAME}:{reg_id}")],
+                                   cancel_row()])
     await chat.send_message(
-        f"🛠 Проект «{escape(name)}»: {problem}. Напиши новое название — "
-        "или возьми транслит кнопкой. Передумал — нажми меню внизу.",
+        f"🛠 Проект «{escape(name)}»: {problem}. Напиши новое название ({NAME_SAMPLE}) — "
+        "или возьми транслит кнопкой.",
         reply_markup=markup, parse_mode="HTML")
     return True
 
@@ -994,12 +1415,14 @@ def _accept_note(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> str:
     return ctx.bot_data.setdefault("accept_notes", {}).pop(reg_id, "")
 
 
-def name_markup(reg: dict, reg_id: str, action: str, reply_id: str = "") -> InlineKeyboardMarkup | None:
+def name_markup(reg: dict, reg_id: str, action: str, reply_id: str = "") -> InlineKeyboardMarkup:
+    rows = []
     suggestion = dedup.latin_name(_payload(reg))
-    if not suggestion:
-        return None
-    data = f"{CB_ADMIN}{ACTION_NAME}:{reg_id}:{action}" + (f":{reply_id}" if reply_id else "")
-    return InlineKeyboardMarkup([[InlineKeyboardButton(f"✅ {suggestion}", callback_data=data)]])
+    if suggestion:
+        data = f"{CB_ADMIN}{ACTION_NAME}:{reg_id}:{action}" + (f":{reply_id}" if reply_id else "")
+        rows.append([InlineKeyboardButton(f"✅ {suggestion}", callback_data=data)])
+    rows.append(cancel_row())
+    return InlineKeyboardMarkup(rows)
 
 
 async def create_named_project(ctx: ContextTypes.DEFAULT_TYPE, action: str, reg_id: str, reply_id: str,
@@ -1017,9 +1440,11 @@ async def create_named_project(ctx: ContextTypes.DEFAULT_TYPE, action: str, reg_
     project_id = await asyncio.to_thread(repo.create_project, name)
     ctx.bot_data.setdefault("created_projects", set()).add(project_id)  # для итога «Проект создан»
     if action == ACTION_DNEW:
-        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id]})
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.TARGET_PROJECT: [project_id],
+                                                                   Registrations.BOT_PROCESSED: ""})
     else:
         await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT, _accept_note(ctx, reg_id), project_id)
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.BOT_PROCESSED: ""})
         if reply_id:
             await asyncio.to_thread(repo.close_reply, reply_id, project_id)
     await _apply_now(ctx)
@@ -1031,35 +1456,48 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         return False
     pending = _pending(ctx)
     repo = ctx.bot_data["repo"]
-    item = pending.pop(update.effective_chat.id, None)
+    chat = update.effective_chat
+    item = pending.pop(chat.id, None)
     if not item and resume:
-        # Бот мог перезапуститься, пока админ печатал, — берём ожидание из Airtable
-        item = await asyncio.to_thread(repo.find_awaiting, update.effective_chat.id)
+        # Бот мог перезапуститься, пока админ печатал, — берём ожидание из памяти бота или Airtable
+        saved = (await memo.get(ctx.bot_data, "waits", {})).get(str(chat.id))
+        item = tuple(saved) if saved else await asyncio.to_thread(repo.find_awaiting, chat.id)
     if not item:
         return False  # бот ничего не ждёт — текст идёт дальше, в обычный диалог
     action, reg_id, reply_id = item
-    chat = update.effective_chat
+    if action in _MEMO_ACTIONS and text.strip():
+        await memo.pop(ctx.bot_data, "waits", str(chat.id))
     if action == ACTION_CALL_OTHER:
         if not text.strip():
             pending[chat.id] = item
-            await chat.send_message("🛠 Пустой текст — напиши время.")
+            await chat.send_message("🛠 Пустой текст — напиши время звонка.", reply_markup=InlineKeyboardMarkup([cancel_row()]))
             return True
         reg = await asyncio.to_thread(repo.registration_fields, reg_id)
         _, value, name = _call_text(reg, int(reply_id or 0))
         who = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
-        sent = await _tell_partner(ctx, reg, f"📞 По звонку по «{escape(name)}» ({escape(value)}) {who} предлагает "
-                                             f"другое время: <b>{escape(text.strip())}</b>. Если не подходит — "
-                                             f"напиши {who} напрямую.")
-        await chat.send_message("🛠 Партнёру отправил." if sent else "🛠 ⚠️ Партнёра нет в боте — не отправил.")
+        await memo.set_item(ctx.bot_data, "calls_proposed", f"{reg_id}:{reply_id or 0}", text.strip())
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Подходит", callback_data=f"{CB_DEALER_CALL}ok:{reg_id}:{reply_id or 0}"),
+            InlineKeyboardButton("🕑 Предложить другое", callback_data=f"{CB_DEALER_CALL}other:{reg_id}:{reply_id or 0}"),
+        ]])
+        sent = await _tell_partner(ctx, reg, f"📞 Звонок по «{escape(name)}»: вместо {escape(value)} {who} предлагает "
+                                             f"<b>{escape(text.strip())}</b>. Подходит?", markup)
+        await chat.send_message("🛠 Дилеру отправил — ответ придёт сюда." if sent
+                                else "🛠 ⚠️ У дилера нет Telegram в базе — не отправил.")
         return True
     if action in _ROLLBACK:
         reason = text.strip()
         if not reason:
             pending[chat.id] = item
-            await chat.send_message("🛠 Пустой текст — напиши причину.")
+            await chat.send_message("🛠 Пустой текст — напиши причину.", reply_markup=InlineKeyboardMarkup([cancel_row()]))
             return True
         who = routing.who_by_chat(ctx.bot_data, chat.id)
         await ctx.bot_data["rollback_status"](ctx.application, reg_id, reply_id, _ROLLBACK[action], reason, who)
+        return True
+    if action in (ACTION_UP_KEEP, ACTION_UP_DENY):
+        project_id, _, person_id = reg_id.partition(":")
+        await step_decision(ctx, chat, project_id, person_id, reply_id,
+                            "deny" if action == ACTION_UP_DENY else "keep", text.strip())
         return True
     _mark_decider(ctx, update, reg_id)
     if action != ACTION_REMIND_USER:
@@ -1067,22 +1505,29 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     text = text.strip()
     if not text and action != ACTION_DECLINE:   # отказ — можно без комментария
         pending[chat.id] = item
-        await chat.send_message("🛠 Пустой текст — напиши ещё раз.")
+        await chat.send_message("🛠 Пустой текст — напиши ещё раз.", reply_markup=InlineKeyboardMarkup([cancel_row()]))
         return True
     if action == ACTION_REMIND_USER:
         await ctx.bot_data["preview_reminder"](update, ctx, text)
         return True
+    if action == "notecont":
+        saved = ctx.bot_data.setdefault("note_resume", {}).pop(reg_id, None)
+        if saved:
+            ctx.bot_data.setdefault("accept_notes", {})[reg_id] = text
+            await on_admin_callback(update, ctx, saved["resume"])
+        return True
     if action == ACTION_DPICK:
         # Ждём выбор проекта кнопкой, а не текст
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id, chat.id)
-        await chat.send_message("🛠 Выбери проект кнопкой под сообщением об отказе.")
+        await chat.send_message("🛠 Здесь нужен выбор проекта кнопкой — в сообщении «в какой проект?» выше.")
         return True
     if action in (ACTION_DNEW, ACTION_NEW, ACTION_RENAME):
         problem = dedup.name_problem(text)
         if problem:
             pending[chat.id] = item
             await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
-            await chat.send_message(f"🛠 {problem}. Напиши название ещё раз.")
+            await chat.send_message(f"🛠 {problem}. Напиши название ещё раз — {NAME_SAMPLE}.",
+                                    reply_markup=InlineKeyboardMarkup([cancel_row()]))
             return True
         if action == ACTION_RENAME:
             await _rename_and_merge(ctx, reg_id, reply_id, text)
@@ -1094,31 +1539,34 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         ctx.bot_data.setdefault("accept_notes", {})[reg_id] = text
         await on_admin_callback(update, ctx, f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}" + (f"::{reply_id}" if reply_id else ""))
         return True
-    else:
-        decision = Decision.DECLINE if action == ACTION_DECLINE else Decision.NEED_INFO
-        reg = await asyncio.to_thread(repo.registration_fields, reg_id)
-        if (decision == Decision.DECLINE and reg.get(Registrations.REQUEST_TYPE) in UPGRADE_REQUESTS
-                and not reg.get(Registrations.TARGET_PROJECT)):
-            # Отказ всё равно фиксирует плейсмент уведомлением — сначала выбрать проект
-            await asyncio.to_thread(repo.set_decision, reg_id, decision, text)
-            await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id, chat.id)
-            found = await merge_candidates(repo, reg)
-            rows = [[InlineKeyboardButton(f"🔗 В проект: {name[:40]}",
-                                          callback_data=f"{CB_ADMIN}{ACTION_DPICK}:{reg_id}:{pid}")]
-                    for pid, name in found]
-            rows.append([InlineKeyboardButton("🆕 Новый проект", callback_data=f"{CB_ADMIN}{ACTION_DNEW}:{reg_id}:-")])
-            await chat.send_message(
-                "🛠 Отказ записан. Плейсмент фиксируется уведомлением — в какой проект?",
-                reply_markup=InlineKeyboardMarkup(rows),
-            )
-            return True
-        if decision == Decision.NEED_INFO:
-            # Повторный запрос: очищаем отметку, чтобы бот отправил новый текст
-            await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.BOT_PROCESSED: ""})
+    decision = Decision.DECLINE if action == ACTION_DECLINE else Decision.NEED_INFO
+    reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+    if (decision == Decision.DECLINE and reg.get(Registrations.REQUEST_TYPE) in UPGRADE_REQUESTS
+            and not reg.get(Registrations.TARGET_PROJECT)):
+        # Отказ всё равно фиксирует плейсмент уведомлением — сначала выбрать проект
         await asyncio.to_thread(repo.set_decision, reg_id, decision, text)
-        if reply_id:
-            reg = await asyncio.to_thread(repo.registration_fields, reg_id)
-            target = reg.get(Registrations.TARGET_PROJECT) or []
-            await asyncio.to_thread(repo.close_reply, reply_id, target[0] if target else None)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DPICK, reply_id, chat.id)
+        found = await merge_candidates(repo, reg)
+        rows = [[InlineKeyboardButton(f"🔗 В проект: {title[:50]}",
+                                      callback_data=f"{CB_ADMIN}{ACTION_DPICK}:{reg_id}:{pid}")]
+                for pid, title in found]
+        rows.append([InlineKeyboardButton("🆕 Новый проект", callback_data=f"{CB_ADMIN}{ACTION_DNEW}:{reg_id}:-")])
+        rows.append([InlineKeyboardButton("Отмена — не отказывать",
+                                          callback_data=f"{CB_ADMIN}{ACTION_DECLINE_CANCEL}:{reg_id}")])
+        name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+        await chat.send_message(
+            f"🛠 Отказ по «{name}» записан. Отказ в повышении всё равно фиксирует плейсмент уведомлением — "
+            "в какой проект?",
+            reply_markup=InlineKeyboardMarkup(rows),
+        )
+        return True
+    if decision == Decision.NEED_INFO:
+        # Повторный запрос: очищаем отметку, чтобы бот отправил новый текст
+        await asyncio.to_thread(repo.update_registration, reg_id, {Registrations.BOT_PROCESSED: ""})
+    await asyncio.to_thread(repo.set_decision, reg_id, decision, text)
+    if reply_id:
+        reg = await asyncio.to_thread(repo.registration_fields, reg_id)
+        target = reg.get(Registrations.TARGET_PROJECT) or []
+        await asyncio.to_thread(repo.close_reply, reply_id, target[0] if target else None)
     await _apply_now(ctx)
     return True

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from html import escape
 
 from .airtable_ids import Decision, Partners, Projects, Registrations, RegStatus, RequestType
+from .labels import MISSING_RU
 
 PPR_NOTIFIED, PPR_PRE, PPR_REG = "Notification", "Pre-registration", "Registration"
 STATUS_FIELD = {
@@ -218,7 +219,7 @@ def change_lines(project: dict, moved: dict) -> list[str]:
         fmt = lambda v: f"{str(v)[5:7]}.{str(v)[:4]}"  # noqa: E731
         lines.append(f"📅 Размещение заказа: {fmt(old_order)} → {fmt(moved[Projects.EXPECTED_ORDER_DATE])}")
     if Projects.PPR_TRACK in moved and not _empty(project.get(Projects.PPR_TRACK)):
-        lines.append("📈 Трек: Simplified → Full")
+        lines.append("📈 Схема: упрощённая → полная (объём больше 30 000 € по прайсу)")
     return lines
 
 
@@ -255,8 +256,19 @@ _FIELD_NAMES.update({Projects.EXPECTED_ORDER_DATE: "Expected Order Date", Projec
                      Projects.DOSSIER_LINKS: "Dossier Links"})
 
 
+FIELD_RU = {
+    "Object Name": "объект", "Object Part": "часть объекта", "Country": "страна", "City": "город",
+    "Object Address": "адрес", "Project Stage": "стадия", "EXW Potential": "объём", "AW Alternatives":
+    "альтернативы Andreu World", "Contact Level": "уровень контакта с клиентом",
+    "Parallel Registrations": "заявлено ли у других производителей", "Quotation / Proforma №": "номер квотации",
+    "PPR Track": "схема", "Expected Order Date": "месяц размещения заказа", "Dossier Files": "материалы (файлы)",
+    "Dossier Links": "материалы (ссылки)",
+}
+
+
 def _names(updates: dict) -> list[str]:
-    return [_FIELD_NAMES.get(fid, fid) for fid in updates]
+    return [FIELD_RU.get(_FIELD_NAMES.get(fid, ""), "другие данные") for fid in updates
+            if fid not in (Projects.STATUS_CONFIRMED, Projects.NOTIFIED, Projects.PRE_REGISTERED, Projects.REGISTERED)]
 
 
 def processed_mark(decision: str, blocked: bool = False) -> str:
@@ -296,43 +308,66 @@ class Plan:
     quote: bool = False
     # Отказ в пред/регистрации, плейсмент зафиксирован уведомлением
     declined_upgrade: bool = False
+    # Почему решение не прошло (для кнопок проверяющего): no_project / no_status / missing / reg_taken /
+    # pre_full / no_author / no_note
+    block_kind: str = ""
+    # dealer_text — готовый итоговый текст, карточкой не заменять (выигран / проигран)
+    final_text: bool = False
 
 
 def _note(reg: dict) -> str:
     note = (reg.get(Registrations.DECISION_NOTE) or "").strip()
-    return f"\n\nКомментарий: {escape(note)}" if note else ""
+    return f"\n\n💬 Комментарий: {escape(note)}" if note else ""
 
 
-def _blocked(reg: dict, decision: str, reason: str, ask_text: str | None = None) -> Plan:
-    name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+def name_ref(project: dict | None, fallback: str = "") -> str:
+    """«PVSMART InsaitBC FL3 AW260250» — название и референс; без проекта — название из заявки."""
+    if not project:
+        return fallback or "без названия"
+    return " ".join(x for x in ((project.get(Projects.NAME) or fallback or "").strip(),
+                                str(project.get(Projects.PPR_REF) or "").strip()) if x)
+
+
+def missing_names_ru(missing: list[str], detailed: bool = False) -> list[str]:
+    """Имена полей из ppr_missing → по-русски."""
+    out = []
+    for key in missing:
+        row = next((r for r in MISSING_RU if key.startswith(r[0])), None)
+        out.append(row[2] if detailed else row[1] if row else "другие данные")
+    return out
+
+
+def _blocked(reg: dict, decision: str, kind: str, reason: str, ask_text: str | None = None,
+             project: dict | None = None) -> Plan:
+    name = name_ref(project, reg.get(Registrations.DEALER_PROJECT_NAME) or "")
     first_time = reg.get(Registrations.BOT_PROCESSED) != processed_mark(decision, blocked=True)
     return Plan(
         registration_updates={Registrations.BOT_PROCESSED: processed_mark(decision, blocked=True)},
-        admin_text=f"🛠 ⚠️ Заявка «{escape(name)}»: {reason}" if first_time else None,
+        admin_text=f"🛠 ⚠️ Решение по «{escape(name)}» не прошло: {reason}" if first_time else None,
         blocked=True,
         ask_text=ask_text,
+        block_kind=kind,
     )
 
 
-# Недостающее для статуса → как спросить дилера
-ASK_RU = {
-    "Contact Level": "подтверждение контакта с клиентом (переписка, контакт или готовность к совместной встрече)",
-    "Dossier Files": "файлы досье — визуализации, планировки, список серий",
-    "Expected Order Date": "месяц размещения заказа",
-    "EXW Potential": "уточнённый объём",
-    "Object Address": "адрес объекта",
-    "Specifier": "архитектурное бюро",
-    "AW Alternatives": "декларация об альтернативах",
-    "Parallel Registrations": "заявлен ли проект у других производителей",
-    "Quotation / Proforma №": "номер квотации или проформы",
-}
+def ask_text(status: str, missing: list[str], project_title: str = "") -> str:
+    """Готовый запрос дилеру по списку недостающего (проверяющий видит его до отправки)."""
+    where = f" по проекту {project_title}" if project_title else ""
+    lines = [f"Чтобы дать {STATUS_LABEL[status]}{where}, не хватает:"]
+    lines += [f"• {m}" for m in missing_names_ru(missing, detailed=True)]
+    lines.append("Добавь через «Обновить проект» → «Дополнить материалы» или нажми «Ответить» под этим сообщением.")
+    return "\n".join(lines)
 
 
-def ask_text(status: str, missing: list[str]) -> str:
-    """Готовый запрос дилеру по списку недостающего (кнопка «Запросить у дилера»)."""
-    lines = [f"Чтобы дать {STATUS_LABEL[status]}, не хватает:"]
-    lines += [f"• {ASK_RU.get(m, m)}" for m in missing]
-    lines.append("Добавь через «Обновить проект» → «Дополнить материалы» или ответь здесь.")
+def _decline_text(reg: dict, project: dict | None, note: str) -> str:
+    """Отказ: что не принято и что можно сделать дальше."""
+    title = name_ref(project, reg.get(Registrations.DEALER_PROJECT_NAME) or "")
+    rtype = reg.get(Registrations.REQUEST_TYPE) or ""
+    again = ("«Новый проект»" if rtype.startswith("New") else "«Обновить проект»")
+    lines = [f"Заявка по проекту <code>{escape(title)}</code> не принята."]
+    if note:
+        lines.append(f"💬 Комментарий: {escape(note)}")
+    lines.append(f"Если появятся новые данные — подай заново через {again}.")
     return "\n".join(lines)
 
 
@@ -346,14 +381,15 @@ def plan(reg: dict, project: dict | None) -> Plan:
 
     if decision in (Decision.DECLINE, Decision.NEED_INFO):
         if not note and decision == Decision.NEED_INFO:   # отказ можно и без комментария
-            return _blocked(reg, decision, f"для «{decision}» заполни Decision Note — он уходит дилеру.")
+            return _blocked(reg, decision, "no_note", "для запроса информации нужен текст вопроса дилеру.",
+                            project=project)
         if decision == Decision.DECLINE and request_type in UPGRADE_TYPES:
             # Отказ в пред/регистрации: любое обращение всё равно фиксируется уведомлением
             if project is None:
                 return _blocked(
-                    reg, decision,
-                    "отказ в пред/регистрации фиксирует плейсмент уведомлением — нужен проект: "
-                    "поставь Target Project или выбери проект на карточке.",
+                    reg, decision, "no_project",
+                    "не выбран проект. Отказ в повышении всё равно фиксирует плейсмент уведомлением — "
+                    "выбери, в каком проекте.",
                 )
             as_notice = {**reg, Registrations.DECISION: Decision.ACCEPT_MERGE,
                          Registrations.REG_STATUS: RegStatus.NOTIFICATION, Registrations.DECISION_NOTE: ""}
@@ -362,17 +398,19 @@ def plan(reg: dict, project: dict | None) -> Plan:
                 return pl
             pl.registration_updates = {**done, Registrations.REG_STATUS: RegStatus.NOTIFICATION}
             pl.declined_upgrade = True
-            pl.dealer_text = (f"По запросу «{escape(dealer_name)}» предрегистрация не подтверждена, "
-                              f"плейсмент зафиксирован как уведомление.{_note(reg)}")
+            pl.dealer_text = _decline_text(reg, project, note)   # заменяется карточкой отказа
             return pl
         if decision == Decision.DECLINE:
             return Plan(
                 registration_updates={**done, Registrations.REG_STATUS: RegStatus.DECLINED},
-                dealer_text=f"По запросу «{escape(dealer_name)}»: отказ.{_note(reg)}",
+                dealer_text=_decline_text(reg, project, note),
+                project_name=name_ref(project, dealer_name),
             )
         return Plan(
             registration_updates=done,
-            dealer_text=f"По запросу «{escape(dealer_name)}» нужна дополнительная информация.{_note(reg)}",
+            dealer_text=(f"❓ По проекту <code>{escape(name_ref(project, dealer_name))}</code> "
+                         f"нужна дополнительная информация:\n{escape(note)}\n\n"
+                         "Ответь кнопкой «Ответить» — текстом, голосом или файлами."),
             reply_button=True,
         )
 
@@ -380,11 +418,7 @@ def plan(reg: dict, project: dict | None) -> Plan:
         return Plan()
 
     if project is None:
-        return _blocked(
-            reg, decision,
-            "не указан Target Project. Перенос в Projects пока ручной: создай или найди проект "
-            "и поставь его в Target Project — бот продолжит сам.",
-        )
+        return _blocked(reg, decision, "no_project", "не выбран проект, куда принять заявку.")
     project_name = project.get(Projects.NAME) or dealer_name
     # Дилеру — объект его словами; имя в базе (латиницей) — в скобках, если отличается
     obj = f"«{escape(dealer_name)}»"
@@ -420,12 +454,9 @@ def plan(reg: dict, project: dict | None) -> Plan:
             project_name=project_name, quote=True, changes=change_lines(project or {}, moved),
         )
 
-    # Выигрыш и проигрыш одного дилера — не повод менять проект: только ответ
+    # Выигран / проигран: итог записывается в проект (Status, Probability, номер заказа, причина)
     if request_type in (RequestType.UPDATE_WON, RequestType.UPDATE_LOST):
-        return Plan(
-            registration_updates=done,
-            dealer_text=f"По запросу {obj} информацию приняли.{_note(reg)}",
-        )
+        return _won_lost(reg, project, request_type, done, log_lines)
     moved, provided = transfers(reg, project)
     changes = change_lines(project, moved)
     log_lines = log_lines + _log_extras(project, moved, payload_of(reg))
@@ -446,22 +477,22 @@ def plan(reg: dict, project: dict | None) -> Plan:
     reg_status = reg.get(Registrations.REG_STATUS)
     status = reg_status if reg_status in STATUS_FIELD else REQUEST_STATUS.get(request_type)
     if status is None:
-        return _blocked(reg, decision, "не понятно, какой статус дать — выставь Reg Status.")
+        return _blocked(reg, decision, "no_status", "непонятно, какой статус дать.", project=project)
 
     # Статус — менеджеру (People из Submitted By), компания получает скидку через него
     managers = reg.get(Registrations.SUBMITTED_BY) or []
     if not managers:
-        return _blocked(reg, decision, "в заявке не указан Submitted By — некому ставить статус.")
+        return _blocked(reg, decision, "no_author",
+                        "в заявке не указан менеджер дилера — некому поставить статус.", project=project)
     dealer = managers[0]
 
     missing = ppr_missing(project, status, moved, provided)
     if missing:
         return _blocked(
-            reg, decision,
-            f"нельзя поставить {STATUS_FIELD_NAME[status]} в «{escape(project_name)}»: "
-            f"не хватает {escape('; '.join(missing))} — ни в проекте, ни в заявке.\n"
-            "Запросить у дилера — кнопкой ниже: готовый текст или свой.",
-            ask_text=ask_text(status, missing),
+            reg, decision, "missing",
+            f"для статуса «{STATUS_RU[status]}» не хватает: "
+            f"{escape(', '.join(missing_names_ru(missing)))} — ни в проекте, ни в заявке.",
+            ask_text=ask_text(status, missing, name_ref(project, dealer_name)), project=project,
         )
 
     notified = list(project.get(Projects.NOTIFIED) or [])
@@ -471,10 +502,9 @@ def plan(reg: dict, project: dict | None) -> Plan:
     others_pre = [c for c in pre if c != dealer]
 
     if status == PPR_REG and others_registered:
-        return _blocked(
-            reg, decision,
-            f"в «{escape(project_name)}» уже есть Registered — регистрация только у одного партнёра.",
-        )
+        return _blocked(reg, decision, "reg_taken",
+                        "регистрация на проекте уже у другого партнёра — она бывает только у одного.",
+                        project=project)
 
     updates: dict = dict(moved)
     broadcast: list[str] = []
@@ -483,11 +513,9 @@ def plan(reg: dict, project: dict | None) -> Plan:
             updates[Projects.NOTIFIED] = notified + [dealer]
     elif status == PPR_PRE:
         if dealer not in pre and len(pre) >= MAX_PRE_REGISTERED:
-            return _blocked(
-                reg, decision,
-                f"в «{escape(project_name)}» уже {len(pre)} предрегистрации — по правилам не больше трёх. "
-                "Можно дать уведомление: Reg Status → Notification.",
-            )
+            return _blocked(reg, decision, "pre_full",
+                            f"на проекте уже {len(pre)} предрегистрации — по правилам не больше трёх.",
+                            project=project)
         if dealer not in pre:
             pre = pre + [dealer]
             updates[Projects.PRE_REGISTERED] = pre
@@ -537,7 +565,54 @@ def plan(reg: dict, project: dict | None) -> Plan:
         transferred=_names(moved),
         dealer_text=text + _note(reg),
         broadcast_people=broadcast,
-        broadcast_text=(f"🔎 По объекту «{escape(project_name)}» появилась предрегистрация другого партнёра.\n"
-                        "Чтобы не потерять приоритет — дополни данные по проекту или запроси предрегистрацию."
-                        if broadcast else None),
+        broadcast_text=(f"🔎 На объекте <code>{escape(name_ref(project, dealer_name))}</code> другой партнёр "
+                        "получил предрегистрацию. Чтобы сохранить приоритет — дополни данные или запроси "
+                        "предрегистрацию." if broadcast else None),
     )
+
+
+STATUS_RU = {PPR_NOTIFIED: "уведомление", PPR_PRE: "предрегистрация", PPR_REG: "регистрация"}
+
+
+def _won_lost(reg: dict, project: dict, request_type: str, done: dict, log_lines: list[str]) -> Plan:
+    """Р6: выигран → Won, 100 %, номер заказа; проигран → Lost, 0 %, причина. Дилеру — короткое «Записали»."""
+    payload = payload_of(reg)
+    title = escape(name_ref(project, reg.get(Registrations.DEALER_PROJECT_NAME) or ""))
+    updates: dict = {}
+    lines = list(log_lines)
+    if request_type == RequestType.UPDATE_WON:
+        updates = {Projects.STATUS: "Won", Projects.PROBABILITY: "100"}
+        order = str(payload.get("Order / Proforma №") or "").strip()
+        if order:
+            current = str(project.get(Projects.QUOTATION) or "").strip()
+            if order not in current:
+                updates[Projects.QUOTATION] = f"{current} / {order}" if current else order
+            lines.append(f"Проект выигран, заказ / проформа № {order}")
+        else:
+            lines.append("Проект выигран")
+        text = f"🏆 Записали: проект <code>{title}</code> выигран. Спасибо!"
+        changes = ["🏆 Проект: выигран, вероятность 100 %" + (f", заказ № {escape(order)}" if order else "")]
+    else:
+        updates = {Projects.STATUS: "Lost", Projects.PROBABILITY: "0"}
+        reason_code = payload.get("Lost Reason")
+        reason = LOST_REASON_RU.get(reason_code) if reason_code else None
+        if reason_code in LOST_REASON_RU:
+            updates[Projects.LOST_REASON] = reason_code
+        if not reason:
+            free = [ln.split(": ", 1)[1] for ln in lines if ln.startswith("Причина проигрыша")]
+            reason = free[0] if free else "не указана"
+        if not any(ln.startswith("Причина проигрыша") for ln in lines):
+            lines.append(f"Причина проигрыша: {reason}")
+        text = f"Записали: проект <code>{title}</code> проигран, причина — {escape(reason)}."
+        changes = [f"✖️ Проект: проигран, вероятность 0 %, причина — {escape(reason)}"]
+    return Plan(project_updates=updates, registration_updates=done, dealer_text=text + _note(reg),
+                final_text=True, log_lines=lines, changes=changes,
+                project_name=name_ref(project, reg.get(Registrations.DEALER_PROJECT_NAME) or ""))
+
+
+LOST_REASON_RU = {
+    "Lost to equal competitor": "ушли к равному конкуренту",
+    "Lost to cheaper offer": "ушли к более дешёвому предложению",
+    "No budget": "нет бюджета",
+    "Project cancelled": "проект отменён",
+}

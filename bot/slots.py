@@ -53,6 +53,11 @@ def zone_name(country: str | None) -> str:
     return LOCAL_TZ[country][1] if country in LOCAL_TZ else "Валенсия"
 
 
+def zone_label(country: str | None) -> str:
+    """Для текста дилеру: «время Мск» или «время по Валенсии (Испания)», если страна не из списка."""
+    return f"время {LOCAL_TZ[country][1]}" if country in LOCAL_TZ else "время по Валенсии (Испания)"
+
+
 def valencia_window(idx: int) -> str:
     start, end = WINDOWS[idx]
     return f"{start:%H:%M}–{end:%H:%M}"
