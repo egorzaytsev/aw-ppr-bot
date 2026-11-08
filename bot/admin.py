@@ -171,7 +171,7 @@ def upgrade_markup(project_id: str, person_id: str, target: str) -> InlineKeyboa
     ])
 
 
-_SHORT_STATUS = {"reg": "рег.", "pre": "предрег.", "notified": "увед."}
+_SHORT_STATUS = {"reg": "регистрация", "pre": "предрегистрация", "notified": "уведомление"}
 
 
 def rollback_markup(project_id: str, person_id: str) -> InlineKeyboardMarkup:
@@ -188,7 +188,7 @@ async def _upgrade_pairs(ctx: ContextTypes.DEFAULT_TYPE) -> list[tuple]:
         f = r["fields"]
         if f.get(Projects.PPR_TRACK) == "Simplified (<30k)":
             continue
-        ref, pname = f.get(Projects.PPR_REF) or "", (f.get(Projects.NAME) or "")[:24]
+        ref, pname = f.get(Projects.PPR_REF) or "", (f.get(Projects.NAME) or "")[:30]
         rows = [(p, "reg") for p in f.get(Projects.REGISTERED) or []]
         rows += [(p, "pre") for p in f.get(Projects.PRE_REGISTERED) or []]
         rows += [(p, "notified") for p in f.get(Projects.NOTIFIED) or []]
@@ -215,7 +215,7 @@ async def _show_upgrade_list(chat, ctx: ContextTypes.DEFAULT_TYPE, page: int) ->
         return
     pages = (len(pairs) + UPGRADE_PAGE - 1) // UPGRADE_PAGE
     page = max(0, min(page, pages - 1))
-    rows = [[InlineKeyboardButton(label[:60], callback_data=f"{CB_ADMIN}{ACTION_UP_PICK}:{pid}:{person}")]
+    rows = [[InlineKeyboardButton(label[:64], callback_data=f"{CB_ADMIN}{ACTION_UP_PICK}:{pid}:{person}")]
             for pid, person, _, label in pairs[page * UPGRADE_PAGE:(page + 1) * UPGRADE_PAGE]]
     nav = []
     if page > 0:
@@ -1172,9 +1172,14 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         if action == ACTION_DECLINE:
             again = "«Новый проект»" if str(reg.get(Registrations.REQUEST_TYPE) or "").startswith("New") \
                 else "«Обновить проект»"
-            text = (f"🛠 «{name}» — отклоняем. Дилеру уйдёт: «Заявка по проекту {name} не принята. "
-                    f"Если появятся новые данные — подай заново через {again}». "
-                    "Напиши причину или отправь без комментария.")
+            if reg.get(Registrations.REQUEST_TYPE) in UPGRADE_REQUESTS:
+                text = (f"🛠 «{name}» — отклоняем повышение. Дилеру уйдёт карточка «❌ … не подтверждена»: "
+                        "плейсмент остаётся уведомлением (или прежним статусом), и что нужно для следующего этапа. "
+                        "Напиши причину или отправь без комментария.")
+            else:
+                text = (f"🛠 «{name}» — отклоняем. Дилеру уйдёт: «Заявка по проекту {name} не принята. "
+                        f"Если появятся новые данные — подай заново через {again}». "
+                        "Напиши причину или отправь без комментария.")
             tail = f"::{reply_id}" if reply_id else ""
             rows.insert(0, [InlineKeyboardButton("Отправить без комментария",
                                                  callback_data=f"{CB_ADMIN}{ACTION_DECLINE_BARE}:{reg_id}{tail}")])
@@ -1526,7 +1531,7 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         if problem:
             pending[chat.id] = item
             await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
-            await chat.send_message(f"🛠 {problem}. Напиши название ещё раз — {NAME_SAMPLE}.",
+            await chat.send_message(f"🛠 {problem[:1].upper()}{problem[1:]}. Напиши название ещё раз — {NAME_SAMPLE}.",
                                     reply_markup=InlineKeyboardMarkup([cancel_row()]))
             return True
         if action == ACTION_RENAME:

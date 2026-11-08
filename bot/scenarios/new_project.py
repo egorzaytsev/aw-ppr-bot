@@ -709,5 +709,5 @@ SCENARIO = Scenario(
     project_name_key="Dealer Project Name",
     # Где объект → Country/City; подтверждённый объём → PL Volume
     payload_skip=("Object Location", "PL Volume Confirmed", SIMPLIFIED_QUOTE),
-    done_text="Информацию по проекту получили. Ответ дадим в течение 72 часов — придёт сюда.",
+    done_text="Получил информацию по проекту. Ответ — в течение 72 часов, придёт сюда.",
 )

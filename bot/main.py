@@ -184,7 +184,7 @@ async def _check_unknown_users(app: Application) -> None:
         chat_id, username = data.get("chat_id"), data.get("username")
         if not chat_id:
             continue
-        label = f"@{username}" if username else (data.get("name") or str(chat_id))
+        label = f"@{username}" if username else (data.get("name") or "человек без имени и username")
         person = await asyncio.to_thread(repo.find_by_chat_id, chat_id)
         if not person and username:
             person = await asyncio.to_thread(repo.find_by_username, username)
