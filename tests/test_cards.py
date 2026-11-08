@@ -24,14 +24,14 @@ def test_header_and_full_track_missing_lines():
     assert lines[:5] == [
         "✅ Заявка принята",
         "🏗 MedallClinic SPB AW260220",
-        "👤 STATIO · статус уведомление",
-        "🔎 Других статусов на объекте нет",
+        "👤 STATIO · статус: уведомление о плейсменте",
+        "🔎 Других партнёров на объекте нет",
         "━━━━━━━━━━━━━━━",
     ]
     assert "➡️ Для перехода на предрегистрацию не хватает:" in lines
-    assert ("🤝 Подтверждение контакта с клиентом или бюро — сейчас «заявляю, без подтверждения». "
-            "Нужен документ от бюро, переписка или контакт.") in lines
-    assert "📎 Файлы досье — визуализации, планировки, список серий." in lines
+    assert ("🤝 Подтверждение контакта с клиентом — сейчас «контакт есть, подтвердить пока нечем». "
+            "Нужна переписка с клиентом или его контакт.") in lines
+    assert "📎 Материалы — визуализации, планировки, ведомость." in lines
     assert "📅 Месяц размещения заказа." in lines
     assert "👉 Всё это можно добавить через «Обновить проект» → «Дополнить материалы»." in lines
     assert lines[-2:] == ["✉️ Указывай название проекта и референс в теме писем по этому проекту:",
@@ -49,15 +49,15 @@ def test_simplified_body():
     p = project(**{P.PPR_TRACK: "Simplified (<30k)", P.EXW_POTENTIAL: 9000})
     text = plain(cards.accept_card(p, D, "STATIO", {"PL Volume": 20000}, first_time=False))
     assert "💶 Объём по прайсу: 20 000 € — ниже порога 30 000 €" in text
-    assert "Квотацию запрашивай напрямую в бэк-офисе, Егор в копии." in text
-    assert "📈 Если объём вырастет выше 30 000 € — обнови его через «Обновить проект»" in text
+    assert "действует регистрация по упрощённой схеме" in text and "Квотацию запрашивай в бэк-офисе, Егор в копии." in text
+    assert "📈 Если объём вырастет выше 30 000 € — напиши об этом через «Обновить проект» → «Сообщить новость»" in text
     assert "➡️" not in text
 
 
 def test_others_without_names_and_queue_position():
     p = project(**{P.NOTIFIED: [], P.PRE_REGISTERED: [O1, D]})
     text = plain(cards.accept_card(p, D, "STATIO", {}, first_time=False))
-    assert "👤 STATIO · статус предрегистрация" in text
+    assert "👤 STATIO · статус: предрегистрация" in text
     assert "🔎 На объекте есть действующая предрегистрация другого партнёра" in text
     assert "🔢 Твой номер в предрегистрации — второй из двух" in text
     assert "recOTHER1" not in text
@@ -98,15 +98,16 @@ def test_admin_request_card_russian_values_warning_and_changes():
            R.PAYLOAD: json.dumps({"Project Stage": "Design", "Contact Level": "Declared",
                                   "AW Alternatives": "Yes — tender requirement"}, ensure_ascii=False)}
     text = plain(request_card(reg, "recR", "Lola", None, "STATIO"))
-    assert "Стадия: проектирование" in text and "Уровень контакта: Заявляю (без подтверждения)" in text
+    assert "Стадия: проектирование" in text and "Уровень контакта: Контакт есть, подтвердить пока нечем" in text
     assert "Альтернативы AW: Да, по требованию тендера" in text
-    assert "⚠️ Уровень контакта — заявляю, без подтверждения. Для предрегистрации рекомендуется запросить документы" in text
+    assert "ℹ️ Контакт с клиентом не подтверждён: для предрегистрации он не нужен, для регистрации нужен" in text
+    assert "При «Принять»:" in text and "Дилеру уйдёт:" in text
     upd = {R.DEALER_PROJECT_NAME: "Медалл", R.REQUEST_TYPE: "Update — fields",
            R.PAYLOAD: json.dumps({"Object Address": "ул. Лесная, 9", "Contact Level": "Joint meeting with AW",
                                   "Dealer Project Name": "Медалл"}, ensure_ascii=False)}
     t2 = plain(request_card(upd, "recU"))
     assert "📝 Изменения:" in t2 and "• Адрес: ул. Лесная, 9" in t2
-    assert "• Уровень контакта: Готов к совместной встрече" in t2 and "Dealer Project Name" not in t2
+    assert "• Уровень контакта: Готов к встрече с клиентом вместе с Andreu World" in t2 and "Dealer Project Name" not in t2
 
 
 def test_decision_markup_two_buttons():
@@ -122,7 +123,7 @@ def test_declined_upgrade_card():
     text = plain(cards.declined_upgrade_card(project(), D, "STATIO", {}, "предрегистрация", "Нет документов", True))
     lines = text.splitlines()
     assert lines[0] == "❌ Предрегистрация не подтверждена"
-    assert "👤 STATIO · статус уведомление" in lines
+    assert "👤 STATIO · статус: уведомление о плейсменте" in lines
     assert "📌 Плейсмент зафиксирован как уведомление." in lines and "💬 Причина: Нет документов" in lines
     assert plain(cards.admin_copy(cards.declined_upgrade_card(project(), D, "STATIO", {}, "предрегистрация", "", False),
                                   True)).startswith("🛠 ❌ Предрегистрация не подтверждена")

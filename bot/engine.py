@@ -140,9 +140,13 @@ def _titles(state: DialogState, idxs: list[int]) -> list[str]:
 
 def _purge_inapplicable(state: DialogState) -> None:
     """Ответ изменил ветку (например, стадия) — убираем ответы на ставшие ненужными вопросы."""
+    # Ключ может принадлежать и отключённому старому вопросу (звонок 15 минут перенесён в конец) — не трогаем его
+    live = {k for q in _qs(state) if q.applies(state.answers) for k in (q.key, q.qualifier_key, q.evidence_key) if k}
     for q in _qs(state):
         if not q.applies(state.answers):
-            _clear(state, q)
+            for key in (q.key, q.qualifier_key, q.evidence_key):
+                if key and key not in live:
+                    state.answers.pop(key, None)
 
 
 def _clear(state: DialogState, q: Question) -> None:
@@ -250,7 +254,7 @@ def question_screen(state: DialogState) -> Screen:
         buttons.append([("Готово", CB_DONE)])
     if q.optional:
         buttons.append([(q.skip_label, CB_SKIP)])
-    elif sc.auto_submit:
+    elif sc.auto_submit and not _custom_exit(q):
         buttons.append([("Отмена", CB_CANCEL)])   # новость / ответ без ответа не отправить — только выйти
     elif q.unknown_label:
         buttons.append([(q.exit_label(), CB_STOP)])
@@ -348,8 +352,9 @@ def _to_next_phase(state: DialogState) -> Result:
     gate = _gate(state)
     if gate.on_yes:
         # Остаёмся в фазе: ответ «да» открывает её дополнительные вопросы (номер квотации)
+        before = set(missing(state, phase=state.phase))
         state.answers.update(gate.on_yes)
-        nxt = missing(state, phase=state.phase)
+        nxt = [i for i in missing(state, phase=state.phase) if i not in before]   # только открывшиеся вопросы
         return _ask(state, nxt[0]) if nxt else _end_of_questions(state)
     gaps = missing(state, phase=state.phase) if state.phase == PREFILL_PHASE else []
     if gaps:
@@ -363,7 +368,13 @@ def _to_next_phase(state: DialogState) -> Result:
 def _can_stop(state: DialogState, q: Question) -> bool:
     """Обязательный вопрос с кнопкой выхода «Пока не знаю»."""
     q = q.bind(state.answers)
-    return not q.optional and bool(q.unknown_label) and not scenario_of(state).auto_submit
+    return not q.optional and bool(q.unknown_label) and (not scenario_of(state).auto_submit or _custom_exit(q))
+
+
+def _custom_exit(q: Question) -> bool:
+    """Своя кнопка выхода («Номера пока нет», «Архитектор пока неизвестен»), а не общее «Пока не знаю»."""
+    from .scenarios.base import UNKNOWN
+    return bool(q.unknown_label) and q.unknown_label != UNKNOWN
 
 
 def current_screen(state: DialogState) -> Screen:
@@ -689,9 +700,10 @@ def handle_callback(state: DialogState, data: str) -> Result:
     if state.awaiting == AWAIT_ANSWER:
         q = _current_q(state)
         if data == CB_SKIP and q.optional:
+            # Ответы, подставленные из проекта, не считаются — только то, что спрашивали сейчас
+            asked = set(state.answers.get("_ask") or ()) - {q.key}
             if q.kind == "files" and state.answers.get("_files_only") and not state.answers.get(q.key) \
-                    and not any(k for k in state.answers if not k.startswith("_") and k != q.key
-                                and state.answers[k] not in (None, "", [])):
+                    and not any(state.answers.get(k) not in (None, "", []) for k in asked):
                 # «Новых материалов нет» при пустой анкете — отправлять нечего
                 pid = (state.answers.get("_target") or {}).get("id")
                 return Result(None, [Screen(NOTHING_NEW, nothing_new_buttons(pid))])

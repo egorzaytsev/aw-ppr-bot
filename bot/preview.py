@@ -312,6 +312,12 @@ def _world():
     return repo, bot, ctx, app, update, dealer
 
 
+def _done(code: str) -> str:
+    """Ответ дилеру после «Отправить» — тот же текст, что в боте (маршрут — Егор)."""
+    from .scenarios import SCENARIOS
+    return "Грасиас! " + SCENARIOS[code].done_text.format(reviewer="Егору", who="Егор")
+
+
 def _payload_new() -> dict:
     return {
         "End Client": "Тест Банк", "Object Name": "Офис на Лесной", "Object Part": "3–5 этажи", "Country": "Russia",
@@ -345,7 +351,7 @@ async def _new(w):
     st.awaiting = "confirm"
     s = engine.summary_screen(st)
     await bot.send_message(DEALER, s.text, reply_markup=main._markup(s.buttons))
-    await bot.send_message(DEALER, "Мучас грасиас! Получил информацию по проекту. Ответ — в течение 72 часов, придёт сюда.")
+    await bot.send_message(DEALER, _done("new_project"))
     payload = _payload_new()
     rid = repo.create_registration(dealer, RequestType.NEW_PRE_REGISTRATION, payload, payload["Dealer Project Name"])
     await main._notify_admin_new(ctx, dealer, rid, RequestType.NEW_PRE_REGISTRATION, payload,
@@ -390,7 +396,7 @@ async def _fill(w):
     payload = {"Dealer Project Name": "TESTBANK Office FL3", "Object Address": "ул. Лесная, 5",
                "Materials": [{"kind": "link", "url": "https://disk.example.com/plans"}]}
     rid = repo.create_registration(dealer, RequestType.UPDATE_FIELDS, payload, "TESTBANK Office FL3", PROJECT_ID)
-    await bot.send_message(DEALER, "Грасиас! Получил информацию по проекту. Ответ — в течение 72 часов, придёт сюда.")
+    await bot.send_message(DEALER, _done("project_fill"))
     await main._notify_admin_new(ctx, dealer, rid, RequestType.UPDATE_FIELDS, payload, "TESTBANK Office FL3")
     up = update(ADMIN)
     await admin.on_admin_callback(up, ctx, f"ad:acc:{rid}")
@@ -403,7 +409,7 @@ async def _news(w):
     repo, bot, ctx, app, update, dealer = w
     payload = {"Dealer Project Name": "TESTBANK Office FL3", "Dealer News": "Клиент утвердил концепцию, тендер в марте."}
     rid = repo.create_registration(dealer, RequestType.UPDATE_NEWS, payload, "TESTBANK Office FL3", PROJECT_ID)
-    await bot.send_message(DEALER, "Грасиас! Записал новость, передал Егору.")
+    await bot.send_message(DEALER, _done("project_news"))
     await main._notify_admin_new(ctx, dealer, rid, RequestType.UPDATE_NEWS, payload, "TESTBANK Office FL3")
     up = update(ADMIN)
     await admin.on_admin_callback(up, ctx, f"ad:inf:{rid}")
@@ -422,7 +428,7 @@ async def _quote(w):
     p.update({Projects.PPR_TRACK: "Simplified (<30k)", Projects.EXW_POTENTIAL: 11500})
     payload = {"Dealer Project Name": "TESTBANK Office FL3", "Quotation / Proforma №": "20101446"}
     rid = repo.create_registration(dealer, RequestType.QUOTE_SIMPLIFIED, payload, "TESTBANK Office FL3", PROJECT_ID)
-    await bot.send_message(DEALER, "Грасиас! Номер квотации получил — передал Егору.")
+    await bot.send_message(DEALER, _done("project_quote"))
     await main._notify_admin_new(ctx, dealer, rid, RequestType.QUOTE_SIMPLIFIED, payload, "TESTBANK Office FL3")
     await admin.on_admin_callback(update(ADMIN), ctx, f"ad:acc:{rid}")
     card = cards.accept_card(p, DEALER_ID, "Тест Мебель", {"PL Volume": 25000}, True)
@@ -438,7 +444,7 @@ async def _won_lost(w, won: bool):
         payload, rtype = {"Dealer Project Name": "TESTBANK Office FL3", "Lost Reason": "Lost to cheaper offer"}, \
             RequestType.UPDATE_LOST
     rid = repo.create_registration(dealer, rtype, payload, "TESTBANK Office FL3", PROJECT_ID)
-    await bot.send_message(DEALER, "Спасибо! Записал, передал Егору — подтверждение придёт сюда.")
+    await bot.send_message(DEALER, _done("project_won" if won else "project_lost"))
     await main._notify_admin_new(ctx, dealer, rid, rtype, payload, "TESTBANK Office FL3")
     await admin.on_admin_callback(update(ADMIN), ctx, f"ad:acc:{rid}")
 

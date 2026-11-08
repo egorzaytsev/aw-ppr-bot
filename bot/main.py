@@ -1081,8 +1081,10 @@ def _admin_summary(reg: dict, pl, project_name: str, created: bool, dealer: str,
     if pl.dealer_text:
         lines.append(("• Дилеру отправлено:" if sent else "• ⚠️ У дилера нет Telegram в базе — не отправлено:")
                      + f"\n<i>{pl.dealer_text}</i>")
-    elif note:
-        lines.append(f"• Комментарий: {escape(note)}")
+    else:
+        if note:
+            lines.append(f"• Комментарий: {escape(note)}")
+        lines.append("• Дилеру отправлено" if sent else "• ⚠️ У дилера нет Telegram в базе — не отправлено")
     return "\n".join(lines)
 
 

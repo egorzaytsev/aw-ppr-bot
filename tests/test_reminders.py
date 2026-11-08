@@ -29,8 +29,8 @@ def test_nothing_to_remind():
 def test_stale_news_and_gaps_from_next_step_missing():
     f = dict(FULL, **{P.PPR_NEXT_MISSING: "Object Address; Contact Level (needs proof); Dossier Files;"})
     it = reminders.project_item(proj("notified", None, f), TODAY, date(2026, 9, 15))
-    assert it.reasons["gaps"] == "адрес, подтверждение контакта, материалы"   # без «и ещё N»
-    assert it.reasons["stale"] == "последняя 15.09"
+    assert it.reasons["gaps"] == "адрес, подтверждённый контакт с клиентом, материалы"   # без «и ещё N»
+    assert it.reasons["stale"] == "последняя новость — 15.09.2026"
     # Пустые поля анкеты, которых формула не требует, — не повод напоминать
     bare = {P.NAME: "Old project", P.PPR_NEXT_MISSING: ""}
     assert reminders.project_item(proj("notified", None, bare), TODAY, date(2026, 10, 1)) is None

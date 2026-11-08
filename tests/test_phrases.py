@@ -24,5 +24,7 @@ def test_ack_prefix_and_last_steps_hint():
     # Реакция бывает не всегда, но встречается и стоит в начале
     assert any(t.split(" ")[0] in phrases.ACKS or t.startswith(tuple(phrases.ACKS)) for t in texts)
     st = r.state
-    st.step = 13  # последний вопрос фазы 1 — альтернативы
+    st.step = 13  # последний вопрос фазы 1 — альтернативы, но дальше предложим предрегистрацию:
+    assert "Последний вопрос" not in engine.question_screen(st).text   # не обещаем «и готово» (п. 3.10)
+    st.phase, st.step = 3, next(i for i, q in enumerate(NEW_PROJECT.questions) if q.key == "Call Slot 30")
     assert "Последний вопрос — и готово." in engine.question_screen(st).text

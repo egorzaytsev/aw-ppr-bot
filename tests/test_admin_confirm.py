@@ -13,7 +13,8 @@ K5 = {
 def test_weak_answers_lists_vague_and_skipped():
     weak = weak_answers(K5)
     text = "\n".join(weak)
-    assert "нет архиектора" in text and "пока неизвестно" in text and "пока не получили" in text
+    # «нет архиектора», «пока не получили» — содержательные ответы (правило: стоп-слова целиком, до трёх слов)
+    assert "пока неизвестно" in text and "нет архиектора" not in text
     assert any("«нет»" in w for w in weak)                 # документы не присланы
     assert "Нет»" not in text                              # «Нет» по параллельным регистрациям — ответ
     assert not any("20101422" in w for w in weak)
@@ -109,13 +110,14 @@ def test_new_registration_accepted_stepwise_as_notification_first(monkeypatch):
     run("ad:name:recR:new")
     assert repo.reg[Registrations.REQUEST_TYPE] == "New — Notification"
     assert repo.created == ["PVSMART InsaitBC FL3"]
-    assert ctx.bot_data["stepwise"]["recR"]["final"] == "reg"
+    assert ctx.bot_data["memo"]["stepwise"]["recR"]["final"] == "reg"
 
 
 def test_step_offer_lists_phase_gaps():
-    payload = {"Influencers": "", "Decision Maker Company": "пока никто", "Quotation / Proforma №": "пока нет"}
-    two = admin.step_offer("AW260251", "PVSMART InsaitBC FL3", "pre", "reg", payload)
-    assert "Шаг 2 из 3" in two and "предрегистрацию?" in two and "пока никто" in two and "пока нет" not in two
+    payload = {"Influencers": "", "Decision Maker Company": "не знаю", "Quotation / Proforma №": "пока нет"}
+    two = admin.step_offer("AW260251", "PVSMART InsaitBC FL3", "pre", "reg", payload, "", "Айлар Мамедова")
+    assert "Шаг 2 из 3" in two and "предрегистрацию?" in two and "не знаю" in two and "пока нет" not in two
+    assert "Айлар Мамедова просил(а) регистрацию" in two
     three = admin.step_offer("AW260251", "X", "reg", "reg", payload)
     assert "Шаг 3 из 3" in three and "пока нет" in three
 

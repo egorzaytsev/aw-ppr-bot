@@ -41,10 +41,8 @@ def test_pre_registration_position_and_broadcast():
     assert pl.project_updates[P.STATUS_CONFIRMED] == "__today__"
     assert "Ты на 2-м месте из 2 в предрегистрации." in pl.dealer_text
     assert sorted(pl.broadcast_people) == [OTHER1, OTHER2]
-    assert pl.broadcast_text.splitlines() == [
-        "🔎 По объекту «Petrovitch Office» появилась предрегистрация другого партнёра.",
-        "Чтобы не потерять приоритет — дополни данные по проекту или запроси предрегистрацию.",
-    ]
+    assert pl.broadcast_text == ("🔎 На объекте <code>Petrovitch Office</code> другой партнёр получил предрегистрацию. "
+                                 "Чтобы сохранить приоритет — дополни данные или запроси предрегистрацию.")
 
 
 def test_pre_registration_blocked_by_missing_fields_admin_once():
@@ -53,8 +51,8 @@ def test_pre_registration_blocked_by_missing_fields_admin_once():
     del project[P.DOSSIER_FILES]
     pl = plan(reg(rtype="New — Pre-registration"), project)
     assert pl.blocked and not pl.project_updates and not pl.dealer_text
-    assert "нельзя поставить Pre-registered" in pl.admin_text
-    assert "не хватает Dossier Files" in pl.admin_text            # контакт для предрегистрации не обязателен
+    assert "для статуса «предрегистрация» не хватает: материалы —" in pl.admin_text   # контакт не обязателен
+    assert pl.block_kind == "missing"
     assert pl.registration_updates[R.BOT_PROCESSED] == "blocked:Accept"
     again = plan(reg(rtype="New — Pre-registration", processed="blocked:Accept"), project)
     assert again.blocked and again.admin_text is None                 # админу — один раз
@@ -62,8 +60,8 @@ def test_pre_registration_blocked_by_missing_fields_admin_once():
 
 def test_registration_needs_quotation_and_single_slot():
     pl = plan(reg(rtype="Upgrade — Registration"), dict(FULL))
-    assert pl.blocked and "Quotation / Proforma №" in pl.admin_text
-    assert "Contact Level" in pl.admin_text                          # «Declared» для регистрации мало
+    assert pl.blocked and "номер квотации" in pl.admin_text
+    assert "подтверждённый контакт с клиентом" in pl.admin_text      # «Declared» для регистрации мало
     with_q = {**FULL, P.QUOTATION: "Q-1", P.PRE_REGISTERED: [DEALER, OTHER1],
               P.CONTACT_LEVEL: "Verifiable (email/contact)"}
     pl = plan(reg(rtype="Upgrade — Registration"), with_q)
@@ -71,7 +69,8 @@ def test_registration_needs_quotation_and_single_slot():
     assert pl.project_updates[P.PRE_REGISTERED] == [OTHER1]
     assert "установлен статус: <b>регистрация</b>." in pl.dealer_text
     taken = plan(reg(rtype="Upgrade — Registration"), {**with_q, P.REGISTERED: [OTHER2]})
-    assert taken.blocked and "уже есть Registered" in taken.admin_text
+    assert taken.blocked and "регистрация на проекте уже у другого партнёра" in taken.admin_text
+    assert taken.block_kind == "reg_taken"
 
 
 def test_reg_status_overrides_request_type():
@@ -81,23 +80,25 @@ def test_reg_status_overrides_request_type():
 
 def test_accept_without_target_project_blocked():
     pl = plan(reg(), None)
-    assert pl.blocked and "Target Project" in pl.admin_text
+    assert pl.blocked and "не выбран проект" in pl.admin_text and pl.block_kind == "no_project"
 
 
 def test_decline_and_need_info_need_note():
     pl = plan(reg("Decline"), None)          # отказ без комментария — можно
-    assert not pl.blocked and pl.dealer_text.endswith("отказ.")
+    assert not pl.blocked and pl.dealer_text.startswith("Заявка по проекту <code>Петрович — офис</code> не принята.")
+    assert "подай заново через «Новый проект»" in pl.dealer_text
     assert plan(reg("Need more info"), None).blocked
     pl = plan(reg("Decline", note="Объект уже зарегистрирован"), None)
     assert pl.registration_updates[R.REG_STATUS] == "Declined"
-    assert "По запросу «Петрович — офис»: отказ." in pl.dealer_text and "Объект уже зарегистрирован" in pl.dealer_text
+    assert "💬 Комментарий: Объект уже зарегистрирован" in pl.dealer_text
     pl = plan(reg("Need more info", note="Пришлите планировки"), None)
     assert "нужна дополнительная информация" in pl.dealer_text and R.REG_STATUS not in pl.registration_updates
 
 
 def test_news_accept_no_status_change():
-    pl = plan(reg(rtype="Update — Lost"), dict(FULL))
-    assert not pl.project_updates and "информацию приняли" in pl.dealer_text
+    pl = plan(reg(rtype="Update — Lost"), dict(FULL))   # Р6: проигран — записываем в проект
+    assert pl.project_updates == {P.STATUS: "Lost", P.PROBABILITY: "0"} and pl.final_text
+    assert "проигран, причина — не указана" in pl.dealer_text
 
 
 def test_position_from_actual_order_when_already_listed():
@@ -133,7 +134,7 @@ def test_check_counts_dealer_answers_and_moves_them_into_empty_fields():
     assert u[P.PARALLEL_REGISTRATIONS] == "Нет"
     assert u[P.DOSSIER_FILES] == [{"id": "attOLD"}, {"url": "https://airtable/new.pdf", "filename": "plan.pdf"}]
     assert u[P.PRE_REGISTERED] == [DEALER]
-    assert "Contact Level" in pl.transferred and "Dossier Files" in pl.transferred
+    assert "уровень контакта с клиентом" in pl.transferred and "материалы (файлы)" in pl.transferred
 
 
 def test_specifier_text_and_links_count_as_provided():
@@ -147,9 +148,10 @@ def test_specifier_text_and_links_count_as_provided():
 
 def test_really_missing_suggests_need_more_info():
     pl = plan(_with_payload(reg(rtype="New — Pre-registration"), {}), {P.NAME: "X"})
-    assert pl.blocked and "ни в проекте, ни в заявке" in pl.admin_text and "кнопкой ниже" in pl.admin_text
-    assert pl.ask_text.startswith("Чтобы дать предрегистрацию, не хватает:\n• уточнённый объём\n")
-    assert pl.ask_text.endswith("«Дополнить материалы» или ответь здесь.")
+    assert pl.blocked and "ни в проекте, ни в заявке" in pl.admin_text
+    assert pl.ask_text.startswith("Чтобы дать предрегистрацию по проекту X, не хватает:\n"
+                                  "• уточнённый объём Andreu World по прайсу\n")
+    assert pl.ask_text.endswith("нажми «Ответить» под этим сообщением.")
 
 
 def test_need_more_info_has_reply_button():
@@ -164,9 +166,19 @@ def test_info_update_moves_fields_without_status():
         assert pl.project_updates == {P.CONTACT_LEVEL: "Joint meeting with AW"} and not pl.blocked
 
 
-def test_won_lost_do_not_touch_project():
-    r = _with_payload(reg(rtype="Update — Won"), {"Contact Level": "Declared"})
-    assert plan(r, {P.NAME: "X"}).project_updates == {}
+def test_won_writes_status_probability_and_order():
+    r = _with_payload(reg(rtype="Update — Won"), {"Order / Proforma №": "148928"})
+    pl = plan(r, {P.NAME: "X", P.PPR_REF: "AW260001"})
+    assert pl.project_updates == {P.STATUS: "Won", P.PROBABILITY: "100", P.QUOTATION: "148928"}
+    assert pl.dealer_text == "🏆 Записали: проект <code>X AW260001</code> выигран. Спасибо!"
+    assert "Проект выигран, заказ / проформа № 148928" in pl.log_lines
+
+
+def test_lost_writes_reason():
+    r = _with_payload(reg(rtype="Update — Lost"), {"Lost Reason": "No budget"})
+    pl = plan(r, {P.NAME: "X"})
+    assert pl.project_updates[P.LOST_REASON] == "No budget" and pl.project_updates[P.PROBABILITY] == "0"
+    assert pl.dealer_text == "Записали: проект <code>X</code> проигран, причина — нет бюджета."
 
 
 
@@ -229,7 +241,7 @@ def test_volume_and_stage_overwrite_with_change_lines():
     assert pl.project_updates[P.EXW_POTENTIAL] == 54000 and pl.project_updates[P.PROJECT_STAGE] == "Tender"
     assert pl.project_updates[P.PPR_TRACK] == "Full"
     assert pl.changes == ["💶 Объём EXW: 45 000 € → 54 000 €", "🏗 Стадия: проектирование → тендер",
-                          "📈 Трек: Simplified → Full"]
+                          "📈 Схема: упрощённая → полная (объём больше 30 000 € по прайсу)"]
     assert "Объём EXW: 45 000 € → 54 000 €" in pl.log_lines
 
 

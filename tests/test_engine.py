@@ -71,9 +71,12 @@ def _notification_summary(**kw):
     return r
 
 
+CALL15 = next(i for i, q in enumerate(NEW_PROJECT.questions) if q.key == "Call Slot 15" and q.prompt)
+
+
 def _run_phase2(r):
     assert r.state.awaiting == "gate"
-    assert "ещё девять вопросов" in r.screens[0].text
+    assert "ещё 8 вопросов и материалы" in r.screens[0].text
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     assert r.state.phase == 2 and r.state.step == 14
     assert r.screens[0].text == "<b>Какая компания принимает решение по мебели?</b>"
@@ -83,12 +86,13 @@ def _run_phase2(r):
     r = engine.handle_callback(r.state, CH + "1")                 # заявлен другим — да
     assert r.state.awaiting == "detail"
     r = engine.handle_text(r.state, "Vitra, Arper")
-    # «Бюро нет» → варианта «Документы от бюро» нет: 0 моё слово, 1 переписка, 2 встреча
+    # «Документы от бюро» больше не вариант: 0 переписка, 1 встреча, 2 контакт без подтверждения
     assert "Документы от бюро" not in str(r.screens[-1].buttons)
-    r = engine.handle_callback(r.state, CH + "1")                 # переписка → нужен файл
+    r = engine.handle_callback(r.state, CH + "0")                 # переписка → нужен файл
     assert r.state.awaiting == "evidence"
+    assert "Пришлю позже" in str(r.screens[-1].buttons) and "← Назад к выбору" in str(r.screens[-1].buttons)
     r = engine.handle_text(r.state, "вот письмо")
-    assert r.state.awaiting == "evidence"
+    assert r.state.awaiting == "evidence" and "«Пришлю позже»" in r.screens[0].text
     r = engine.handle_text(r.state, "https://disk.yandex.ru/d/abc")
     assert "120 000 €" in r.screens[0].text                       # «Вы указывали …»
     r = engine.handle_callback(r.state, CH + "0")                 # подтверждаю
@@ -97,14 +101,14 @@ def _run_phase2(r):
     assert r.state.step == 21
     text = r.screens[0].text
     assert "<b>Пришли материалы по проекту — всё, что есть:</b>\n• визуализации" in text
-    assert "• квотация Andreu World" in text
+    assert "квотация Andreu World" not in text                    # квотацию спрашивают отдельно (п. 3.10)
     assert "спецификация бюро" not in text                        # «Бюро нет» — документов бюро не просим
     r = engine.handle_file(r.state, FILE)
     r = engine.handle_text(r.state, "https://drive.google.com/x")
     r = engine.handle_file(r.state, dict(FILE, file_id="F3", name="spec.xlsx"))
     assert len(r.state.answers["Materials"]) == 3
     r = engine.handle_callback(r.state, engine.CB_DONE)
-    assert r.state.step == 22
+    assert r.state.step == CALL15
     r = engine.handle_text(r.state, "14.10, 11:00, Мск")
     return r
 
@@ -154,7 +158,7 @@ def test_skips_listed_gate_still_offered_and_address_label():
     r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     text = r.screens[0].text
     assert "Адрес: не указан" in text
-    assert "Пропущено: Часть объекта / поставки, Адрес, Площадь." in text
+    assert "Не указано: Часть объекта / поставки, Адрес, Площадь." in text
     assert engine.COMPLETENESS_NOTE in text
     assert "Для предрегистрации не хватает" in text
     assert engine.CB_FILL in str(r.screens[0].buttons)
@@ -166,9 +170,7 @@ def test_prereg_prefills_skipped_phase1_without_skip():
     r = _run_phase1(skip_optional=True)
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     assert r.state.step == 2 and r.state.phase == 1               # сначала пропущенное
-    assert "Пропустить" not in str(r.screens[-1].buttons)
-    r = engine.handle_callback(r.state, engine.CB_SKIP)           # пропустить нельзя
-    assert r.state.step == 2
+    assert "Пропустить" in str(r.screens[-1].buttons)              # пропуск остаётся (задание 08.11, п. 3.6)
     r = engine.handle_text(r.state, "Лобби")
     assert r.state.step == 6
     r = engine.handle_text(r.state, "ул. Лесная, 9")
@@ -211,7 +213,8 @@ def test_simplified_track_notification_only():
     r = _run_phase1(exw="25 000")
     assert r.state.awaiting == "gate"
     assert r.screens[0].text.startswith(
-        "Давай зарегистрируем! Для этого отправь запрос на квотацию и пришли мне номер квотации.")
+        "Для проектов до 30 000 € по прайсу действует регистрация по упрощённой схеме")
+    assert "Сначала дополним" not in r.screens[0].text
     assert "Номер квотации есть" in str(r.screens[0].buttons)
     r = engine.handle_callback(r.state, engine.CB_GATE_NO)
     assert r.state.awaiting == "confirm"
@@ -395,7 +398,7 @@ def test_materials_one_screen_can_skip():
     labels = [b[0] for row in engine.question_screen(st).buttons for b in row]
     assert labels == ["Пропустить"]
     r = engine.handle_callback(st, engine.CB_SKIP)
-    assert r.state.step == 22
+    assert r.state.step == CALL15
     st.answers["AW Origin"] = "Да, заложен бюро"
     st.answers["Specifier"] = "UNK Project"
     st.step = 21
@@ -424,14 +427,14 @@ def test_slot_picker_day_then_window():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 22  # звонок 15 минут
+    st.step = CALL15  # звонок 15 минут
     screen = engine.question_screen(st)
     day = slots.next_workdays()[1]
     assert f"{engine.CB_DAY}{day.isoformat()}" in str(screen.buttons)
     r = engine.handle_callback(st, f"{engine.CB_DAY}{day.isoformat()}")
     assert r.state.awaiting == "slot"
-    assert "(Мск)" in r.screens[0].text
-    assert "Другой день" not in str(r.screens[0].buttons)
+    assert "(время Мск)" in r.screens[0].text
+    assert "← Другой день" in str(r.screens[0].buttons)
     r = engine.handle_callback(r.state, engine.CB_WINDOW + "2")
     value = r.state.answers["Call Slot 15"]
     assert value.startswith(f"{day:%d.%m.%Y}") and "Мск" in value and "(Валенсия 15:00–17:00)" in value
@@ -442,7 +445,7 @@ def test_slot_free_text_accepted():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 22
+    st.step = CALL15
     r = engine.handle_text(st, "Любой день после 20.10, утро")
     assert r.state.answers["Call Slot 15"] == "Любой день после 20.10, утро"
 
@@ -452,7 +455,7 @@ def test_slot_text_after_day_chosen():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
-    st.step = 22
+    st.step = CALL15
     r = engine.handle_callback(st, f"{engine.CB_DAY}{slots.next_workdays()[0].isoformat()}")
     r = engine.handle_text(r.state, "лучше в пятницу после обеда")
     assert r.state.answers["Call Slot 15"] == "лучше в пятницу после обеда"
@@ -508,7 +511,7 @@ def test_city_buttons_by_country():
     r = engine.handle_callback(st, CH + "2")                      # Другое
     r = engine.handle_callback(r.state, CH + "6")                 # Беларусь
     labels = [b[0] for row in r.screens[0].buttons for b in row]
-    assert labels == ["Минск", "Другой город"]
+    assert labels == ["Минск", "Другой город", "Пока не знаю"]
     r = engine.handle_callback(r.state, CH + "1")                 # Другой город
     assert r.state.awaiting == "detail"
     r = engine.handle_text(r.state, "Гродно")
@@ -657,11 +660,12 @@ def test_bureau_then_architect_unknown():
     r = _to_specifier()
     assert engine._current_q(r.state).key == "Lead Architect"
     labels = [b[0] for row in r.screens[0].buttons for b in row]
-    assert labels == ["Пока не знаю"]
+    assert labels == ["Архитектор пока неизвестен"]
     r = engine.handle_callback(r.state, engine.CB_SKIP)
     assert r.state.awaiting == "confirm"
     text = r.screens[0].text
-    assert "ГАП: пока не известен" in text and "Пропущено: ГАП." in text
+    assert "Главный архитектор проекта: пока не известен" in text
+    assert "Не указано: Главный архитектор проекта." in text
     p = engine.build_payload(r.state)
     assert p["Specifier"] == "UNK Project" and "Lead Architect" not in p
 
@@ -750,7 +754,7 @@ def test_fill_asks_bureau_on_architect_selection_and_log_answers():
     p = engine.build_payload(r.state)
     assert "Specifier" not in p
     assert p["Project Log"].splitlines() == [
-        "Решение по мебели принимает: Петрович", "Конкурирующие дилеры: Нет", "Архбюро: ещё не выбрано"]
+        "Архбюро: ещё не выбрано", "Решение по мебели принимает: Петрович", "Конкурирующие дилеры: Нет"]
     # Simplified до предрегистрации не доходит — вопросов из лога нет
     fields[P.PPR_TRACK] = "Simplified (<30k)"
     assert "Decision Maker Company" not in fill_preset({"id": "recP", "name": "X"}, fields, "notified").get("_ask", [])
@@ -886,10 +890,14 @@ def test_dealer_offers_aw_requires_bureau_documents():
 
 def test_vague_answers_rejected_everywhere():
     from bot.scenarios.base import is_vague
-    for t in ("пока нет", "пока никто", "не знаю", "—", "-", "?", "уточняется", "нет данных", "н/д"):
+    for t in ("пока нет", "не знаю", "—", "-", "?", "уточняется", "нет данных", "н/д", "Пока не знаю."):
         assert is_vague("Decision Maker", t), t
     assert not is_vague("Parallel Registrations", "Нет")     # «нет» — настоящий ответ
+    assert not is_vague("Dealer News", "нет")                # и в ответе на запрос
     assert not is_vague("Decision Maker", "Департамент закупок ЦБ")
+    # После «нет / пока» есть содержание — это ответ (задание 08.11, п. 3.1)
+    assert not is_vague("Dealer News", "Нет изменений, клиент выбрал Andreu World")
+    assert not is_vague("End Client", "Сбербанк, филиал уточняется")
 
 
 def test_required_phase2_question_offers_stop_and_stays_notification():
@@ -904,10 +912,14 @@ def test_required_phase2_question_offers_stop_and_stays_notification():
         r = engine.handle_callback(r.state, engine.CB_SKIP if q.bind(r.state.answers).optional
                                    else engine.CB_CHOICE + "0")
         q = engine._current_q(r.state)
-    r2 = engine.handle_text(r.state, "пока никто")
-    assert engine._current_q(r2.state).key == q.key and "не ответ" in r2.screens[0].text
-    assert engine.CB_STOP in str(engine.question_screen(r.state).buttons)
+    r2 = engine.handle_text(r.state, "не знаю")
+    assert engine._current_q(r2.state).key == q.key
+    assert "Если пока ничего — нажми «Пока не знаю — пропустить»" in r2.screens[0].text
+    assert ("Пока не знаю — пропустить", engine.CB_STOP) in [b for row in engine.question_screen(r.state).buttons
+                                                             for b in row]
     r = engine.handle_callback(r.state, engine.CB_STOP)
+    assert engine._current_q(r.state).key != q.key                 # пропущен только этот вопрос (Р14)
+    assert q.key in r.state.answers["_unknown"]
     assert engine.stage_of(r.state)[0] == "New — Notification"
 
 
@@ -915,7 +927,7 @@ def test_fill_files_only_can_be_skipped_without_sending():
     r = engine.start("project_fill", {"_target": {"id": "recX", "name": "PVSMART InsaitBC FL3"}, "_files_only": True})
     assert ("Новых материалов нет", engine.CB_SKIP) in [b for row in r.screens[-1].buttons for b in row]
     r = engine.handle_callback(r.state, engine.CB_SKIP)
-    assert r.state is None and "ничего не отправляю" in r.screens[0].text
+    assert r.state is None and "ничего не отправил" in r.screens[0].text
 
 
 def test_fill_intro_lists_missing_fields():
@@ -960,7 +972,7 @@ def test_fill_skip_closes_even_with_project_answers():
     r = engine.start("project_fill", {"_target": {"id": "recX", "name": "X"}, "_files_only": True,
                                       "Country": "Russia", "City": "Moscow"})
     r = engine.handle_callback(r.state, engine.CB_SKIP)
-    assert r.state is None and "ничего не отправляю" in r.screens[0].text
+    assert r.state is None and "ничего не отправил" in r.screens[0].text
 
 
 def test_fill_stop_skips_only_that_question():
@@ -978,4 +990,10 @@ def test_contact_level_optional_for_pre_required_for_reg():
     a = {"PL Volume": 60000}
     assert stage(3, {**a, "Contact Level": None}, [])[0] == "New — Pre-registration"
     assert stage(3, {**a, "Contact Level": "Declared"}, [])[0] == "New — Pre-registration"
-    assert stage(3, {**a, "Contact Level": "Verifiable (email/contact)"}, [])[0] == "New — Registration"
+    # Переписка засчитывается, только если прислана (файл или ссылка); «пришлю позже» — без подтверждения
+    assert stage(3, {**a, "Contact Level": "Verifiable (email/contact)"}, [])[0] == "New — Pre-registration"
+    assert stage(3, {**a, "Contact Level": "Verifiable (email/contact)", "Contact Evidence": "пришлю позже"},
+                 [])[0] == "New — Pre-registration"
+    assert stage(3, {**a, "Contact Level": "Verifiable (email/contact)",
+                     "Contact Evidence": [{"kind": "link", "url": "https://x"}]}, [])[0] == "New — Registration"
+    assert stage(3, {**a, "Contact Level": "Joint meeting with AW"}, [])[0] == "New — Registration"

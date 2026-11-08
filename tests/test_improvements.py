@@ -22,9 +22,22 @@ def test_alert_handler_collects_and_drains():
         log.warning("не ошибка")
     finally:
         log.removeHandler(h)
-    text = h.drain()
-    assert "ошибки (2)" in text and "Сбой — ValueError: boom" in text
-    assert h.drain() is None and h.day_count == 2
+    text = h.drain()["egor"]
+    assert "ошибки (2)" in text and "Сбой: Сбой." in text
+    assert "ValueError" not in text and "boom" not in text      # подробности — только в логах Railway
+    assert h.drain() == {} and h.day_count == 2
+    # Пережитый сетевой сбой проверяющему не приходит — только счётчик для сводки
+    log.addHandler(h)
+    try:
+        try:
+            raise TimeoutError("t")
+        except TimeoutError:
+            log.exception("Сеть")
+        log.error("x", extra={"alert": "Не дошла карточка заявки — открой /inbox.", "reviewer": "lola"})
+    finally:
+        log.removeHandler(h)
+    out = h.drain()
+    assert h.survived_count == 1 and list(out) == ["lola"] and "Не дошла карточка" in out["lola"]
 
 
 def test_summary_only_in_morning_hour_once():
@@ -62,7 +75,7 @@ def test_overdue_reviewer_then_dealer():
     updates = []
     repo = SimpleNamespace(
         undecided=lambda: [rec], company_types=lambda ids: [], company_name=lambda c: c,
-        chat_ids_for_people=lambda ids: ["555"], dedup_projects=lambda: [],
+        chat_ids_for_people=lambda ids: ["555"], dedup_projects=lambda: [], person_name=lambda p: "Лола",
         update_registration=lambda rid, f: updates.append(f[R.BOT_PROCESSED]))
     app = SimpleNamespace(bot=Bot(), bot_data={"repo": repo, "admin_chat_id": "1", "base_id": "appX"})
     asyncio.run(main._check_overdue(app))
@@ -70,10 +83,10 @@ def test_overdue_reviewer_then_dealer():
     rec["fields"][R.BOT_PROCESSED] = "late:48"
     rec["fields"][R.SUBMITTED_AT] = created(73)
     asyncio.run(main._check_overdue(app))
-    assert updates[-1] == "late:72" and app.bot.sent[-1] == ("555", main.LATE_TEXT.format(name="Медалл"))
+    assert updates[-1] == "late:72" and app.bot.sent[-1] == ("555", main.LATE_TEXT.format(name="Медалл", who="Егор"))
     rec["fields"][R.BOT_PROCESSED] = "late:72"
     asyncio.run(main._check_overdue(app))
-    assert len(app.bot.sent) == 2
+    assert len([s for s in app.bot.sent if s[0] == "555"]) == 1
 
 
 def test_abandoned_dialog_nudged_once(monkeypatch):
@@ -102,7 +115,7 @@ def test_architect_linked_to_people_and_project():
     note = asyncio.run(main._link_architect(repo, reg, {P.PEOPLE: ["recX"]}, "recP", ["recBUREAU"], ["recDEALER"]))
     assert calls["person"] == ("Иван Петров", "recBUREAU", "ГАП")
     assert calls["project"] == ("recP", {P.PEOPLE: ["recX", "recG"]})
-    assert note == "ГАП Иван Петров (новый в People)"
+    assert note == "главный архитектор проекта Иван Петров (добавлен в базу людей)"
     # Бюро — сам дилер (проект ведёт дилер / AW предлагает дилер) — ГАП не заводим
     assert asyncio.run(main._link_architect(repo, reg, {}, "recP", ["recDEALER"], ["recDEALER"])) is None
 
@@ -111,13 +124,13 @@ def test_same_alert_at_most_once_per_hour():
     h = alerts.AlertHandler()
     t0 = datetime(2026, 10, 27, 10, 0, tzinfo=VALENCIA)
     for _ in range(3):
-        h.queue.append((t0, "Необработанная ошибка — AttributeError: x"))
-    text = h.drain(t0)
-    assert "ошибки (3)" in text and "(×3)" in text
-    h.queue.append((t0, "Необработанная ошибка — AttributeError: x"))
-    assert h.drain(t0 + timedelta(minutes=30)) is None             # тот же текст — молчим час
-    h.queue.append((t0, "Необработанная ошибка — AttributeError: x"))
-    assert h.drain(t0 + timedelta(minutes=61)) is not None
+        h.queue.append((t0, "egor", "Сбой: x"))
+    text = h.drain(t0)["egor"]
+    assert "ошибки (1)" in text and "(×3)" in text
+    h.queue.append((t0, "egor", "Сбой: x"))
+    assert h.drain(t0 + timedelta(minutes=30)) == {}               # тот же текст — молчим час…
+    out = h.drain(t0 + timedelta(minutes=61))                       # …и потом говорим, сколько раз повторилась
+    assert "Ошибка повторяется: Сбой: x — 1 раз за час" in out["egor"]
 
 
 def test_upgrade_resets_status_date_and_card_shows_expiry():
@@ -141,7 +154,7 @@ def test_upgrade_resets_status_date_and_card_shows_expiry():
 
 def test_offer_upgrade_only_when_next_step_complete():
     from bot.airtable_ids import Projects as P
-    app = SimpleNamespace(bot=Bot(), bot_data={})
+    app = SimpleNamespace(bot=Bot(), bot_data={"repo": SimpleNamespace(person_name=lambda p: "Айлар")})
     ready = {P.NAME: "Raiffeisen Private", P.PPR_REF: "AW260094", P.NOTIFIED: ["recM"], P.PPR_TRACK: "Full"}
     asyncio.run(main._offer_upgrade(app, "1", ready, "recP", "recM"))
     assert "Условия для предрегистрации выполнены</b> · <code>Raiffeisen Private AW260094</code>" in app.bot.sent[0][1]
@@ -161,4 +174,4 @@ def test_reg_status_event_non_status_just_consumed():
     assert updates == [("recR", {R.BOT_REG_STATUS: "PENDING"})] and app.bot.sent == []
     asyncio.run(main._handle_reg_status_event(app, "recR", {R.REG_STATUS: "Pre-registration",
                                                             R.DEALER_PROJECT_NAME: "X"}))
-    assert "нет Target Project" in app.bot.sent[0][1]
+    assert "не поставлен: не выбран проект" in app.bot.sent[0][1] and "Target Project" not in app.bot.sent[0][1]

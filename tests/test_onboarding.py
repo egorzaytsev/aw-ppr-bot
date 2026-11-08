@@ -57,7 +57,7 @@ def test_unknown_user_onboarded_when_added_to_people():
     to_user = [t for c, t in app.bot.sent if c == "555"]
     to_admin = [t for c, t in app.bot.sent if c == "1"]
     assert to_user == [main.ONBOARDED_TEXT]
-    assert to_admin and "@newbie теперь в боте" in to_admin[0] and "STATIO" in to_admin[0]
+    assert to_admin and "Нью Би (STATIO) подключён к боту" in to_admin[0]
 
 
 def test_unknown_user_waits_then_expires():
@@ -68,7 +68,10 @@ def test_unknown_user_waits_then_expires():
     repo.recs = [_rec(8)]
     asyncio.run(main._check_unknown_users(app))
     assert repo.marks == [("recU", "expired", False)]
-    assert "ждал 7 дней" in app.bot.sent[0][1]
+    # Р11: обещание «напишу сам» не висит — человеку честный ответ, проверяющему — итог
+    assert app.bot.sent[0] == ("555", "Не получилось подключить тебя к программе. Если вопрос актуален — "
+                                      "напиши Егору напрямую.")
+    assert "ждал подключения 7 дней" in app.bot.sent[1][1]
 
 
 def test_lola_is_reviewer_only_after_known():

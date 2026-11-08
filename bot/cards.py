@@ -44,7 +44,7 @@ NEXT_STEP_LINES = (
     ("Quotation", "🧾 Номер квотации Andreu World."),
 )
 ARCHITECT_PENDING = "🏛 Архитектурное бюро — как только клиент его выберет."
-OTHER_DATA = "• Другие данные — уточни у Егора."
+OTHER_DATA = "📋 Другие данные — уточню и напишу отдельно."
 
 
 def next_step_lines(raw: str, contact: str) -> list[str]:

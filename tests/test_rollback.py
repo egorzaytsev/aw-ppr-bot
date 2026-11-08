@@ -12,6 +12,6 @@ def test_lower_status_chain():
 def test_rollback_text_has_reason_and_way_back():
     project = {P.NAME: "K5 Moscow Kremlin Museums", P.PPR_REF: "AW260247"}
     t = rollback_dealer_text(project, PPR_REGISTERED, PPR_PRE_REGISTERED, "нет ЛПР")
-    assert "регистрация → предрегистрация" in t and "Причина: нет ЛПР" in t and "«Дополнить»" in t
+    assert "регистрация → предрегистрация" in t and "Причина: нет ЛПР" in t and "«Дополнить материалы»" in t
     t = rollback_dealer_text(project, PPR_NOTIFIED, None, "проект закрыт")
     assert "статус снят" in t and "«Новый проект»" in t
