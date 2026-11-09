@@ -1327,7 +1327,7 @@ async def _remind_calls(app: Application, reviewer: str, admin_chat, morning: bo
 READY_REPEAT_DAYS = 7   # «условия выполнены» по одному менеджеру — не чаще раза в неделю
 
 
-async def _warn_ready(app: Application, reviewer: str, admin_chat) -> None:
+async def _warn_ready(app: Application, reviewer: str, admin_chat, force: bool = False) -> int:
     """Утром: проекты, где для следующего этапа уже всё есть (в т.ч. после правок через Буфер), —
     предложить повысить, не дожидаясь заявки партнёра."""
     repo: AirtableRepo = app.bot_data["repo"]
@@ -1339,7 +1339,7 @@ async def _warn_ready(app: Application, reviewer: str, admin_chat) -> None:
         for person in dict.fromkeys((f.get(Projects.PRE_REGISTERED) or []) + (f.get(Projects.NOTIFIED) or [])):
             key = f"{rec['id']}:{person}"
             last = offered.get(key)
-            if last and (today - date.fromisoformat(last)).days < READY_REPEAT_DAYS:
+            if last and not force and (today - date.fromisoformat(last)).days < READY_REPEAT_DAYS:
                 continue
             if await _route_person(app, person) != reviewer:
                 continue
@@ -1348,6 +1348,16 @@ async def _warn_ready(app: Application, reviewer: str, admin_chat) -> None:
             changed = True
     if changed:
         await memo.put(app.bot_data, "ready_offered", offered)
+    return sum(1 for v in offered.values() if v == today.isoformat()) if changed else 0
+
+
+async def cmd_ready(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/ready — прислать сейчас все предложения «Условия выполнены» по моим дилерам (без ожидания 9:00)."""
+    if not admin.is_admin(update, ctx):
+        return
+    who = routing.who_by_chat(ctx.bot_data, update.effective_chat.id) or routing.EGOR
+    if not await _warn_ready(ctx.application, who, update.effective_chat.id, force=True):
+        await update.effective_chat.send_message("🛠 Сейчас нет проектов, где условия следующего этапа выполнены.")
 
 
 async def _offer_upgrade(app: Application, admin_chat, fresh: dict, project_id: str, person_id: str) -> None:
@@ -1868,6 +1878,7 @@ DEALER_COMMANDS = [BotCommand("start", "Начать"), BotCommand("new", "Но�
                    BotCommand("cancel", "Отменить заявку"), BotCommand("time", "Время напоминаний")]
 ADMIN_COMMANDS = [BotCommand("admin", "Админ-меню"), BotCommand("inbox", "Заявки на проверке"),
                   BotCommand("reminder", "Напоминание сейчас"), BotCommand("upgrade", "Повысить или откатить статус"),
+                  BotCommand("ready", "Готовы к повышению — прислать сейчас"),
                   BotCommand("preview", "Как выглядят сообщения бота")]
 
 
@@ -1982,6 +1993,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("admin", cmd_admin, filters=private))
     app.add_handler(CommandHandler("upgrade", admin.cmd_upgrade, filters=private))
     app.add_handler(CommandHandler("preview", cmd_preview, filters=private))
+    app.add_handler(CommandHandler("ready", cmd_ready, filters=private))
     app.add_handler(MessageHandler(private & (filters.VOICE | filters.AUDIO), on_voice))
     app.add_handler(MessageHandler(private & (filters.Document.ALL | filters.PHOTO), on_file))
     app.add_handler(MessageHandler(private & filters.TEXT & ~filters.COMMAND, on_text))
