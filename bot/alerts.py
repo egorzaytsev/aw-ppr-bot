@@ -112,7 +112,7 @@ def summary_text(day: datetime, errors: int, stats: dict, overdue: int, unknown:
         lines.append(f"• Решения не прошли: {len(stats['blocked'])} — " + escape(", ".join(stats["blocked"][:5]))
                      + ". Кнопка «Показать» ниже пришлёт их с вариантами")
     if unknown:
-        lines.append(f"• Написали боту, но их нет в базе: {unknown} — подключить через Claude")
+        lines.append(f"• Заявок на подключение к боту без ответа: {unknown} — /join пришлёт их снова")
     lines.append(f"• Ошибок за сутки: {errors}" if errors else "• Ошибок за сутки не было")
     if survived_count:
         lines.append(f"• Сбоев, которые бот пережил сам: {survived_count}")

@@ -37,6 +37,9 @@ class Repo:
     def company_name(self, cid):
         return "STATIO"
 
+    def company_types(self, ids):
+        return ["Partner" for _ in ids]
+
 
 def _rec(days_ago):
     created = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
@@ -95,3 +98,45 @@ def test_awaiting_is_per_reviewer():
     assert repo.find_awaiting(1) == ("decline", "recE", "")
     assert repo.find_awaiting(2) == ("info", "recL", "")
     assert repo.find_awaiting() == ("info", "recL", "")
+
+
+# ---------- анкета подключения и решения Егора (bot/onboarding.py) ----------
+
+def test_join_questionnaire_card_and_connect():
+    from bot import onboarding, preview
+    from bot.airtable_ids import People
+    sent = asyncio.run(preview.record("unknown"))
+    other = [t for c, t, _ in sent if c == str(preview.OTHER)]
+    admin_msgs = [(t, m) for c, t, m in sent if c == str(preview.ADMIN)]
+    assert other[0] == onboarding.INTRO
+    assert any("Не похоже на номер телефона" in t for t in other)
+    assert onboarding.SENT_TEXT in other and onboarding.WAITING_TEXT in other
+    assert main.ONBOARDED_TEXT in other
+    card, markup = next((t, m) for t, m in admin_msgs if "Заявка на подключение" in t)
+    assert "Менеджер проектов" in card and "oleg@example.com" in card and "@oleg_new" in card
+    labels = [b.text for row in markup.inline_keyboard for b in row]
+    assert "✅ Подключить к «Другая Мебель»" in labels and "🔗 Это Олег Новиков (Другая Мебель)" in labels
+    assert any("Подключил: Олег Новиков (Другая Мебель)" in t for t, _ in admin_msgs)
+    declined = [t for c, t, _ in sent if c == str(preview.OTHER + 1)]
+    assert declined and "Работаем только с официальными дилерами" in declined[0]
+
+
+def test_person_fields_only_known_options():
+    from bot import onboarding
+    from bot.airtable_ids import People
+    p = {"chat_id": 5, "username": "x", "name": "Олег Новиков", "role": "Менеджер", "country": "Russia",
+         "city": "Питер", "phone": "+7 912", "email": "a@b.co"}
+    f = onboarding._person_fields(p, "recC", "Dealer")
+    assert f[People.CITY] == "Saint-Petersburg" and f[People.COUNTRY] == "Russia"
+    assert f[People.CATEGORY] == ["Dealer"] and f[People.TELEGRAM_CHAT_ID] == "5"
+    p["city"], p["country"] = "Самарканд", "Uzbekistan"
+    f = onboarding._person_fields(p, "recC", "Partner")
+    assert People.CITY not in f and f[People.CATEGORY] == ["Partner"]
+
+
+def test_validation():
+    from bot import onboarding
+    assert not onboarding.valid("name", "Олег") and onboarding.valid("name", "Олег Новиков")
+    assert not onboarding.valid("phone", "12") and onboarding.valid("phone", "+998 90 123 45 67")
+    assert not onboarding.valid("email", "oleg") and onboarding.valid("email", "o@b.uz")
+    assert onboarding.country_option("узбекистан") == "Uzbekistan"

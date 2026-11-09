@@ -15,6 +15,10 @@ class People:
     LAST_REMINDER = "fldpIUrdICo7UusyN"
     COUNTRY = "fldKd7jlAKfey5xeD"
     ROLE = "fldrG4pHBV6Fxo4Xf"
+    CITY = "fldHRw2d8NldBXheq"        # single select — пишем только значения из списка
+    EMAIL = "fld5hmxV6P0PGFW4v"
+    PHONE = "fldHoFlQH3uLBCwWM"
+    CATEGORY = "fldKLn0ayP8IAfw49"    # multiple select: Dealer, Partner, …
     REGISTRATIONS = "fldWLjaQBXmtoT5xX"   # ← Registrations.Submitted By
     # Обратные стороны Manager-полей Projects
     AS_NOTIFIED = "flddsYlUWQ3xAeZg7"

@@ -536,6 +536,35 @@ class AirtableRepo:
         })
         return rec["id"]
 
+    def save_join_request(self, chat_id: int, username: str | None, tg_name: str, answers: dict,
+                          reg_id: str | None = None) -> str:
+        """Заявка незнакомого человека на подключение (анкета заполнена). reg_id — дописать старую запись."""
+        payload = {"chat_id": int(chat_id), "username": username, "tg_name": tg_name, **answers}
+        fields = {
+            Registrations.NAME: " · ".join(x for x in (answers.get("name"), answers.get("company")) if x)
+                                or (f"@{username}" if username else str(chat_id)),
+            Registrations.REQUEST_TYPE: RequestType.UNKNOWN_USER,
+            Registrations.PAYLOAD: json.dumps(payload, ensure_ascii=False, indent=2),
+        }
+        if reg_id:
+            return self._registrations.update(reg_id, fields)["id"]
+        return self._registrations.create(fields)["id"]
+
+    def people_without_chat(self) -> dict:
+        """{id: (имя, [компании])} людей без Telegram — кандидаты «это уже есть в базе»."""
+        recs = self._people.all(formula=f"{{{People.TELEGRAM_CHAT_ID}}}=''",
+                                fields=[People.NAME, People.COMPANY], use_field_ids=True)
+        return {r["id"]: (r["fields"].get(People.NAME, ""), r["fields"].get(People.COMPANY, [])) for r in recs}
+
+    def person_fields(self, person_id: str) -> dict:
+        return self._people.get(person_id, use_field_ids=True)["fields"]
+
+    def create_person(self, fields: dict) -> str:
+        return self._people.create(fields)["id"]
+
+    def update_person(self, person_id: str, fields: dict) -> None:
+        self._people.update(person_id, fields)
+
     def mark_processed(self, reg_id: str, mark: str, closed: bool = True) -> None:
         fields = {Registrations.BOT_PROCESSED: mark}
         if closed:

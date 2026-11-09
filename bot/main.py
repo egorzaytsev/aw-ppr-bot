@@ -27,7 +27,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import admin, alerts, cards, dedup, engine, labels, memo, phrases, preview as preview_mod, reminders, routing, slots
+from . import admin, alerts, cards, dedup, engine, labels, memo, onboarding, phrases, preview as preview_mod, reminders, routing, slots
 from .airtable_ids import Decision, Partners, People, Projects, Registrations, RegStatus, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
@@ -147,28 +147,14 @@ async def _identify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Person | 
         await asyncio.to_thread(repo.bind_chat_id, person.record_id, chat_id)
         person.chat_id = str(chat_id)
         log.info("Привязал chat_id %s к %s", chat_id, person.record_id)
+        await onboarding.notify_joined(ctx.bot_data, ctx.bot, person.name, person.company_ids,
+                                       "зашёл в бота сам — нашёл его в базе по нику в Telegram.")
     return person
 
 
 async def _unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Человека нет в People: запись «Unknown user» в Inbox (одна на человека), ответ ему, сигнал Егору."""
-    chat_id = update.effective_chat.id
-    repo = _repo(ctx)
-    if await asyncio.to_thread(repo.open_unknown_users, chat_id):
-        await update.effective_chat.send_message(NOT_FOUND_AGAIN, reply_markup=START_KEYBOARD)
-        return
-    user = update.effective_user
-    username = user.username if user else None
-    full_name = (user.full_name if user else "") or ""
-    reg_id = await asyncio.to_thread(repo.create_unknown_user, chat_id, username, full_name)
-    await update.effective_chat.send_message(NOT_FOUND_TEXT, reply_markup=START_KEYBOARD)
-    admin_chat = ctx.bot_data.get("admin_chat_id")
-    if admin_chat:
-        who = f", @{escape(username)}" if username else ""
-        await _send_html(ctx.bot, admin_chat,
-                         f"👋 <b>Новый человек в боте</b>: {escape(full_name) or 'без имени'}{who}.\n"
-                         "Чтобы подключить — попроси Claude внести его и назови компанию. "
-                         f"Когда он появится в базе, я сам ему напишу. Жду {UNKNOWN_EXPIRY_DAYS} дней.")
+    """Человека нет в People: анкета подключения, потом карточка Егору с кнопками (bot/onboarding.py)."""
+    await onboarding.handle(update, ctx)
 
 
 async def _check_unknown_users(app: Application) -> None:
@@ -193,12 +179,11 @@ async def _check_unknown_users(app: Application) -> None:
                 await asyncio.to_thread(repo.bind_chat_id, person.record_id, chat_id)
             await asyncio.to_thread(repo.mark_processed, rec["id"], "done:onboarded")
             await _send_html(app.bot, chat_id, ONBOARDED_TEXT, START_KEYBOARD)
-            if admin_chat:
-                companies = ", ".join(repo.company_name(c) for c in person.company_ids) or "без компании"
-                await _send_html(app.bot, admin_chat,
-                                 f"✅ {escape(person.name)} ({escape(companies)}) подключён к боту — "
-                                 "приглашение отправлено. Делать ничего не нужно.")
+            await onboarding.notify_joined(app.bot_data, app.bot, person.name, person.company_ids,
+                                           "подключён к боту — приглашение отправлено. Делать ничего не нужно.")
             continue
+        if data.get("company"):
+            continue   # заявка с анкетой ждёт кнопки Егора, сама не закрывается (напоминает утренняя сводка)
         created = f.get(Registrations.SUBMITTED_AT)
         if created and datetime.now(timezone.utc) - datetime.fromisoformat(created.replace("Z", "+00:00")) \
                 > timedelta(days=UNKNOWN_EXPIRY_DAYS):
@@ -469,6 +454,9 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 async def _route(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, data: str) -> None:
     if data.startswith(preview_mod.CB_PREVIEW):
         return   # кнопки в /preview — только для вида
+    if data.startswith(onboarding.CB_ADMIN):
+        await onboarding.on_admin_callback(update, ctx, data)
+        return
     if data.startswith(admin.CB_ADMIN):
         await admin.on_admin_callback(update, ctx, data)
         return
@@ -1360,6 +1348,17 @@ async def cmd_ready(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_chat.send_message("🛠 Сейчас нет проектов, где условия следующего этапа выполнены.")
 
 
+async def cmd_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/join — снова прислать заявки на подключение к боту, на которые ещё нет ответа (только Егору)."""
+    if not admin.is_admin(update, ctx):
+        return
+    if str(update.effective_chat.id) != str(ctx.bot_data.get("admin_chat_id")):
+        await update.effective_chat.send_message("🛠 Заявки на подключение к боту разбирает Егор.")
+        return
+    if not await onboarding.resend_open(ctx.bot, _repo(ctx), update.effective_chat.id):
+        await update.effective_chat.send_message("🛠 Заявок на подключение без ответа нет.")
+
+
 async def _offer_upgrade(app: Application, admin_chat, fresh: dict, project_id: str, person_id: str) -> None:
     """После «Дополнить»: условия следующего этапа выполнены — предложить проверяющему повысить."""
     if not admin_chat or fresh.get(Projects.PPR_NEXT_MISSING) or fresh.get(Projects.REGISTERED) \
@@ -1879,6 +1878,7 @@ DEALER_COMMANDS = [BotCommand("start", "Начать"), BotCommand("new", "Но�
 ADMIN_COMMANDS = [BotCommand("admin", "Админ-меню"), BotCommand("inbox", "Заявки на проверке"),
                   BotCommand("reminder", "Напоминание сейчас"), BotCommand("upgrade", "Повысить или откатить статус"),
                   BotCommand("ready", "Готовы к повышению — прислать сейчас"),
+                  BotCommand("join", "Заявки на подключение к боту"),
                   BotCommand("preview", "Как выглядят сообщения бота")]
 
 
@@ -1994,6 +1994,7 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("upgrade", admin.cmd_upgrade, filters=private))
     app.add_handler(CommandHandler("preview", cmd_preview, filters=private))
     app.add_handler(CommandHandler("ready", cmd_ready, filters=private))
+    app.add_handler(CommandHandler("join", cmd_join, filters=private))
     app.add_handler(MessageHandler(private & (filters.VOICE | filters.AUDIO), on_voice))
     app.add_handler(MessageHandler(private & (filters.Document.ALL | filters.PHOTO), on_file))
     app.add_handler(MessageHandler(private & filters.TEXT & ~filters.COMMAND, on_text))

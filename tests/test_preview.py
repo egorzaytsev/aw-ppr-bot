@@ -16,7 +16,7 @@ def test_preview_scenario_runs_and_is_clean(scenario):
     assert sent, scenario
     for _, text, markup in sent:
         assert not TECH.search(text), (scenario, text)
-        for row in (markup.inline_keyboard if markup else []):
+        for row in getattr(markup, "inline_keyboard", None) or []:
             for b in row:
                 assert len(b.callback_data.encode()) <= 64, b.callback_data   # лимит Telegram
                 assert not TECH.search(b.text), b.text
@@ -27,5 +27,5 @@ def test_every_prompt_for_input_has_cancel():
     for scenario in preview.SCENARIOS:
         for to, text, markup in asyncio.run(preview.record(scenario)):
             if to == str(preview.ADMIN) and re.search(r"\bНапиши\b", text) and "Дилеру отправлено" not in text:
-                labels = [b.text for row in (markup.inline_keyboard if markup else []) for b in row]
+                labels = [b.text for row in getattr(markup, "inline_keyboard", None) or [] for b in row]
                 assert any(l.startswith("Отмена") for l in labels), (scenario, text)

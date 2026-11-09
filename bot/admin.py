@@ -94,7 +94,8 @@ async def reviewer_of(ctx: ContextTypes.DEFAULT_TYPE, reg: dict) -> str:
 
 
 # Ожидания ввода без заявки (откат, «Пока оставить», «Отказать», другое время звонка) — в памяти бота (memo)
-_MEMO_ACTIONS = {ACTION_RB_DOWN, ACTION_RB_CANCEL, ACTION_UP_KEEP, ACTION_UP_DENY, ACTION_CALL_OTHER}
+_MEMO_ACTIONS = {ACTION_RB_DOWN, ACTION_RB_CANCEL, ACTION_UP_KEEP, ACTION_UP_DENY, ACTION_CALL_OTHER,
+                 "jrej", "jco"}   # + подключение нового человека (bot/onboarding.py)
 
 
 async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> tuple | None:
@@ -832,6 +833,8 @@ _CANCEL_WHAT = {
     ACTION_UP_DENY: "отказ — ничего не ушло, статус не менялся",
     ACTION_CALL_OTHER: "другое время звонка — дилеру ничего не ушло",
     ACTION_REMIND_USER: "просмотр напоминания",
+    "jrej": "отказ в подключении — человеку ничего не ушло",
+    "jco": "выбор компании — человек не подключён, заявка ждёт",
     "notecont": "принятие — решения нет",
 }
 _REG_ACTIONS = {ACTION_ACCEPT_NOTE, ACTION_DECLINE, ACTION_INFO, ACTION_NEW, ACTION_DNEW, ACTION_RENAME,
@@ -1487,6 +1490,9 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     action, reg_id, reply_id = item
     if action in _MEMO_ACTIONS and text.strip():
         await memo.pop(ctx.bot_data, "waits", str(chat.id))
+    from . import onboarding
+    if action in onboarding.ADMIN_ACTIONS:
+        return await onboarding.on_admin_text(update, ctx, item, text)
     if action == ACTION_CALL_OTHER:
         if not text.strip():
             pending[chat.id] = item

@@ -273,6 +273,31 @@ class PreviewRepo:
     def find_by_chat_id(self, chat_id):
         return None
 
+    def save_join_request(self, chat_id, username, tg_name, answers, reg_id=None):
+        fields = {Registrations.REQUEST_TYPE: RequestType.UNKNOWN_USER, Registrations.SUBMITTED_BY: [],
+                  Registrations.PAYLOAD: json.dumps({"chat_id": chat_id, "username": username, "tg_name": tg_name,
+                                                     **answers}, ensure_ascii=False)}
+        if reg_id:
+            self.regs[reg_id].update(fields)
+            return reg_id
+        return self.add_reg(fields)
+
+    def people_without_chat(self):
+        return {"recPrevNoTg0000001": ("Олег Новиков", [OTHER_CO])}
+
+    def person_fields(self, pid):
+        from .airtable_ids import People
+        return {People.NAME: "Олег Новиков", People.COMPANY: [OTHER_CO]}
+
+    def create_person(self, fields):
+        return "recPrevPerson00002"
+
+    def update_person(self, pid, fields):
+        pass
+
+    def _company_names(self):
+        return {k: v[0] for k, v in self.companies.items()}
+
 
 class Recorder:
     """«Бот», который записывает сообщения вместо отправки."""
@@ -486,18 +511,40 @@ async def _rollback(w):
 
 
 async def _unknown(w):
-    from . import main
+    from . import onboarding
     repo, bot, ctx, app, update, dealer = w
-    await bot.send_message(OTHER, main.NOT_FOUND_TEXT)
-    await bot.send_message(OTHER, main.NOT_FOUND_AGAIN)
-    rid = repo.create_unknown_user(OTHER, "new_person", "Новый Человек")
-    up = update(OTHER, "Новый Человек")
-    up.effective_user.username = "new_person"
-    await main._send_html(bot, ADMIN, f"👋 <b>Новый человек в боте</b>: Новый Человек, @new_person.\n"
-                                      "Чтобы подключить — попроси Claude внести его и назови компанию. "
-                                      f"Когда он появится в базе, я сам ему напишу. Жду {main.UNKNOWN_EXPIRY_DAYS} дней.")
-    repo.regs[rid][Registrations.SUBMITTED_AT] = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-    await main._check_unknown_users(app)
+
+    def say(text=None, data=None):
+        up = update(OTHER, "Олег Новиков")
+        up.effective_user.username = "oleg_new"
+        if data:
+            up.callback_query = SimpleNamespace(data=data)
+        else:
+            up.effective_message = SimpleNamespace(text=text)
+        return onboarding.handle(up, ctx)
+
+    await say("/start")
+    await say(data=f"{onboarding.CB_USER}tg")
+    for answer in ("Другая Мебель", "Менеджер проектов"):
+        await say(answer)
+    await say(data=f"{onboarding.CB_USER}c:Russia")
+    await say("Москва")
+    await say("12")                       # не телефон — бот переспросит
+    await say("+7 912 345 67 89")
+    await say("oleg@example.com")
+    await say(data=f"{onboarding.CB_USER}ok")
+    await say("когда подключите?")
+    rid = next(k for k, v in repo.regs.items() if v.get(Registrations.REQUEST_TYPE) == RequestType.UNKNOWN_USER)
+    admin_up = update(ADMIN)
+    await onboarding.on_admin_callback(admin_up, ctx, f"{onboarding.CB_ADMIN}oc:{rid}")
+    from . import admin
+    await admin.on_admin_text(admin_up, ctx, "Новая Студия", resume=False)
+    await onboarding.on_admin_callback(admin_up, ctx, f"{onboarding.CB_ADMIN}co:{rid}:{OTHER_CO}")
+    # Отказ — на второй заявке
+    rid2 = repo.save_join_request(OTHER + 1, None, "Аноним", {"name": "Иван Иванов", "company": "Неизвестно"})
+    await onboarding.send_card(bot, repo, ADMIN, rid2)
+    await onboarding.on_admin_callback(admin_up, ctx, f"{onboarding.CB_ADMIN}no:{rid2}")
+    await admin.on_admin_text(admin_up, ctx, "Работаем только с официальными дилерами", resume=False)
 
 
 async def _errors(w):
