@@ -51,6 +51,7 @@ ACTION_NOTE_OK = "nok"                             # отправить пред
 ACTION_DECLINE_CANCEL = "dcx"                      # отмена записанного отказа (выбор проекта для уведомления)
 # Пошаговое повышение: «Пока оставить» и «Отказать» — с комментарием дилеру
 ACTION_UP_KEEP, ACTION_UP_DENY, ACTION_UP_BARE = "upk", "upd", "upb"
+ACTION_UP_VIEW = "upv"   # посмотреть проект перед решением — потом снова те же кнопки
 # Повышение статуса без заявки: ad:up:<проект>:<менеджер>:pre|reg; список /upgrade и выбор пары
 ACTION_UP, ACTION_UP_NO, ACTION_UP_LIST, ACTION_UP_PICK = "up", "upno", "upl", "ups"
 # Подтверждение несмотря на незаполненные ответы: те же действия с флагом «точно»
@@ -167,7 +168,8 @@ def upgrade_markup(project_id: str, person_id: str, target: str) -> InlineKeyboa
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(f"⬆️ Повысить до {what}", callback_data=f"{CB_ADMIN}{ACTION_UP}:{tail}")],
         [InlineKeyboardButton("❌ Отказать", callback_data=f"{CB_ADMIN}{ACTION_UP_DENY}:{tail}"),
-         InlineKeyboardButton("Пока оставить", callback_data=f"{CB_ADMIN}{ACTION_UP_KEEP}:{tail}")],
+         InlineKeyboardButton("👁 Посмотреть проект", callback_data=f"{CB_ADMIN}{ACTION_UP_VIEW}:{tail}")],
+        [InlineKeyboardButton("Пока оставить", callback_data=f"{CB_ADMIN}{ACTION_UP_KEEP}:{tail}")],
     ])
 
 
@@ -1009,6 +1011,19 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
                 [InlineKeyboardButton("Отправить без комментария",
                                       callback_data=f"{CB_ADMIN}{ACTION_UP_BARE}:{parts[0]}:{parts[1]}:{parts[2]}:{mode[0]}")],
                 cancel_row()]))
+        return
+    if action == ACTION_UP_VIEW and len(parts) >= 3:
+        # Всё, что есть в проекте, — и снова те же четыре кнопки решения
+        project = await asyncio.to_thread(repo.project_fields, parts[0])
+        ids = (project.get(Projects.END_CLIENT) or []) + (project.get(Projects.SPECIFIER) or [])
+        companies = {c: await asyncio.to_thread(repo.company_name, c) for c in ids}
+        person = await asyncio.to_thread(repo.person_name, parts[1]) or "менеджер без имени"
+        status = dealer_status(project, parts[1])
+        what = "предрегистрации" if parts[2] == "pre" else "регистрации"
+        head = (f"🛠 <b>Проект перед решением</b> · {escape(person)} — сейчас "
+                f"{STATUS_RU.get(status, 'нет статуса')}, вопрос о {what}")
+        await send_card(ctx.bot, chat.id, "\n".join([head] + project_digest(project, parts[1], companies)),
+                        upgrade_markup(parts[0], parts[1], parts[2]))
         return
     if action == ACTION_UP_BARE and len(parts) >= 4:
         pending.pop(chat.id, None)
