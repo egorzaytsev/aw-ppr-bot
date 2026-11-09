@@ -39,3 +39,14 @@ def test_file_labels():
     assert file_label("file_AgADx") == "файл"
     assert file_label("Планировка.pdf") == "Планировка.pdf"
     assert describe_items([{"kind": "file", "name": "photo_1_y.jpg"}, {"kind": "link", "url": "u"}]) == "фото; u"
+
+
+def test_image_sent_as_file_falls_back_to_document():
+    class PickyBot(Bot):
+        async def send_photo(self, chat_id, photo, caption=""):
+            raise RuntimeError("Can't use file of type Document as Photo")
+    payload = {"Contact Evidence": [{"kind": "file", "file_id": "F1", "name": "photo_544_y.jpg", "mime": "image/jpeg"}]}
+    bot = PickyBot()
+    line = asyncio.run(admin.send_files(bot, 1, payload, "SHANSGK"))
+    assert bot.sent == [("doc", "F1", "📎 Подтверждение контакта · SHANSGK")]
+    assert "Файлы дилера (1)" in line and "не получилось" not in line

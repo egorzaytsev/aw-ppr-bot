@@ -641,20 +641,25 @@ async def send_files(bot, chat_id, payload: dict, project: str = "") -> str:
     sent = 0
     for title, it in files[:MAX_FILES_SHOWN]:
         caption = " · ".join(x for x in (f"📎 {title}", project) if x)[:1000]
-        try:
-            if str(it.get("mime") or "").startswith("image/") and str(it.get("name") or "").startswith("photo_"):
-                await bot.send_photo(chat_id, it["file_id"], caption=caption)
-            else:
-                await bot.send_document(chat_id, it["file_id"], caption=caption)
-            sent += 1
-        except Exception:
-            log.warning("Не удалось переслать файл %s проверяющему", it.get("name"), exc_info=True)
+        # Картинку дилер мог прислать «файлом», а не фото: тогда как фото её не отправить — шлём документом
+        tries = (bot.send_photo, bot.send_document) if str(it.get("mime") or "").startswith("image/") \
+            else (bot.send_document,)
+        for send in tries:
+            try:
+                await send(chat_id, it["file_id"], caption=caption)
+                sent += 1
+                break
+            except Exception:
+                log.warning("Не удалось переслать файл %s проверяющему (%s)", it.get("name"), send.__name__,
+                            exc_info=True)
     if not files:
         return ""
-    line = f"\n📎 Файлы дилера ({sent}) — сообщениями выше."
+    lines = []
+    if sent:
+        lines.append(f"📎 Файлы дилера ({sent}) — сообщениями выше.")
     if len(files) > sent:
-        line += f" Ещё {len(files) - sent} — во вложениях заявки."
-    return line
+        lines.append(f"📎 Ещё файлов: {len(files) - sent} — переслать не получилось, они во вложениях заявки.")
+    return "\n" + "\n".join(lines)
 
 
 async def send_card(bot, chat_id, text: str, markup=None) -> None:
