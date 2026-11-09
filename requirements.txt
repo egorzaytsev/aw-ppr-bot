@@ -3,3 +3,4 @@ pyairtable==3.5.0
 httpx==0.28.1
 tzdata==2025.2
 imageio-ffmpeg==0.6.0
+anthropic==2.6.0

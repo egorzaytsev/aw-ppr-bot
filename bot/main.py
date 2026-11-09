@@ -27,7 +27,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import admin, alerts, cards, dedup, engine, labels, memo, onboarding, phrases, preview as preview_mod, reminders, routing, slots
+from . import admin, alerts, cards, dedup, engine, file_notes, labels, memo, onboarding, phrases, preview as preview_mod, reminders, routing, slots
 from .airtable_ids import Decision, Partners, People, Projects, Registrations, RegStatus, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
@@ -894,6 +894,7 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
                 admin.decision_markup(ctx, reg_id, candidates),
             )
             await admin.send_call_offer(ctx.bot, admin_chat, reg_id, card_fields, person.name)
+            file_notes.schedule(ctx.bot_data, ctx.bot, admin_chat, payload, name or "")
         except Exception:
             log.exception("Не удалось уведомить проверяющего %s", admin_chat, extra={
                 "alert": f"Не дошла карточка новой заявки «{name or 'без названия'}» от {person.name}. "
@@ -1006,11 +1007,26 @@ async def log_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 DECISIONS_INTERVAL = 60  # секунд между проверками Inbox
 
 
+def _send_failure(text: str, exc: Exception) -> str:
+    """Проверяющему по-русски: какое сообщение не ушло и почему."""
+    import re as _re
+    snippet = _re.sub(r"<[^>]+>", "", text).replace("\n", " ").strip()
+    snippet = snippet[:70] + ("…" if len(snippet) > 70 else "")
+    reason = str(exc).lower()
+    if "blocked" in reason or "deactivated" in reason:
+        why = "получатель заблокировал бота"
+    elif "chat not found" in reason or "initiate conversation" in reason:
+        why = "получатель ни разу не писал боту (или удалил чат с ним)"
+    else:
+        why = "Telegram не принял сообщение"
+    return f"Не дошло сообщение «{snippet}» — {why}. Если это дилер — напиши ему сам."
+
+
 async def _send_html(ctx_bot, chat_id, text: str, markup=None) -> None:
     try:
         await ctx_bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
-    except Exception:
-        log.exception("Не удалось отправить сообщение в чат %s", chat_id)
+    except Exception as exc:
+        log.exception("Не удалось отправить сообщение в чат %s", chat_id, extra={"alert": _send_failure(text, exc)})
 
 
 async def _link_architect(repo: AirtableRepo, reg: dict, project: dict, project_id: str,

@@ -738,6 +738,8 @@ async def send_request(ctx: ContextTypes.DEFAULT_TYPE, chat_id, reg_id: str, reg
     await send_card(ctx.bot, chat_id, header + text + age_line(reg.get(Registrations.SUBMITTED_AT)),
                     decision_markup(ctx, reg_id, await merge_candidates(repo, reg)))
     await send_call_offer(ctx.bot, chat_id, reg_id, reg, author)
+    from . import file_notes
+    file_notes.schedule(ctx.bot_data, ctx.bot, chat_id, _payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "")
 
 
 async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

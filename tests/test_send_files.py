@@ -50,3 +50,9 @@ def test_image_sent_as_file_falls_back_to_document():
     line = asyncio.run(admin.send_files(bot, 1, payload, "SHANSGK"))
     assert bot.sent == [("doc", "F1", "📎 Подтверждение контакта · SHANSGK")]
     assert "Файлы дилера (1)" in line and "не получилось" not in line
+
+
+def test_send_failure_text():
+    from bot import main
+    t = main._send_failure("<b>✅ Заявка принята</b> · SHANSGK", RuntimeError("Forbidden: bot was blocked by the user"))
+    assert t.startswith("Не дошло сообщение «✅ Заявка принята · SHANSGK» — получатель заблокировал бота")
