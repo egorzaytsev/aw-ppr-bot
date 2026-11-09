@@ -309,6 +309,12 @@ class Recorder:
         self.sent.append((str(chat_id), text, reply_markup))
         return SimpleNamespace(message_id=len(self.sent))
 
+    async def send_photo(self, chat_id, photo, caption="", **kw):
+        return await self.send_message(chat_id, f"[фото] {caption}")
+
+    async def send_document(self, chat_id, document, caption="", **kw):
+        return await self.send_message(chat_id, f"[файл] {caption}")
+
 
 class _Chat:
     def __init__(self, bot: Recorder, chat_id: int) -> None:

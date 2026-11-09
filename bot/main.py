@@ -886,10 +886,11 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
             if request_type in admin.UPGRADE_REQUESTS:
                 reg = await asyncio.to_thread(_repo(ctx).registration_fields, reg_id)
                 extra = await admin.upgrade_digest(_repo(ctx), reg)
+            files_line = await admin.send_files(ctx.bot, admin_chat, payload, name or "")
             await admin.send_card(
                 ctx.bot, admin_chat,
                 admin.request_card(card_fields, reg_id, person.name, analysis, _sender_label(ctx, person, payload),
-                                   extra, await admin.asked_of(_repo(ctx), card_fields), failed),
+                                   extra, await admin.asked_of(_repo(ctx), card_fields), failed) + files_line,
                 admin.decision_markup(ctx, reg_id, candidates),
             )
             await admin.send_call_offer(ctx.bot, admin_chat, reg_id, card_fields, person.name)

@@ -621,6 +621,42 @@ def split_message(text: str, limit: int = TG_LIMIT) -> list[str]:
     return parts or [""]
 
 
+MAX_FILES_SHOWN = 10
+
+
+def payload_files(payload: dict) -> list[tuple[str, dict]]:
+    """Файлы дилера из заявки (то, что он прислал боту): [(о чём, файл)]."""
+    out = []
+    for key, value in payload.items():
+        if isinstance(value, list):
+            title = _QUESTIONS[key].title if key in _QUESTIONS else _EXTRA_TITLES.get(key, "Файл к заявке")
+            out += [(title, it) for it in value if isinstance(it, dict) and it.get("kind") == "file" and it.get("file_id")]
+    return out
+
+
+async def send_files(bot, chat_id, payload: dict, project: str = "") -> str:
+    """Сами файлы дилера — проверяющему перед карточкой, чтобы видеть, что прислали.
+    Возвращает строку для карточки («📎 Файлы — выше») или пустую."""
+    files = payload_files(payload)
+    sent = 0
+    for title, it in files[:MAX_FILES_SHOWN]:
+        caption = " · ".join(x for x in (f"📎 {title}", project) if x)[:1000]
+        try:
+            if str(it.get("mime") or "").startswith("image/") and str(it.get("name") or "").startswith("photo_"):
+                await bot.send_photo(chat_id, it["file_id"], caption=caption)
+            else:
+                await bot.send_document(chat_id, it["file_id"], caption=caption)
+            sent += 1
+        except Exception:
+            log.warning("Не удалось переслать файл %s проверяющему", it.get("name"), exc_info=True)
+    if not files:
+        return ""
+    line = f"\n📎 Файлы дилера ({sent}) — сообщениями выше."
+    if len(files) > sent:
+        line += f" Ещё {len(files) - sent} — во вложениях заявки."
+    return line
+
+
 async def send_card(bot, chat_id, text: str, markup=None) -> None:
     """Карточка целиком, без сокращений: части подряд, кнопки — под последней."""
     parts = split_message(text)
@@ -693,6 +729,7 @@ async def send_request(ctx: ContextTypes.DEFAULT_TYPE, chat_id, reg_id: str, reg
     author = await _author(repo, reg)
     text = request_card(reg, reg_id, author, reg.get(Registrations.ANALYSIS), await _dealer(repo, reg),
                         await upgrade_digest(repo, reg), await asked_of(repo, reg))
+    text += await send_files(ctx.bot, chat_id, _payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "")
     await send_card(ctx.bot, chat_id, header + text + age_line(reg.get(Registrations.SUBMITTED_AT)),
                     decision_markup(ctx, reg_id, await merge_candidates(repo, reg)))
     await send_call_offer(ctx.bot, chat_id, reg_id, reg, author)

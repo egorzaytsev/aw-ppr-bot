@@ -294,10 +294,20 @@ def _parse_answer(q: Question, text: str) -> Value:
     return text
 
 
+def file_label(name: str | None) -> str:
+    """Имя файла для людей: фото из Telegram без имени — «фото», файл без имени — «файл»."""
+    name = name or ""
+    if not name or re.fullmatch(r"photo_[\w-]+\.jpg", name):
+        return "фото" if name else "файл"
+    if re.fullmatch(r"file_[\w-]+", name):
+        return "файл"
+    return name
+
+
 def describe_items(items: list) -> str:
     names = []
     for it in items:
-        names.append(it.get("name") or "файл" if it.get("kind") == "file" else it.get("url", ""))
+        names.append(file_label(it.get("name")) if it.get("kind") == "file" else it.get("url", ""))
     return "; ".join(names)
 
 
