@@ -138,6 +138,7 @@ async def _identify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Person | 
     chat_id = update.effective_chat.id
     person = await asyncio.to_thread(repo.find_by_chat_id, chat_id)
     if person:
+        await forget_unreachable(chat_id)
         return person
     username = update.effective_user.username if update.effective_user else None
     if not username:
@@ -1007,6 +1008,10 @@ async def log_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 DECISIONS_INTERVAL = 60  # секунд между проверками Inbox
 
 
+_UNREACHABLE_HINTS = ("blocked", "deactivated", "chat not found", "initiate conversation", "user not found")
+_BOT_DATA: dict | None = None   # bot_data приложения — для памяти «кому не дойти» (main() заполняет)
+
+
 def _send_failure(text: str, exc: Exception) -> str:
     """Проверяющему по-русски: какое сообщение не ушло и почему."""
     import re as _re
@@ -1022,10 +1027,56 @@ def _send_failure(text: str, exc: Exception) -> str:
     return f"Не дошло сообщение «{snippet}» — {why}. Если это дилер — напиши ему сам."
 
 
+async def _unreachable() -> dict:
+    """{chat_id: имя} — люди, которым бот не может писать (не открывали бота / заблокировали)."""
+    if _BOT_DATA is None:
+        return {}
+    return await memo.get(_BOT_DATA, "unreachable", {})
+
+
+async def _mark_unreachable(chat_id, exc: Exception) -> None:
+    """Первый раз — назвать человека проверяющему; дальше ему не слать, пока сам не напишет боту."""
+    box = await _unreachable()
+    repo = (_BOT_DATA or {}).get("repo")
+    name, companies = "человек без имени", ""
+    if repo is not None:
+        try:
+            person = await asyncio.to_thread(repo.find_by_chat_id, chat_id)
+            if person:
+                name = person.name or name
+                companies = ", ".join(repo.company_name(c) for c in person.company_ids)
+        except Exception:
+            pass
+    reason = str(exc).lower()
+    why = "заблокировал бота" if ("blocked" in reason or "deactivated" in reason) else "ни разу не открывал бота"
+    label = f"{name} ({companies})" if companies else name
+    box[str(chat_id)] = label
+    if _BOT_DATA is not None:
+        await memo.put(_BOT_DATA, "unreachable", box)
+    log.error("Чат недоступен: %s", chat_id, extra={"alert": (
+        f"{label} не получает сообщения бота — {why}, а Telegram не даёт ботам писать первыми. "
+        "Остальным сообщения доходят. Попроси его открыть @awprojects_bot и нажать «Старт»; "
+        "до тех пор копии ему не шлю.")})
+
+
+async def forget_unreachable(chat_id) -> None:
+    """Человек сам написал боту — снова можно слать."""
+    box = await _unreachable()
+    if str(chat_id) in box:
+        box.pop(str(chat_id))
+        await memo.put(_BOT_DATA, "unreachable", box)
+
+
 async def _send_html(ctx_bot, chat_id, text: str, markup=None) -> None:
+    if str(chat_id) in await _unreachable():
+        log.info("Пропускаю чат %s — человек не открывал бота", chat_id)
+        return
     try:
         await ctx_bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_markup=markup)
     except Exception as exc:
+        if any(h in str(exc).lower() for h in _UNREACHABLE_HINTS):
+            await _mark_unreachable(chat_id, exc)
+            return
         log.exception("Не удалось отправить сообщение в чат %s", chat_id, extra={"alert": _send_failure(text, exc)})
 
 
@@ -1982,6 +2033,8 @@ def build_app() -> Application:
         .post_init(post_init).post_shutdown(post_shutdown).build()
     )
     app.bot_data["repo"] = AirtableRepo(settings.airtable_token, settings.airtable_base_id)
+    global _BOT_DATA
+    _BOT_DATA = app.bot_data
     app.bot_data["transcriber"] = transcriber
     app.bot_data["admin_chat_id"] = settings.admin_chat_id
     alert_handler = alerts.AlertHandler()

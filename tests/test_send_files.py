@@ -56,3 +56,44 @@ def test_send_failure_text():
     from bot import main
     t = main._send_failure("<b>✅ Заявка принята</b> · SHANSGK", RuntimeError("Forbidden: bot was blocked by the user"))
     assert t.startswith("Не дошло сообщение «✅ Заявка принята · SHANSGK» — получатель заблокировал бота")
+
+
+def test_unreachable_named_once_then_skipped(monkeypatch):
+    import logging
+    from types import SimpleNamespace
+    from bot import main
+
+    class Repo:
+        def find_by_chat_id(self, chat_id):
+            return SimpleNamespace(name="Andrey Kochemazov", company_ids=["recAOF"])
+
+        def company_name(self, cid):
+            return "AOF"
+
+    class Bot:
+        def __init__(self):
+            self.calls = 0
+
+        async def send_message(self, chat_id, text, **kw):
+            self.calls += 1
+            raise RuntimeError("Forbidden: bot can't initiate conversation with a user")
+
+    alerts = []
+
+    class H(logging.Handler):
+        def emit(self, record):
+            alerts.append(getattr(record, "alert", None))
+    h = H()
+    logging.getLogger("aw-ppr-bot").addHandler(h)
+    monkeypatch.setattr(main, "_BOT_DATA", {"repo": Repo(), "memo": {}})
+    bot = Bot()
+    try:
+        asyncio.run(main._send_html(bot, 81346775, "✅ Статус изменён"))
+        asyncio.run(main._send_html(bot, 81346775, "✅ Ещё одно"))
+    finally:
+        logging.getLogger("aw-ppr-bot").removeHandler(h)
+    assert bot.calls == 1
+    named = [a for a in alerts if a]
+    assert len(named) == 1 and named[0].startswith("Andrey Kochemazov (AOF) не получает сообщения бота — ни разу не открывал")
+    asyncio.run(main.forget_unreachable(81346775))
+    assert asyncio.run(main._unreachable()) == {}
