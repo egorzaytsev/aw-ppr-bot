@@ -1281,12 +1281,8 @@ async def rollback_status(app: Application, project_id: str, person_id: str, mod
     reviewer = routing.resolve(app.bot_data, who or routing.EGOR)[0]
     await asyncio.to_thread(repo.append_project_log, project_id, project.get(Projects.PROJECT_LOG),
                             f"{datetime.now(VALENCIA):%d.%m.%Y} · {routing.NAMES.get(reviewer, 'Егор')} (бот):", [line])
-    # Как карточка решения: всем людям компании, автор — первым
+    # Только менеджеру проекта, чей статус меняется (коллегам по компании — нет)
     chats = await asyncio.to_thread(repo.chat_ids_for_people, [person_id])
-    companies = await asyncio.to_thread(repo.person_companies, person_id)
-    for c in await asyncio.to_thread(repo.chat_ids_for_companies, companies):
-        if c not in chats:
-            chats.append(c)
     text = rollback_dealer_text(project, old, new, reason, DATIVE.get(reviewer, "Егору"))
     for chat in chats:
         await _send_html(app.bot, chat, text)
@@ -1563,11 +1559,8 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
         await asyncio.to_thread(repo.update_registration, rec_id, pl.registration_updates)
     log.info("Решение по %s (событие: %s): %s", rec_id, event, pl.registration_updates.get(Registrations.BOT_PROCESSED))
 
-    # Карточку решения видят все люди компании дилера, автор — первым
+    # Карточку решения получает только автор заявки — менеджер проекта (коллегам по компании — нет)
     dealer_chats = await asyncio.to_thread(repo.chat_ids_for_people, reg.get(Registrations.SUBMITTED_BY) or [])
-    for chat in await asyncio.to_thread(repo.chat_ids_for_companies, dealers):
-        if chat not in dealer_chats:
-            dealer_chats.append(chat)
     if pl.dealer_text:
         markup = _markup([[("Ответить", f"{CB_REPLY}{rec_id}")]]) if pl.reply_button and rec_id else None
         for chat in dealer_chats:
