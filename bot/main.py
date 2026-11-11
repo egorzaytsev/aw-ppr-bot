@@ -137,6 +137,8 @@ async def _identify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Person | 
     repo = _repo(ctx)
     chat_id = update.effective_chat.id
     person = await asyncio.to_thread(repo.find_by_chat_id, chat_id)
+    if person and not await _allowed(ctx, person, chat_id):
+        return None
     if person:
         await forget_unreachable(chat_id)
         return person
@@ -144,6 +146,8 @@ async def _identify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Person | 
     if not username:
         return None
     person = await asyncio.to_thread(repo.find_by_username, username)
+    if person and not await _allowed(ctx, person, chat_id):
+        return None
     if person:
         await asyncio.to_thread(repo.bind_chat_id, person.record_id, chat_id)
         person.chat_id = str(chat_id)
@@ -151,6 +155,16 @@ async def _identify(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Person | 
         await onboarding.notify_joined(ctx.bot_data, ctx.bot, person.name, person.company_ids,
                                        "зашёл в бота сам — нашёл его в базе по нику в Telegram.")
     return person
+
+
+async def _allowed(ctx: ContextTypes.DEFAULT_TYPE, person: Person, chat_id) -> bool:
+    """В боте работают только дилеры и партнёры (и проверяющие). Остальные из People — как незнакомцы."""
+    if str(chat_id) in routing.reviewer_chats(ctx.bot_data):
+        return True
+    ok = await asyncio.to_thread(_repo(ctx).bot_allowed, person.record_id, person.company_ids)
+    if not ok:
+        log.info("Не дилер и не партнёр — в бота не пускаю: %s (%s)", person.record_id, chat_id)
+    return ok
 
 
 async def _unknown(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -175,6 +189,8 @@ async def _check_unknown_users(app: Application) -> None:
         person = await asyncio.to_thread(repo.find_by_chat_id, chat_id)
         if not person and username:
             person = await asyncio.to_thread(repo.find_by_username, username)
+        if person and not await asyncio.to_thread(repo.bot_allowed, person.record_id, person.company_ids):
+            person = None   # в базе есть, но не дилер и не партнёр — решает Егор кнопками анкеты
         if person:
             if str(person.chat_id or "") != str(chat_id):
                 await asyncio.to_thread(repo.bind_chat_id, person.record_id, chat_id)

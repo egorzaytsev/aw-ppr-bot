@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from pyairtable import Api
 
-from .airtable_ids import Buffer, Companies, Decision, People, Projects, Registrations, RegStatus, RequestType
+from .airtable_ids import Buffer, Companies, Decision, Partners, People, Projects, Registrations, RegStatus, RequestType
 from .state import DialogState
 
 log = logging.getLogger(__name__)
@@ -28,6 +28,10 @@ _ROLE_FIELDS = (
     (PPR_PRE_REGISTERED, People.AS_PRE_REGISTERED),
     (PPR_NOTIFIED, People.AS_NOTIFIED),
 )
+# Кто может работать в боте: люди компаний этих типов (дилеры и партнёры), Andreu World и общий профиль AW.
+# Остальные из People (архитекторы, подрядчики, клиенты) — для бота незнакомцы: анкета и карточка Егору.
+BOT_COMPANY_TYPES = {"Dealer", "Partner"}
+AW_COMPANY = "recWmH5swA3Ec1F8u"
 # Закрытые проекты дилеру не показываем
 _HIDDEN_PROJECT_STATUSES = {"Lost", "Won"}
 # Что читаем из Projects: карточка + проверка пропусков для «Дополнить материалы».
@@ -341,7 +345,8 @@ class AirtableRepo:
                    f"COUNTA({{{People.COMPANY}}})>0)")
         fields = [People.NAME, People.COMPANY, People.TELEGRAM_CHAT_ID, People.REMINDER_SLOT,
                   People.LAST_REMINDER, People.COUNTRY]
-        return self._people.all(formula=formula, fields=fields, use_field_ids=True)
+        recs = self._people.all(formula=formula, fields=fields, use_field_ids=True)
+        return [r for r in recs if self.bot_allowed(r["id"], r["fields"].get(People.COMPANY, []))]
 
     def set_last_reminder(self, person_id: str, day: str) -> None:
         self._people.update(person_id, {People.LAST_REMINDER: day})
@@ -451,6 +456,12 @@ class AirtableRepo:
 
     # ---------- сводка для админа ----------
 
+    def bot_allowed(self, person_id: str, company_ids: list[str]) -> bool:
+        """Пускать ли человека в бота: дилер/партнёр, Andreu World или общий профиль AW."""
+        if person_id in Partners.SENDERS or AW_COMPANY in (company_ids or []):
+            return True
+        return any(t in BOT_COMPANY_TYPES for t in self.company_types(company_ids or []))
+
     def admin_stats(self) -> dict:
         pending = self._registrations.all(
             formula=f"AND({{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)}, "
@@ -460,8 +471,9 @@ class AirtableRepo:
             formula=f"LEFT({{{Registrations.BOT_PROCESSED}}}, 8)='blocked:'",
             fields=[Registrations.DEALER_PROJECT_NAME], use_field_ids=True)
         people = self._people.all(
-            formula=f"AND({{{People.TELEGRAM_CHAT_ID}}}!='', COUNTA({{{People.COMPANY}}})>0)",
-            fields=[People.NAME, People.REMINDER_SLOT, People.LAST_REMINDER], use_field_ids=True)
+            formula=f"{{{People.TELEGRAM_CHAT_ID}}}!=''",
+            fields=[People.NAME, People.COMPANY, People.REMINDER_SLOT, People.LAST_REMINDER], use_field_ids=True)
+        people = [r for r in people if self.bot_allowed(r["id"], r["fields"].get(People.COMPANY, []))]
         return {
             "no_decision": sum(1 for r in pending if not r["fields"].get(Registrations.DECISION)),
             "need_info": sum(1 for r in pending if r["fields"].get(Registrations.DECISION)),

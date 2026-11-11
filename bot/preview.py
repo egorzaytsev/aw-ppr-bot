@@ -256,6 +256,9 @@ class PreviewRepo:
     def company_types(self, ids):
         return [self.companies.get(c, ("", ""))[1] for c in ids]
 
+    def bot_allowed(self, person_id, company_ids):
+        return True
+
     def company_candidates(self, name):
         return []
 

@@ -40,6 +40,9 @@ class Repo:
     def company_types(self, ids):
         return ["Partner" for _ in ids]
 
+    def bot_allowed(self, person_id, company_ids):
+        return True
+
 
 def _rec(days_ago):
     created = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
