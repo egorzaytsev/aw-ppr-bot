@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
 _TRANSLIT = {
@@ -28,6 +29,10 @@ _STOP = {
     "prospekt", "pr", "dom", "korp", "korpus", "str", "stroenie", "lit", "moskva", "moscow", "gorod",
     "ves", "vsego", "obekta", "etaj", "etaji", "etaja",
 }
+# Общие слова, по которым совпадение ничего не значит (основы после sound): объект, апартаменты,
+# частное лицо, офис, проект — «Апартаменты» не должны находить Radisson с «сервисными апартаментами»
+_STOP_STEMS = ("obekt", "apartament", "apartment", "chastn", "privat", "ofis", "ofic", "proekt", "project",
+               "lico", "lica", "licu", "person", "kvartir", "residenc", "rezidenc")
 _MIN_LEN = 4
 _SIMILAR = 0.85  # «Тайерс» ≠ «Тауэрс» (0.83), «Петрович» = «Petrovitch»
 
@@ -40,7 +45,8 @@ def sound(text: str) -> str:
 
 
 def tokens(text: str) -> list[str]:
-    return [w for w in re.findall(r"[a-z]+", sound(text)) if len(w) >= _MIN_LEN and w not in _STOP]
+    return [w for w in re.findall(r"[a-z]+", sound(text))
+            if len(w) >= _MIN_LEN and w not in _STOP and not w.startswith(_STOP_STEMS)]
 
 
 def _similar(a: str, b: str) -> bool:
@@ -48,11 +54,18 @@ def _similar(a: str, b: str) -> bool:
         return True
     if min(len(a), len(b)) >= 5 and (a.startswith(b) or b.startswith(a)):
         return True
+    # Падеж: «в Дубае» = Dubai, «Ташкенте» = Tashkent — отличается только последняя буква
+    short = min(len(a), len(b))
+    if short >= 5 and abs(len(a) - len(b)) <= 1 and a[:short - 1] == b[:short - 1]:
+        return True
     return SequenceMatcher(None, a, b).ratio() >= _SIMILAR
 
 
-def overlap(left: str, right: str) -> bool:
-    lt, rt = tokens(left), tokens(right)
+def overlap(left: str, right: str, ignore: str = "") -> bool:
+    """Есть общее значимое слово. ignore — слова, которые не считаются (город: он сравнивается отдельно)."""
+    skip = tokens(ignore)
+    lt = [a for a in tokens(left) if not any(_similar(a, c) for c in skip)]
+    rt = tokens(right)
     return any(_similar(a, b) for a in lt for b in rt)
 
 
@@ -82,13 +95,37 @@ class Candidate:
         return " ".join(x for x in (self.name, self.ref) if x)
 
 
-def find(payload: dict, dealer_project_name: str, projects: list[dict], limit: int = 3) -> list[Candidate]:
-    """projects: [{"id", "name", "object", "address", "clients": [имена]}]."""
+RECENT_DAYS = 30
+_CLOSED = {"Won", "Lost"}
+
+
+def _age_days(created: str | None, now: datetime) -> float | None:
+    if not created:
+        return None
+    try:
+        then = datetime.fromisoformat(created.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (now - then).total_seconds() / 86400
+
+
+def find(payload: dict, dealer_project_name: str, projects: list[dict], limit: int = 3,
+         dealer_ids=(), person_ids=(), now: datetime | None = None) -> list[Candidate]:
+    """projects: [{"id", "name", "object", "address", "clients", "city", "country", "dealers", "managers",
+    "created", "status"}].
+
+    Свежие открытые проекты той же компании и того же менеджера (30 дней) — первыми: дубль чаще всего
+    заводят по тому же письму дилера (Design Place, 12.11: проект за 20 минут до заявки)."""
+    now = now or datetime.now(timezone.utc)
     obj = " ".join(str(payload.get(k) or "") for k in ("Object Name",))
     client = str(payload.get("End Client") or "")
     address = str(payload.get("Object Address") or "")
+    city = str(payload.get("City") or "")
     if not obj.strip():
         obj = dealer_project_name or ""
+    # Город ищем и в поле «Город», и в остальных ответах («Частное лицо в Дубае»)
+    place_text = " ".join((city, client, obj, address))
+    dealer_ids, person_ids = set(dealer_ids or ()), set(person_ids or ())
     out: list[Candidate] = []
     for p in projects:
         reasons: list[str] = []
@@ -96,13 +133,28 @@ def find(payload: dict, dealer_project_name: str, projects: list[dict], limit: i
         if address and same_address(address, p.get("address") or ""):
             score += 3
             reasons.append("адрес")
-        if obj and overlap(obj, f"{p.get('name') or ''} {p.get('object') or ''}"):
+        # Город не делает совпадением ни объект, ни клиента («Частное лицо в Дубае» ≠ любой проект в Дубае)
+        places = f"{city} {p.get('city') or ''}"
+        if obj and overlap(obj, f"{p.get('name') or ''} {p.get('object') or ''}", places):
             score += 2
             reasons.append("объект")
-        if client and overlap(client, " ".join(p.get("clients") or []) + " " + (p.get("name") or "")):
+        if client and overlap(client, " ".join(p.get("clients") or []) + " " + (p.get("name") or ""), places):
             score += 2
             reasons.append("клиент")
-        if score >= 2:
+        p_city = str(p.get("city") or "")
+        if p_city and overlap(place_text, p_city) or (city and overlap(city, p.get("name") or "")):
+            score += 1
+            reasons.append("город")
+        age = _age_days(p.get("created"), now)
+        fresh = age is not None and age <= RECENT_DAYS and p.get("status") not in _CLOSED
+        same_dealer = bool(dealer_ids & set(p.get("dealers") or ()))
+        same_person = bool(person_ids & set(p.get("managers") or ()))
+        if fresh and (same_dealer or same_person):
+            score += 2 + (1 if same_person else 0)
+            days = int(age)
+            when = "сегодня" if days == 0 else f"{days} дн. назад"
+            reasons.insert(0, ("тот же менеджер" if same_person else "та же компания") + f", заведён {when}")
+        if score >= 2 and reasons != ["город"]:
             out.append(Candidate(p["id"], p.get("name") or "Без названия", score, reasons, p.get("ref") or ""))
     out.sort(key=lambda c: (-c.score, c.name.lower()))
     return out[:limit]
@@ -110,7 +162,8 @@ def find(payload: dict, dealer_project_name: str, projects: list[dict], limit: i
 
 def analysis_text(candidates: list[Candidate]) -> str:
     if not candidates:
-        return "Совпадений с проектами в базе не найдено (проверены объект, клиент, адрес)."
+        return ("Совпадений с проектами в базе не найдено (проверены объект, клиент, адрес, город "
+                "и свежие проекты этой компании).")
     lines = ["Возможные совпадения с проектами в базе:"]
     lines += [f"• {c.title} — совпадает: {', '.join(c.reasons)}" for c in candidates]
     return "\n".join(lines)
@@ -206,13 +259,42 @@ def _compact(raw: str, parts: list[str]) -> str:
     return "".join(w if w.isupper() and len(w) > 1 else w[:1].upper() + w[1:] for w in words) + "".join(codes)
 
 
-def latin_name(payload: dict) -> str:
-    """Черновик названия по образцу «PVSMART InsaitBC FL3»: КЛИЕНТ слитно заглавными, объект слитно
-    с кодом типа, этаж / корпус / блок — коротко. Минимум пробелов, без ООО, кавычек и тире."""
+_PRIVATE = re.compile(r"частн\w*|физ\.?\s*лиц\w*|физлиц\w*|private|individual", re.I)
+# Объект из одних общих слов («Апартаменты», «Офис», «Объект») в названии ничего не различает
+_GENERIC_OBJECT = re.compile(r"^(апартамент\w*|квартир\w*|офис\w*|объект\w*|проект\w*|резиденц\w*|дом|"
+                             r"apartments?|office|object|project|residence|flat)$", re.I)
+_STREETISH = re.compile(r"\d|ул\.|улиц|просп|пр-т|шоссе|переул|бульвар|набережн|street|\bst\.|road|avenue", re.I)
+
+
+def _camel(text: str) -> str:
+    """«Grand Blue Tower» → GrandBlueTower, «Дубай» → Dubai; без ООО, кавычек и тире."""
+    words = re.findall(r"[0-9a-z]+", _translit(translate_words(_LEGAL.sub("", text or ""))), re.I)
+    return "".join(w if w.isupper() and len(w) > 1 else w[:1].upper() + w[1:] for w in words)
+
+
+def is_private(client: str) -> bool:
+    return bool(_PRIVATE.search(client or ""))
+
+
+def latin_name(payload: dict, dealer: str = "") -> str:
+    """Черновик названия «Клиент Объект Уточнение» (образец «PVSMART InsaitBC FL3»): внутри частей слова
+    слитно, латиницей, без ООО, кавычек и тире.
+
+    Частное лицо названием клиента не бывает («CHASTNOELITSOVDUBAE»): тогда «Дилер Город Здание» —
+    как «DesignPlace Dubai GrandBlueTower»."""
     clean = lambda key: _LEGAL.sub("", re.sub(r"[«»\"'“”]", "", str(payload.get(key) or "")).strip())
     parts: list[str] = []
+    obj_raw = clean("Object Name")
+    if _GENERIC_OBJECT.match(obj_raw):
+        obj_raw = ""
+    address = clean("Object Address")
+    building = address if address and not _STREETISH.search(address) else ""
+    if is_private(clean("End Client")):
+        head = [_camel(dealer), _camel(clean("City"))]
+        obj = _compact(" ".join(x for x in (obj_raw or building, clean("Object Part")) if x), parts)
+        return " ".join(x for x in (*head, obj, *parts) if x)[:MAX_NAME_LEN].strip()
     client = "".join(re.findall(r"[0-9a-z]+", _translit(clean("End Client")), re.I)).upper()
-    obj = _compact(" ".join(x for x in (clean("Object Name"), clean("Object Part")) if x), parts)
+    obj = _compact(" ".join(x for x in (obj_raw or building, clean("Object Part")) if x), parts)
     return " ".join(x for x in (client, obj, *parts) if x)[:MAX_NAME_LEN].strip()
 
 

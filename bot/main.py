@@ -885,7 +885,8 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
     candidates: list = []
     if request_type.startswith("New"):
         try:
-            found = dedup.find(payload, name or "", await asyncio.to_thread(_repo(ctx).dedup_projects))
+            found = dedup.find(payload, name or "", await asyncio.to_thread(_repo(ctx).dedup_projects),
+                               dealer_ids=person.company_ids, person_ids=[person.record_id])
             analysis = dedup.analysis_text(found)
             candidates = [(c.project_id, c.name) for c in found]
             await asyncio.to_thread(_repo(ctx).set_analysis, reg_id, analysis)

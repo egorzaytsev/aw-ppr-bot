@@ -813,8 +813,15 @@ async def merge_candidates(repo, reg: dict) -> list:
     if reg.get(Registrations.TARGET_PROJECT) or not str(reg.get(Registrations.REQUEST_TYPE) or "").startswith("New"):
         return []
     projects = await asyncio.to_thread(repo.dedup_projects)
-    found = dedup.find(_payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "", projects)
+    found = _find_similar(reg, projects)
     return [(c.project_id, c.title) for c in found]
+
+
+def _find_similar(reg: dict, projects: list[dict]) -> list:
+    """Похожие проекты: объект, клиент, адрес, город и свежие проекты той же компании / менеджера."""
+    return dedup.find(_payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "", projects,
+                      dealer_ids=reg.get(Registrations.DEALER) or [],
+                      person_ids=reg.get(Registrations.SUBMITTED_BY) or [])
 
 
 async def _dealer(repo, reg: dict) -> str | None:
@@ -1398,7 +1405,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
             await _apply_now(ctx)
             return
         projects = await asyncio.to_thread(repo.dedup_projects)
-        found = dedup.find(_payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "", projects)
+        found = _find_similar(reg, projects)
         tail = f":{reply_id}" if reply_id else ""
         rows = [[InlineKeyboardButton(f"В проект: {c.title[:50]}",
                                       callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{c.project_id}{tail}")]
@@ -1431,7 +1438,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
 
     if action == ACTION_NAME:
         # project_id здесь — исходное действие (new / dnew), reply_id — ответ дилера
-        suggestion = dedup.latin_name(_payload(reg))
+        suggestion = suggest_name(ctx.bot_data["repo"], reg)
         if suggestion and project_id in (ACTION_NEW, ACTION_DNEW):
             pending.pop(chat.id, None)
             await asyncio.to_thread(repo.clear_awaiting, reg_id)
@@ -1442,7 +1449,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         pending[chat.id] = (ACTION_DNEW, reg_id, reply_id)
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_DNEW, reply_id, chat.id)
         await chat.send_message(f"🛠 «{name}»: напиши название нового проекта латиницей — {NAME_SAMPLE}.",
-                                reply_markup=name_markup(reg, reg_id, ACTION_DNEW, reply_id))
+                                reply_markup=name_markup(reg, reg_id, ACTION_DNEW, reply_id, repo))
         return
 
     if action == ACTION_PICK and project_id:
@@ -1492,8 +1499,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_NEW, reply_id, chat.id)
         await chat.send_message(
             f"🛠 «{name}»: напиши название нового проекта латиницей — {NAME_SAMPLE}"
-            + (" — или возьми вариант кнопкой" if dedup.latin_name(_payload(reg)) else "") + ".",
-            reply_markup=name_markup(reg, reg_id, ACTION_NEW, reply_id),
+            + (" — или возьми вариант кнопкой" if suggest_name(repo, reg) else "") + ".",
+            reply_markup=name_markup(reg, reg_id, ACTION_NEW, reply_id, repo),
         )
 
 
@@ -1573,9 +1580,16 @@ def _accept_note(ctx: ContextTypes.DEFAULT_TYPE, reg_id: str) -> str:
     return ctx.bot_data.setdefault("accept_notes", {}).pop(reg_id, "")
 
 
-def name_markup(reg: dict, reg_id: str, action: str, reply_id: str = "") -> InlineKeyboardMarkup:
+def suggest_name(repo, reg: dict) -> str:
+    """Черновик названия; для частного лица нужен дилер — «DesignPlace Dubai GrandBlueTower»."""
+    dealers = reg.get(Registrations.DEALER) or []
+    dealer = repo.company_name(dealers[0]) if dealers and repo is not None else ""
+    return dedup.latin_name(_payload(reg), "" if str(dealer).startswith("rec") else dealer)
+
+
+def name_markup(reg: dict, reg_id: str, action: str, reply_id: str = "", repo=None) -> InlineKeyboardMarkup:
     rows = []
-    suggestion = dedup.latin_name(_payload(reg))
+    suggestion = suggest_name(repo, reg)
     if suggestion:
         data = f"{CB_ADMIN}{ACTION_NAME}:{reg_id}:{action}" + (f":{reply_id}" if reply_id else "")
         rows.append([InlineKeyboardButton(f"✅ {suggestion}", callback_data=data)])

@@ -61,10 +61,19 @@ def origin(a: dict) -> str | None:
     return a.get("AW Origin")
 
 
+# Здание или улица вместо города («Grand Blue Tower Beach», Design Place 12.11)
+_PLACE_IN_CITY = re.compile(r"\d|tower|beach|plaza|residen|mall|building|hotel|street|\bst\.|road|avenue|"
+                            r"башн|здани|улиц|\bул\.|просп|шоссе|бульвар|набережн|\bбц\b|\bжк\b|\bтц\b|"
+                            r"комплекс|отел|гостиниц|резиденц|\bдом\b", re.I)
+
+
 def check_city(text: str) -> str | None:
-    """Регион вместо города — переспросить."""
+    """Регион, здание или улица вместо города — переспросить: в City только город."""
     if any(w in text.lower() for w in _REGION_WORDS):
         return "Это регион. Напиши город — например, Всеволожск."
+    if _PLACE_IN_CITY.search(text):
+        return ("Здесь только город — например, Дубай. Здание и улицу напиши в следующем вопросе — "
+                "про адрес объекта.")
     return None
 
 
@@ -202,7 +211,7 @@ PHASE_1 = (
         key="Object Address",
         label="Адрес",
         prompt="Адрес объекта?",
-        hint="Улица, дом, корпус",
+        hint="Улица, дом, корпус — или название здания",
         validate=check_address,
         optional=True,
         missing_label="не указан",

@@ -391,13 +391,14 @@ class AirtableRepo:
 
     def dedup_projects(self) -> list[dict]:
         cached = getattr(self, "_dedup_cache", None)
-        if cached and time.monotonic() - cached[0] < self._DEDUP_TTL:
+        if cached and time.monotonic() - cached[0] < 120:   # проект, заведённый вручную пару минут назад, должен найтись
             return cached[1]
         names = {r["id"]: r["fields"].get(Companies.NAME, "")
                  for r in self._companies.all(fields=[Companies.NAME], use_field_ids=True)}
         recs = self._projects.all(
             fields=[Projects.NAME, Projects.OBJECT_NAME, Projects.OBJECT_ADDRESS, Projects.END_CLIENT,
-                    Projects.PPR_REF],
+                    Projects.PPR_REF, Projects.CITY, Projects.COUNTRY, Projects.STATUS, Projects.DEALER,
+                    Projects.PARTNER, Projects.NOTIFIED, Projects.PRE_REGISTERED, Projects.REGISTERED],
             use_field_ids=True,
         )
         projects = [{
@@ -407,6 +408,13 @@ class AirtableRepo:
             "object": r["fields"].get(Projects.OBJECT_NAME) or "",
             "address": r["fields"].get(Projects.OBJECT_ADDRESS) or "",
             "clients": [names.get(c, "") for c in r["fields"].get(Projects.END_CLIENT) or []],
+            "city": r["fields"].get(Projects.CITY) or "",
+            "country": r["fields"].get(Projects.COUNTRY) or "",
+            "status": r["fields"].get(Projects.STATUS) or "",
+            "dealers": (r["fields"].get(Projects.DEALER) or []) + (r["fields"].get(Projects.PARTNER) or []),
+            "managers": [m for f in (Projects.NOTIFIED, Projects.PRE_REGISTERED, Projects.REGISTERED)
+                         for m in r["fields"].get(f) or []],
+            "created": r.get("createdTime"),
         } for r in recs]
         self._dedup_cache = (time.monotonic(), projects)
         return projects
