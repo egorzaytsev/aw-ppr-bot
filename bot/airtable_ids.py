@@ -62,7 +62,7 @@ class Projects:
     DEALER = "fldpdzk9bY1jFMPeJ"
     PARTNER = "fldh6aWJ5jmn3EYkA"          # партнёр-дистрибьютор (Astros / Aluframe), не дилер PPR
     PROJECT_LOG = "fldC3PJr8sT9iZ8Rg"
-    PPR_REF = "fld9H3DLTtTOTluOb"            # формула AW-YY-####
+    PPR_REF = "fld9H3DLTtTOTluOb"            # формула, формат AW260247 — выводить как есть
     PPR_NEXT_MISSING = "fldVIAWgivyBeKX4a"   # формула: чего не хватает для следующего этапа
     PROBABILITY = "fldHldhYLswedJe8s"
     LOST_REASON = "fldLZlBO3hIW9Irk0"
