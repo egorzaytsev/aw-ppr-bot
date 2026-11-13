@@ -82,7 +82,7 @@ def _run_phase2(r):
     assert r.screens[0].text == "<b>Какая компания принимает решение по мебели?</b>"
     r = engine.handle_text(r.state, "ПАО Сбербанк, АХО")
     r = engine.handle_callback(r.state, engine.CB_SKIP)           # влияющие
-    r = engine.handle_callback(r.state, CH + "0")                 # конкурентов нет
+    r = engine.handle_text(r.state, "Нет")                        # конкурентов нет
     r = engine.handle_callback(r.state, CH + "1")                 # заявлен другим — да
     assert r.state.awaiting == "detail"
     r = engine.handle_text(r.state, "Vitra, Arper")
@@ -289,7 +289,7 @@ def test_confirmed_volume_change_logged():
     assert "Объём по прайсу при уведомлении: 120 000 €" in p["Project Log"]
 
 
-def test_typed_answer_on_detail_choice():
+def test_competitors_answer_is_company_names():
     r = _run_phase1()
     r = engine.handle_callback(r.state, engine.CB_GATE_YES)
     st = r.state
@@ -749,7 +749,7 @@ def test_fill_asks_bureau_on_architect_selection_and_log_answers():
     r = engine.handle_callback(r.state, "ch:2")
     assert engine._current_q(r.state).key == "Decision Maker Company"   # ГАП не спрашиваем
     r = engine.handle_text(r.state, "Петрович")
-    r = engine.handle_callback(r.state, "ch:0")
+    r = engine.handle_text(r.state, "Нет")
     assert r.state.awaiting == "confirm"
     p = engine.build_payload(r.state)
     assert "Specifier" not in p

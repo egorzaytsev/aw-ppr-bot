@@ -104,6 +104,7 @@ class PreviewRepo:
 
     def set_decision(self, rid, decision, note=None, target=None):
         self.regs[rid][Registrations.DECISION] = decision
+        self.regs[rid][Registrations.BOT_PROCESSED] = ""
         if note is not None:
             self.regs[rid][Registrations.DECISION_NOTE] = note
         if target:
@@ -117,6 +118,10 @@ class PreviewRepo:
 
     def find_awaiting(self, chat_id=None):
         return None
+
+    def stuck_decisions(self):
+        return [{"id": rid, "fields": f} for rid, f in self.regs.items()
+                if f.get(Registrations.DECISION) and str(f.get(Registrations.BOT_PROCESSED) or "").startswith("await:")]
 
     def close_reply(self, rid, target):
         if target:
@@ -382,6 +387,11 @@ async def _new(w):
     st.answers.update({k: v for k, v in _payload_new().items() if k in keys})
     st.answers["Object Location"] = "moscow"
     st.answers["_unknown"] = ["Influencers"]
+    for key in ("Influencers", "Competing Dealers"):   # вопросы с названиями компаний — как их видит дилер
+        st.step = next(i for i, q in enumerate(engine._qs(st)) if q.key == key)
+        st.awaiting = "answer"
+        sc = engine.question_screen(st)
+        await bot.send_message(DEALER, sc.text, reply_markup=main._markup(sc.buttons))
     st.awaiting = "confirm"
     s = engine.summary_screen(st)
     await bot.send_message(DEALER, s.text, reply_markup=main._markup(s.buttons))
@@ -433,7 +443,8 @@ async def _fill(w):
     await bot.send_message(DEALER, _done("project_fill"))
     await main._notify_admin_new(ctx, dealer, rid, RequestType.UPDATE_FIELDS, payload, "TESTBANK Office FL3")
     up = update(ADMIN)
-    await admin.on_admin_callback(up, ctx, f"ad:acc:{rid}")
+    await admin.on_admin_callback(up, ctx, f"ad:accn:{rid}")   # «Принять»
+    await admin.on_admin_callback(up, ctx, f"ad:acc:{rid}")    # «Отправить без комментария»
     from . import engine
     await bot.send_message(DEALER, engine.NOTHING_NEW, reply_markup=main._markup(engine.nothing_new_buttons(PROJECT_ID)))
 
@@ -451,6 +462,7 @@ async def _news(w):
     reply = {"Dealer Project Name": "TESTBANK Office FL3", "In Reply To": rid, "Dealer News": "Закупщик банка и бюро."}
     rid2 = repo.create_registration(dealer, RequestType.UPDATE_NEWS, reply, "TESTBANK Office FL3", PROJECT_ID)
     await main._notify_admin_new(ctx, dealer, rid2, RequestType.UPDATE_NEWS, reply, "TESTBANK Office FL3")
+    await admin.on_admin_callback(up, ctx, f"ad:accn:{rid2}")
     await admin.on_admin_callback(up, ctx, f"ad:acc:{rid2}")
 
 
@@ -464,6 +476,7 @@ async def _quote(w):
     rid = repo.create_registration(dealer, RequestType.QUOTE_SIMPLIFIED, payload, "TESTBANK Office FL3", PROJECT_ID)
     await bot.send_message(DEALER, _done("project_quote"))
     await main._notify_admin_new(ctx, dealer, rid, RequestType.QUOTE_SIMPLIFIED, payload, "TESTBANK Office FL3")
+    await admin.on_admin_callback(update(ADMIN), ctx, f"ad:accn:{rid}")
     await admin.on_admin_callback(update(ADMIN), ctx, f"ad:acc:{rid}")
     card = cards.accept_card(p, DEALER_ID, "Тест Мебель", {"PL Volume": 25000}, True)
     await bot.send_message(DEALER, card)
@@ -557,7 +570,7 @@ async def _unknown(w):
 
 
 async def _errors(w):
-    from . import alerts, main
+    from . import admin, alerts, main
     repo, bot, ctx, app, update, dealer = w
     h = alerts.AlertHandler()
     lg = logging.getLogger("bot.preview.sample")
@@ -566,6 +579,7 @@ async def _errors(w):
     try:
         lg.error("x", extra={"alert": "Не дошла карточка новой заявки «Тест Банк — Офис» от Ирина Тестова. "
                                       "Открой /inbox — она там."})
+        lg.error("x", extra={"alert": admin.callback_failed_text("Saratov Opera and Ballet Theatre")})
         try:
             raise TimeoutError("timeout")
         except TimeoutError:
@@ -584,6 +598,13 @@ async def _errors(w):
     rid2 = repo.create_registration(dealer, RequestType.NEW_NOTIFICATION, {"End Client": "Тест"}, "Тест — Склад")
     repo.set_decision(rid2, Decision.ACCEPT, "")
     await main.process_decisions(app)
+    # Решение записано, а бот его не довёл (как 13.11): предупреждение и блок «Зависли» в /inbox
+    rid3 = repo.create_registration(dealer, RequestType.UPDATE_FIELDS, {"Dealer Project Name": "Saratov Opera and Ballet Theatre"},
+                                    "Saratov Opera and Ballet Theatre", PROJECT_ID)
+    repo.regs[rid3][Registrations.DECISION] = Decision.ACCEPT_MERGE
+    repo.regs[rid3][Registrations.BOT_PROCESSED] = f"await:accn:-:{int(datetime.now().timestamp()) - 1800}:{ADMIN}"
+    await main._alert_stuck(app)
+    await admin.cmd_inbox(update(ADMIN), ctx)
     await bot.send_message(DEALER, "Что-то пошло не так на моей стороне. Ответы, которые ты уже дал, сохранены: "
                                    "нажми /start — я предложу продолжить. Начать заново — /cancel.")
 

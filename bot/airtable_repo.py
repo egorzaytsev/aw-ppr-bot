@@ -308,6 +308,20 @@ class AirtableRepo:
         return self._registrations.all(formula=formula, use_field_ids=True, max_records=limit,
                                        sort=[Registrations.SUBMITTED_AT])
 
+    STUCK_SECONDS = 5 * 60
+
+    def stuck_decisions(self) -> list[dict]:
+        """Зависли: решение записано, а бот его не довёл — висит метка ожидания ввода старше 5 минут."""
+        formula = (f"AND({{{Registrations.DECISION}}}!='', LEFT({{{Registrations.BOT_PROCESSED}}}, 6)='await:')")
+        recs = self._registrations.all(formula=formula, use_field_ids=True)
+        out = []
+        for r in recs:
+            parts = str(r["fields"].get(Registrations.BOT_PROCESSED) or "").split(":")
+            ts = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
+            if time.time() - ts >= self.STUCK_SECONDS:
+                out.append(r)
+        return out
+
     def undecided(self) -> list[dict]:
         """На проверке без решения и без ввода админа — для напоминаний о сроке."""
         formula = (f"AND({{{Registrations.REG_STATUS}}}={_quote(RegStatus.PENDING)}, "
@@ -316,7 +330,9 @@ class AirtableRepo:
 
     def set_decision(self, reg_id: str, decision: str, note: str | None = None,
                      target_project_id: str | None = None) -> None:
-        fields: dict = {Registrations.DECISION: decision}
+        # Решение записано — ввод проверяющего закончен: снимаем метку ожидания «await:…»,
+        # иначе обработчик решений эту заявку пропускает и она зависает (13.11, Saratov)
+        fields: dict = {Registrations.DECISION: decision, Registrations.BOT_PROCESSED: ""}
         if note is not None:
             fields[Registrations.DECISION_NOTE] = note
         if target_project_id:

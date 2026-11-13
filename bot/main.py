@@ -475,7 +475,10 @@ async def _route(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person,
         await onboarding.on_admin_callback(update, ctx, data)
         return
     if data.startswith(admin.CB_ADMIN):
-        await admin.on_admin_callback(update, ctx, data)
+        try:
+            await admin.on_admin_callback(update, ctx, data)
+        except Exception:
+            await admin.callback_failed(ctx, data)
         return
     if data.startswith(CB_ADMIN_MENU):
         await _admin_menu_action(update, ctx, data[len(CB_ADMIN_MENU):])
@@ -1163,7 +1166,15 @@ def _admin_summary(reg: dict, pl, project_name: str, created: bool, dealer: str,
 async def _process_decisions(app: Application) -> None:
     repo: AirtableRepo = app.bot_data["repo"]
     for rec in await asyncio.to_thread(repo.decisions_to_process):
-        await _handle_registration(app, rec["id"], rec["fields"])
+        try:
+            await _handle_registration(app, rec["id"], rec["fields"])
+        except Exception:
+            # Одна заявка не должна останавливать остальные; проверяющему — по-русски, с названием
+            name = rec["fields"].get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+            log.exception("Решение %s не обработано", rec["id"], extra={
+                "alert": f"Решение по «{name}» записано, но довести его не получилось (дилеру могло не уйти). "
+                         "Бот повторит через минуту; если не выйдет — передай Claude.",
+                "reviewer": await _route_reg(app, rec["fields"])})
     for rec in await asyncio.to_thread(repo.reg_status_events):
         await _handle_reg_status_event(app, rec["id"], rec["fields"])
 
@@ -1947,7 +1958,33 @@ async def _decisions_loop(app: Application) -> None:
             await process_decisions(app)
         except Exception:
             log.exception("Ошибка обработки решений")
+        try:
+            await _alert_stuck(app)
+        except Exception:
+            log.exception("Проверка зависших решений")
         await asyncio.sleep(DECISIONS_INTERVAL)
+
+
+async def _alert_stuck(app: Application) -> None:
+    """Решение записано, а бот его не довёл (висит ожидание ввода > 5 мин) — один раз сказать проверяющему."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    stuck = await asyncio.to_thread(repo.stuck_decisions)
+    told = await memo.get(app.bot_data, "stuck_told", {})
+    fresh = {r["id"]: str(r["fields"].get(Registrations.BOT_PROCESSED) or "") for r in stuck}
+    by_chat: dict = {}
+    for rec in stuck:
+        if told.get(rec["id"]) == fresh[rec["id"]]:
+            continue
+        chat = routing.resolve(app.bot_data, await _route_reg(app, rec["fields"]))[1]
+        if chat:
+            by_chat.setdefault(chat, []).append(rec)
+    for chat, recs in by_chat.items():
+        await _send_html(app.bot, chat,
+                         "🛠 ⚠️ Решение записано, но бот его не довёл — дилеру ничего не ушло:\n"
+                         + "\n".join(admin.stuck_line(r["fields"]) for r in recs)
+                         + "\nНажми «Довести до конца».", admin.stuck_markup(recs))
+    if fresh != told:
+        await memo.put(app.bot_data, "stuck_told", fresh)
 
 
 DEALER_COMMANDS = [BotCommand("start", "Начать"), BotCommand("new", "Новый проект"),

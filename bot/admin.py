@@ -23,6 +23,7 @@ from .decisions import COMPANY_PICKS, OWN_DESIGN, plan as decision_plan
 from .labels import DECISION_RU, date_ru, missing_text
 from .scenarios.base import describe_items, format_value, is_vague
 from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
+from .slots import VALENCIA
 from .airtable_ids import Decision, Projects, Registrations
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ ACTION_SET_STATUS = "rst"                          # застрявшее реш
 ACTION_ACCEPT_LOWER = "acl"                        # не хватает данных — принять этапом ниже
 ACTION_NOTE_OK = "nok"                             # отправить предложенный комментарий как есть
 ACTION_DECLINE_CANCEL = "dcx"                      # отмена записанного отказа (выбор проекта для уведомления)
+ACTION_FINISH = "fin"                              # зависшее решение: довести до конца (ad:fin:<заявка>)
 # Пошаговое повышение: «Пока оставить» и «Отказать» — с комментарием дилеру
 ACTION_UP_KEEP, ACTION_UP_DENY, ACTION_UP_BARE = "upk", "upd", "upb"
 ACTION_UP_VIEW = "upv"   # посмотреть проект перед решением — потом снова те же кнопки
@@ -303,6 +305,28 @@ STAGE_LABELS = {
     "Architect selection": "выбор архитектора", "Concept": "концепция", "Design": "проектирование",
     "Tender": "тендер", "Procurement": "закупка",
 }
+
+
+def accept_phrase(rtype: str, name: str, payload: dict | None = None) -> str:
+    """«Принимаем дополнение по «X»» — по типу заявки (name уже экранировано)."""
+    payload = payload or {}
+    what = f"«{name}»"
+    if rtype.startswith("New — "):
+        stage = REQUEST_LABELS.get(rtype, "уведомление")
+        return f"Принимаем новый проект {what} как {_ACC.get(stage, stage)}"
+    if rtype in ("Upgrade — Pre-registration", "Upgrade — Registration"):
+        return f"Принимаем {REQUEST_LABELS[rtype]} по {what}"
+    quote = payload.get("Quotation / Proforma №")
+    phrases = {
+        "Update — fields": f"Принимаем дополнение по {what}",
+        "Update — news": f"Принимаем новость по {what}",
+        "Update — info only": f"Принимаем обновление по {what}",
+        "Update — Won": f"Принимаем: проект {what} выигран",
+        "Update — Lost": f"Принимаем: проект {what} проигран",
+        "Quotation — Simplified": (f"Принимаем квотацию № {escape(str(quote))} по {what} (упрощённая схема)"
+                                   if quote else f"Принимаем квотацию по {what} (упрощённая схема)"),
+    }
+    return phrases.get(rtype, f"Принимаем заявку по {what}")
 
 
 def _title(rtype: str, payload: dict, author: str | None = None, name: str = "", asked: str = "") -> str:
@@ -750,8 +774,17 @@ async def cmd_inbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     recs = [rec for rec in recs if not await _close_if_orphan_reply(repo, rec)]
     me = routing.who_by_chat(ctx.bot_data, update.effective_chat.id)
     recs = [rec for rec in recs if await reviewer_of(ctx, rec["fields"]) == me]
+    stuck = [rec for rec in await asyncio.to_thread(repo.stuck_decisions)
+             if await reviewer_of(ctx, rec["fields"]) == me]
+    if stuck:
+        await update.effective_chat.send_message(
+            f"🛠 ⚠️ <b>Зависли: {len(stuck)}</b> — решение записано, но бот его не довёл:\n"
+            + "\n".join(stuck_line(r["fields"]) for r in stuck)
+            + "\nНажми «Довести до конца» — бот обработает решение сейчас.",
+            parse_mode=ParseMode.HTML, reply_markup=stuck_markup(stuck))
     if not recs:
-        await update.effective_chat.send_message("🛠 Заявок на проверке нет — делать ничего не нужно.")
+        if not stuck:
+            await update.effective_chat.send_message("🛠 Заявок на проверке нет — делать ничего не нужно.")
         return
     await update.effective_chat.send_message(f"🛠 Заявок без решения: {len(recs)}. Присылаю по одной, старые первыми.")
     for rec in recs:
@@ -857,7 +890,62 @@ async def _apply_now(ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await ctx.bot_data["process_decisions"](ctx.application)
     except Exception:
-        log.exception("Ошибка немедленной обработки решения")
+        log.exception("Ошибка немедленной обработки решения", extra={
+            "alert": "Решение записано, но сразу довести его до конца не получилось. Бот попробует снова "
+                     "в течение минуты; если заявка не закроется — /inbox покажет её в блоке «Зависли»."})
+
+
+def stuck_line(reg: dict) -> str:
+    """«• Saratov … — принята в проект, ждёт с 13.11 07:10»."""
+    name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+    decided = DECISION_RU.get(reg.get(Registrations.DECISION), "решение записано")
+    parts = str(reg.get(Registrations.BOT_PROCESSED) or "").split(":")
+    since = ""
+    if len(parts) > 3 and parts[3].isdigit():
+        since = ", висит с " + datetime.fromtimestamp(int(parts[3]), VALENCIA).strftime("%d.%m %H:%M")
+    return f"• «{name}» — {decided}{since}"
+
+
+def stuck_markup(recs: list[dict]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        f"▶️ Довести до конца: {(r['fields'].get(Registrations.DEALER_PROJECT_NAME) or 'без названия')[:40]}",
+        callback_data=f"{CB_ADMIN}{ACTION_FINISH}:{r['id']}")] for r in recs])
+
+
+async def finish_stuck(ctx: ContextTypes.DEFAULT_TYPE, chat, reg_id: str, reg: dict) -> None:
+    """«Довести до конца»: снять метку ожидания и обработать записанное решение сейчас."""
+    name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+    if not reg.get(Registrations.DECISION):
+        await chat.send_message(f"🛠 По «{name}» решения нет — доводить нечего. Заявка снова ждёт решения:")
+        await send_request(ctx, chat.id, reg_id, reg)
+        return
+    if str(reg.get(Registrations.BOT_PROCESSED) or "").startswith("done:"):
+        await chat.send_message(f"🛠 «{name}» уже обработана — делать ничего не нужно.")
+        return
+    _pending(ctx).pop(chat.id, None)
+    await asyncio.to_thread(ctx.bot_data["repo"].clear_awaiting, reg_id)
+    await chat.send_message(f"🛠 Довожу «{name}» до конца — итог придёт следующим сообщением.")
+    await _apply_now(ctx)
+
+
+async def callback_failed(ctx: ContextTypes.DEFAULT_TYPE, data: str) -> None:
+    """Сбой после нажатия кнопки проверяющим — алерт по-русски с названием проекта."""
+    action, _, rest = data[len(CB_ADMIN):].partition(":")
+    reg_id = rest.split(":")[0]
+    name = ""
+    if reg_id.startswith("rec"):
+        try:
+            reg = await asyncio.to_thread(ctx.bot_data["repo"].registration_fields, reg_id)
+            name = reg.get(Registrations.DEALER_PROJECT_NAME) or ""
+        except Exception:
+            pass
+    log.exception("Сбой кнопки проверяющего %s", data, extra={"alert": callback_failed_text(name)})
+
+
+def callback_failed_text(name: str) -> str:
+    what = f"по «{name}»" if name else "по заявке"
+    return (f"Кнопка {what} не сработала до конца — решение могло не записаться или не уйти дилеру. "
+            "Открой /inbox: заявка будет среди ожидающих решения или в блоке «Зависли».")
 
 
 
@@ -1140,6 +1228,9 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     except Exception:
         await chat.send_message("🛠 Этой заявки больше нет в базе — делать ничего не нужно.")
         return
+    if action == ACTION_FINISH:
+        await finish_stuck(ctx, chat, reg_id, reg)
+        return
     # Кнопка под ответом дилера — решение по исходной заявке, ответ закрывается вместе с ней
     original = _payload(reg).get("In Reply To")
     if original and action in (ACTION_ACCEPT, ACTION_DECLINE, ACTION_INFO, ACTION_ACCEPT_NOTE, ACTION_DECLINE_BARE):
@@ -1207,8 +1298,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         await asyncio.to_thread(repo.set_awaiting, reg_id, action, reply_id, chat.id)
         tail = f"::{reply_id}" if reply_id else ""
         rtype = reg.get(Registrations.REQUEST_TYPE) or ""
-        stage = REQUEST_LABELS.get(rtype, "заявку")
-        lines = [f"🛠 Принимаем «{name}» как {_ACC.get(stage, stage)}."]
+        lines = [f"🛠 {accept_phrase(rtype, name, _payload(reg))}."]
         if rtype in STEPWISE:
             lines.append("Проверим по шагам: сначала запишу уведомление, потом спрошу про предрегистрацию"
                          + (" и регистрацию." if STEPWISE[rtype] == "reg" else "."))
@@ -1301,6 +1391,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         if target and await _ask_rename(ctx, chat, reg_id, target[0], reply_id):
             return
         if target:
+            pending.pop(chat.id, None)   # комментарий больше не ждём — следующий текст не должен уйти в эту заявку
             await asyncio.to_thread(repo.set_decision, reg_id, Decision.ACCEPT_MERGE, _accept_note(ctx, reg_id))
             if reply_id:
                 await asyncio.to_thread(repo.close_reply, reply_id, target[0])
