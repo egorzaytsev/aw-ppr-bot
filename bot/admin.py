@@ -50,6 +50,7 @@ ACTION_SET_STATUS = "rst"                          # застрявшее реш
 ACTION_ACCEPT_LOWER = "acl"                        # не хватает данных — принять этапом ниже
 ACTION_NOTE_OK = "nok"                             # отправить предложенный комментарий как есть
 ACTION_DECLINE_CANCEL = "dcx"                      # отмена записанного отказа (выбор проекта для уведомления)
+ACTION_FIND = "fnd"                                # принять в существующий проект: найти по названию / референсу
 ACTION_FINISH = "fin"                              # зависшее решение: довести до конца (ad:fin:<заявка>)
 # Пошаговое повышение: «Пока оставить» и «Отказать» — с комментарием дилеру
 ACTION_UP_KEEP, ACTION_UP_DENY, ACTION_UP_BARE = "upk", "upd", "upb"
@@ -255,6 +256,9 @@ def blocked_markup(reg_id: str, kind: str, reg: dict, candidates: list | None = 
         pick, new = (ACTION_DPICK, ACTION_DNEW) if declined else (ACTION_PICK, ACTION_NEW)
         rows += [[InlineKeyboardButton(f"В проект: {title[:50]}", callback_data=f"{CB_ADMIN}{pick}:{reg_id}:{pid}")]
                  for pid, title in candidates or []]
+        if not declined:
+            rows.append([InlineKeyboardButton("🔎 Другой существующий — найти",
+                                              callback_data=f"{CB_ADMIN}{ACTION_FIND}:{reg_id}:-")])
         rows.append([InlineKeyboardButton("Создать новый проект", callback_data=f"{CB_ADMIN}{new}:{reg_id}:-")])
     elif kind == "no_status":
         rows.append([InlineKeyboardButton(label.capitalize(), callback_data=f"{CB_ADMIN}{ACTION_SET_STATUS}:{reg_id}:{c}")
@@ -964,6 +968,7 @@ _CANCEL_WHAT = {
     ACTION_DECLINE: "отказ — решения нет",
     ACTION_INFO: "запрос дилеру — ничего не ушло",
     ACTION_NEW: "создание нового проекта — решения нет",
+    ACTION_FIND: "поиск проекта — решения нет",
     ACTION_DNEW: "создание нового проекта",
     ACTION_RENAME: "переименование проекта — решения нет",
     ACTION_RB_DOWN: "откат — статус не менялся",
@@ -977,7 +982,7 @@ _CANCEL_WHAT = {
     "notecont": "принятие — решения нет",
 }
 _REG_ACTIONS = {ACTION_ACCEPT_NOTE, ACTION_DECLINE, ACTION_INFO, ACTION_NEW, ACTION_DNEW, ACTION_RENAME,
-                ACTION_DPICK, "notecont"}
+                ACTION_DPICK, ACTION_FIND, "notecont"}
 
 
 async def _cancel_text(ctx: ContextTypes.DEFAULT_TYPE, item: tuple | None) -> str:
@@ -1254,7 +1259,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     stuck = str(reg.get(Registrations.BOT_PROCESSED) or "").startswith("blocked:") and action in (
         ACTION_ASK, ACTION_ASK_SEND, ACTION_INFO, ACTION_NEW, ACTION_SET_STATUS, ACTION_DECLINE, ACTION_DECLINE_BARE)
     if decided and decided != Decision.NEED_INFO and not stuck \
-            and action not in (ACTION_PICK, ACTION_DPICK, ACTION_DNEW, ACTION_NAME, ACTION_NOTE_OK,
+            and action not in (ACTION_PICK, ACTION_DPICK, ACTION_DNEW, ACTION_NAME, ACTION_NOTE_OK, ACTION_FIND,
                                ACTION_DECLINE_CANCEL):
         decided_ru = DECISION_RU.get(decided, decided)
         if reply_id:
@@ -1311,6 +1316,9 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
                          + (" и регистрацию." if STEPWISE[rtype] == "reg" else "."))
         lines.append(f"Дилеру уйдёт: {dealer_gets(rtype, _payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or '')}")
         lines.append("Напиши комментарий дилеру или отправь без него.")
+        if not reg.get(Registrations.TARGET_PROJECT):
+            lines.append("Дальше выберешь проект: похожий из списка, любой существующий (поиск по названию "
+                         "или референсу) или новый.")
         await chat.send_message(
             "\n".join(lines),
             reply_markup=InlineKeyboardMarkup([
@@ -1410,6 +1418,8 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         rows = [[InlineKeyboardButton(f"В проект: {c.title[:50]}",
                                       callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{c.project_id}{tail}")]
                 for c in found]
+        rows.append([InlineKeyboardButton("🔎 Другой существующий — найти",
+                                          callback_data=f"{CB_ADMIN}{ACTION_FIND}:{reg_id}:-{tail}")])
         rows.append([InlineKeyboardButton("Создать новый проект",
                                           callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-{tail}")])
         rows.append(cancel_row())
@@ -1419,6 +1429,14 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         else:
             hint = "Похожих проектов по объекту, клиенту и адресу не нашёл."
         await chat.send_message(f"🛠 «{name}»: в какой проект?\n{hint}", reply_markup=InlineKeyboardMarkup(rows))
+        return
+
+    if action == ACTION_FIND:
+        pending[chat.id] = (ACTION_FIND, reg_id, reply_id)
+        await asyncio.to_thread(repo.set_awaiting, reg_id, ACTION_FIND, reply_id, chat.id)
+        await chat.send_message(f"🛠 «{name}»: напиши название проекта, объект, клиента или референс "
+                                "(например, AW260234) — пришлю найденные проекты кнопками.",
+                                reply_markup=InlineKeyboardMarkup([cancel_row()]))
         return
 
     if action == ACTION_DPICK and project_id:
@@ -1690,6 +1708,20 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
         if saved:
             ctx.bot_data.setdefault("accept_notes", {})[reg_id] = text
             await on_admin_callback(update, ctx, saved["resume"])
+        return True
+    if action == ACTION_FIND:
+        projects = await asyncio.to_thread(repo.dedup_projects)
+        found = dedup.search(text, projects)
+        tail = f":{reply_id}" if reply_id else ""
+        rows = [[InlineKeyboardButton(f"В проект: {c.title[:50]}",
+                                      callback_data=f"{CB_ADMIN}{ACTION_PICK}:{reg_id}:{c.project_id}{tail}")]
+                for c in found]
+        rows.append([InlineKeyboardButton("🔎 Искать ещё раз", callback_data=f"{CB_ADMIN}{ACTION_FIND}:{reg_id}:-{tail}")])
+        rows.append([InlineKeyboardButton("Создать новый проект", callback_data=f"{CB_ADMIN}{ACTION_NEW}:{reg_id}:-{tail}")])
+        rows.append(cancel_row())
+        head = (f"🛠 Нашёл по «{escape(text)}» — выбери проект:" if found
+                else f"🛠 По «{escape(text)}» проектов не нашёл. Попробуй другое слово или референс.")
+        await chat.send_message(head, reply_markup=InlineKeyboardMarkup(rows))
         return True
     if action == ACTION_DPICK:
         # Ждём выбор проекта кнопкой, а не текст

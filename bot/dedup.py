@@ -23,7 +23,7 @@ _SQUASH = (
     ("kh", "h"), ("ph", "f"), ("th", "t"), ("ck", "k"), ("ts", "c"), ("tz", "c"), ("x", "ks"),
     ("w", "v"), ("q", "k"), ("yu", "u"), ("ya", "a"), ("y", "i"), ("ee", "i"), ("oo", "u"),
 )
-_STOP = {
+_STOP_RAW = {
     "ooo", "pao", "zao", "oao", "ao", "ip", "llc", "ltd", "inc", "group", "grupp", "gruppa", "kompania",
     "the", "and", "ofis", "ofic", "office", "proekt", "project", "obekt", "bc", "jk", "jilo", "ul", "ulica",
     "prospekt", "pr", "dom", "korp", "korpus", "str", "stroenie", "lit", "moskva", "moscow", "gorod",
@@ -31,6 +31,12 @@ _STOP = {
 }
 # Общие слова, по которым совпадение ничего не значит (основы после sound): объект, апартаменты,
 # частное лицо, офис, проект — «Апартаменты» не должны находить Radisson с «сервисными апартаментами»
+# Общие слова типа объекта: «T Bank» ≠ «Альфа-Банк», «Hotel X» ≠ «Hotel Y» — совпадение только по имени
+_GENERIC_STEMS = ("bank", "hotel", "otel", "gostinic", "restoran", "kafe", "cafe", "centr", "center", "biznes",
+                  "busines", "shkol", "school", "universitet", "universit", "klinik", "clinic", "muze", "museum",
+                  "teatr", "theatr", "bibliotek", "librar", "tover", "bashn", "mebel", "furnitur",
+                  "additional", "dopolnit", "lobi", "lobb", "zona", "area", "holding", "kompleks", "complex",
+                  "tower")
 _STOP_STEMS = ("obekt", "apartament", "apartment", "chastn", "privat", "ofis", "ofic", "proekt", "project",
                "lico", "lica", "licu", "person", "kvartir", "residenc", "rezidenc")
 _MIN_LEN = 4
@@ -44,9 +50,14 @@ def sound(text: str) -> str:
     return re.sub(r"(.)\1+", r"\1", t)  # двойные буквы
 
 
+# Стоп-слова и основы — в том же «звучании», что и токены («moscow» → «moscov», «tower» → «tover»)
+_STOP = {sound(w) for w in _STOP_RAW}
+_STEMS = tuple({sound(w) for w in _STOP_STEMS + _GENERIC_STEMS})
+
+
 def tokens(text: str) -> list[str]:
     return [w for w in re.findall(r"[a-z]+", sound(text))
-            if len(w) >= _MIN_LEN and w not in _STOP and not w.startswith(_STOP_STEMS)]
+            if len(w) >= _MIN_LEN and w not in _STOP and not w.startswith(_STEMS)]
 
 
 def _similar(a: str, b: str) -> bool:
@@ -96,6 +107,7 @@ class Candidate:
 
 
 RECENT_DAYS = 30
+VERY_FRESH_DAYS = 2
 _CLOSED = {"Won", "Lost"}
 
 
@@ -149,7 +161,11 @@ def find(payload: dict, dealer_project_name: str, projects: list[dict], limit: i
         fresh = age is not None and age <= RECENT_DAYS and p.get("status") not in _CLOSED
         same_dealer = bool(dealer_ids & set(p.get("dealers") or ()))
         same_person = bool(person_ids & set(p.get("managers") or ()))
-        if fresh and (same_dealer or same_person):
+        content = any(r in reasons for r in ("адрес", "объект", "клиент"))
+        # Свой свежий проект — первым, но только если похож по сути. Без совпадения по объекту, клиенту
+        # или адресу — лишь заведённый за последние 2 дня (дубль по тому же письму, как Design Place 12.11);
+        # иначе любой проект менеджера в том же городе выглядел бы дублем (T Bank ≠ iCity, 17.11)
+        if fresh and (same_dealer or same_person) and (content or age <= VERY_FRESH_DAYS):
             score += 2 + (1 if same_person else 0)
             days = int(age)
             when = "сегодня" if days == 0 else f"{days} дн. назад"
@@ -339,4 +355,31 @@ def company_candidates(name: str, companies: dict, limit: int = 3) -> list[tuple
     key = _company_key(name)
     out = [(cid, cname) for cid, cname in companies.items()
            if cname and (_company_key(cname) == key or overlap(name, cname))]
+    return out[:limit]
+
+
+_REF_RE = re.compile(r"aw\s*-?\s*(\d{2})\s*-?\s*(\d{4})", re.I)
+
+
+def search(query: str, projects: list[dict], limit: int = 8) -> list[Candidate]:
+    """Поиск проекта проверяющим по названию, объекту, клиенту или референсу (AW260234, «260234», «iCity»)."""
+    q = (query or "").strip()
+    if not q:
+        return []
+    m = _REF_RE.search(q)
+    digits = re.sub(r"\D", "", q)
+    ref = f"AW{m.group(1)}{m.group(2)}" if m else (f"AW{digits}" if len(digits) == 6 and digits == q.strip() else "")
+    if ref:
+        return [Candidate(p["id"], p.get("name") or "Без названия", 10, ["референс"], p.get("ref") or "")
+                for p in projects if (p.get("ref") or "").upper() == ref.upper()][:limit]
+    qs = [w for w in re.findall(r"[a-z0-9]+", sound(q)) if len(w) >= 3]
+    out = []
+    for p in projects:
+        hay = " ".join([p.get("name") or "", p.get("object") or "", " ".join(p.get("clients") or []),
+                        p.get("address") or "", p.get("city") or ""])
+        words = re.findall(r"[a-z0-9]+", sound(hay))
+        hits = sum(1 for w in qs if any(x.startswith(w) or (len(w) >= 5 and _similar(w, x)) for x in words))
+        if hits and hits >= max(1, len(qs) - 1):
+            out.append(Candidate(p["id"], p.get("name") or "Без названия", hits, [], p.get("ref") or ""))
+    out.sort(key=lambda c: (-c.score, c.name.lower()))
     return out[:limit]
