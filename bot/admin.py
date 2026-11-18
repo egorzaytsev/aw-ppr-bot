@@ -1112,7 +1112,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
     pending = _pending(ctx)
     force = action in FORCE
     action = FORCE.get(action, action)
-    who_name = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
+    who_name = routing.handle(routing.who_by_chat(ctx.bot_data, chat.id))   # дилеру — аккаунт
 
     if action == ACTION_CANCEL:
         await chat.send_message(await _cancel_text(ctx, await drop_pending(update, ctx)))
@@ -1699,7 +1699,7 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
             return True
         reg = await asyncio.to_thread(repo.registration_fields, reg_id)
         _, value, name = _call_text(reg, int(reply_id or 0))
-        who = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
+        who = routing.handle(routing.who_by_chat(ctx.bot_data, chat.id))
         await memo.set_item(ctx.bot_data, "calls_proposed", f"{reg_id}:{reply_id or 0}", text.strip())
         markup = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Подходит", callback_data=f"{CB_DEALER_CALL}ok:{reg_id}:{reply_id or 0}"),

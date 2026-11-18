@@ -62,9 +62,9 @@ GREETING_TEXT = (
     "Через меня ты подаёшь уведомление, предрегистрацию и регистрацию плейсмента. Выбери действие внизу."
 )
 NOT_FOUND_TEXT = ("Ола! Я Пепе, бот Andreu World для регистрации плейсмента. Тебя пока нет в списке "
-                  "партнёров — я передал Егору. Как только он добавит, напишу сюда сам.")
-NOT_FOUND_AGAIN = "Тебя пока нет в списке партнёров — Егор уже знает. Как только добавит, напишу сюда сам."
-ONBOARDED_TEXT = "Ола! Егор добавил тебя в список партнёров — можно начинать. Нажми «Старт»."
+                  "партнёров — я передал @andreuworld. Как только там добавят, напишу сюда сам.")
+NOT_FOUND_AGAIN = "Тебя пока нет в списке партнёров — @andreuworld уже знает. Как только добавят, напишу сюда сам."
+ONBOARDED_TEXT = "Ола! Тебя добавили в список партнёров — можно начинать. Нажми «Старт»."
 UNKNOWN_EXPIRY_DAYS = 7
 MENU_START = "Старт"
 # После отказа — одна кнопка, чтобы повторить вход, когда Егор добавит человека
@@ -111,7 +111,7 @@ REMINDER_QUESTION = (
     "В какое время дня тебе удобнее получать напоминания? Время — местное, {zone}."
 )
 # Дательный падеж имени проверяющего: «передал Егору / Лоле»
-DATIVE = {routing.EGOR: "Егору", routing.LOLA: "Лоле"}
+DATIVE = routing.HANDLES   # дилерам — аккаунт: «передал @aw_eeu»
 
 
 def _markup(buttons: list[list[tuple[str, str]]]) -> InlineKeyboardMarkup | None:
@@ -207,7 +207,7 @@ async def _check_unknown_users(app: Application) -> None:
             await asyncio.to_thread(repo.mark_processed, rec["id"], "expired", closed=False)
             # Обещание «напишу сам» не должно висеть — честно сообщаем человеку
             await _send_html(app.bot, chat_id, "Не получилось подключить тебя к программе. Если вопрос актуален — "
-                                               "напиши Егору напрямую.")
+                                               "напиши @andreuworld напрямую.")
             if admin_chat:
                 await _send_html(app.bot, admin_chat,
                                  f"⏳ {escape(label)} ждал подключения {UNKNOWN_EXPIRY_DAYS} дней, в базу так и не "
@@ -311,7 +311,7 @@ async def _start_scenario(
     if code == NEW_PROJECT.code:
         # Вопрос о звонке называет проверяющего по маршруту (Р8)
         reviewer = await _reviewer_of(ctx, person)
-        preset = {**(preset or {}), REVIEWER_WITH: {routing.LOLA: "Лолой"}.get(reviewer, "Егором")}
+        preset = {**(preset or {}), REVIEWER_WITH: routing.handle(reviewer)}
     result = engine.start(code, preset)
     await _save(ctx, person, result.state)
     await _send(update, result.screens)
@@ -795,7 +795,7 @@ async def _request_next_stage(update: Update, ctx: ContextTypes.DEFAULT_TYPE, pe
     reg_id = await asyncio.to_thread(_repo(ctx).create_registration, person, request_type, payload, p.name, p.record_id)
     await update.effective_chat.send_message(
         f"{phrases.pick(phrases.THANKS)} Запрос на {what} по {cards.project_line(p.fields)} передал "
-        f"{DATIVE.get(await _reviewer_of(ctx, person), 'Егору')}. Ответ — в течение 72 часов, придёт сюда.",
+        f"{routing.handle(await _reviewer_of(ctx, person))}. Ответ — в течение 72 часов, придёт сюда.",
         parse_mode=ParseMode.HTML, reply_markup=MENU_KEYBOARD,
     )
     await _notify_admin_new(ctx, person, reg_id, request_type, payload, p.name)
@@ -843,7 +843,7 @@ async def _reviewer_of(ctx: ContextTypes.DEFAULT_TYPE, person: Person) -> str:
 
 
 async def _reviewer_name(ctx: ContextTypes.DEFAULT_TYPE, person: Person) -> str:
-    return routing.NAMES.get(await _reviewer_of(ctx, person), "Егор")
+    return routing.handle(await _reviewer_of(ctx, person))
 
 
 async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person) -> None:
@@ -878,7 +878,7 @@ async def _submit(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person
     failed = await _upload_files(ctx, reg_id, files)
     reviewer = await _reviewer_of(ctx, person)
     done = f"{phrases.pick(phrases.THANKS)} " + sc.done_text.format(
-        reviewer=DATIVE.get(reviewer, "Егору"), who=routing.NAMES.get(reviewer, "Егор"))
+        reviewer=routing.handle(reviewer), who=routing.handle(reviewer))
     if failed:
         done += (f"\n\nНе загрузилось файлов: {len(failed)} ({', '.join(failed)}). Пришли их ссылкой: "
                  "«Обновить проект» → «Дополнить материалы».")
@@ -1295,7 +1295,7 @@ LOWER_STATUS = {PPR_REGISTERED: PPR_PRE_REGISTERED, PPR_PRE_REGISTERED: PPR_NOTI
 _ACC_STATUS = {PPR_REGISTERED: "регистрацию", PPR_PRE_REGISTERED: "предрегистрацию", PPR_NOTIFIED: "уведомление"}
 
 
-def rollback_dealer_text(project: dict, old: str, new: str | None, reason: str, reviewer: str = "Егору") -> str:
+def rollback_dealer_text(project: dict, old: str, new: str | None, reason: str, reviewer: str = "@andreuworld") -> str:
     """Менеджеру: статус снижен или снят — причина и как вернуть."""
     head = f"↩️ {cards.project_line(project)}"
     now = PPR_LABELS[new].lower() if new else "статус снят"
@@ -1332,7 +1332,7 @@ async def rollback_status(app: Application, project_id: str, person_id: str, mod
                             f"{datetime.now(VALENCIA):%d.%m.%Y} · {routing.NAMES.get(reviewer, 'Егор')} (бот):", [line])
     # Только менеджеру проекта, чей статус меняется (коллегам по компании — нет)
     chats = await asyncio.to_thread(repo.chat_ids_for_people, [person_id])
-    text = rollback_dealer_text(project, old, new, reason, DATIVE.get(reviewer, "Егору"))
+    text = rollback_dealer_text(project, old, new, reason, routing.handle(reviewer))
     for chat in chats:
         await _send_html(app.bot, chat, text)
     if admin_chat:
@@ -1905,7 +1905,7 @@ async def _check_overdue(app: Application) -> None:
         mark = f.get(Registrations.BOT_PROCESSED) or ""
         name = f.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
         if hours >= DEALER_LATE_HOURS and mark != "late:72":
-            who = routing.NAMES.get(await _route_reg(app, f), "Егор")
+            who = routing.handle(await _route_reg(app, f))
             for chat in await asyncio.to_thread(repo.chat_ids_for_people, f.get(Registrations.SUBMITTED_BY) or []):
                 await _send_html(app.bot, chat, LATE_TEXT.format(name=escape(name), who=who))
             await asyncio.to_thread(repo.update_registration, rec["id"], {Registrations.BOT_PROCESSED: "late:72"})

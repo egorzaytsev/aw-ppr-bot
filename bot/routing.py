@@ -14,6 +14,12 @@ DEALER_TYPE = "Dealer"
 LOLA_USERNAME = "aw_eeu"
 EGOR, LOLA = "egor", "lola"
 NAMES = {EGOR: "Егор", LOLA: "Лола"}
+# Дилерам проверяющий — аккаунтом, не человеком: за @aw_eeu сегодня Лола, завтра другой (Егор, 18.11)
+HANDLES = {EGOR: "@andreuworld", LOLA: "@aw_eeu"}
+
+
+def handle(who: str | None) -> str:
+    return HANDLES.get(who or EGOR, HANDLES[EGOR])
 _DATIVE = {"Егор": "Егору", "Лола": "Лоле"}
 
 

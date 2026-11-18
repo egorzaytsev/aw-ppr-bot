@@ -221,11 +221,8 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE, item: dict) ->
 
 
 def sender(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> str:
-    """Отправитель — аккаунт, а не человек: «@aw_eeu» (сегодня за ним Лола, завтра — другой)."""
-    user = update.effective_user
-    if user and user.username:
-        return f"@{user.username}"
-    return routing.NAMES.get(routing.who_by_chat(ctx.bot_data, update.effective_chat.id), "Andreu World")
+    """Отправитель — аккаунт проверяющего, не человек: @aw_eeu или @andreuworld."""
+    return routing.handle(routing.who_by_chat(ctx.bot_data, update.effective_chat.id))
 
 
 def dealer_text(who: str, project: dict, text: str, files: int) -> str:

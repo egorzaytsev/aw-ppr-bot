@@ -110,7 +110,7 @@ def contact_confirmed(a: dict) -> bool:
 
 
 def _with(a: dict) -> str:
-    return a.get(REVIEWER_WITH) or "Егором"
+    return a.get(REVIEWER_WITH) or "@andreuworld"
 WHOLE_OBJECT = "Весь объект"
 STAGE_ARCHITECT_SELECTION = "Architect selection"
 LOC_MOSCOW, LOC_SPB, LOC_OTHER = "moscow", "spb", "other"

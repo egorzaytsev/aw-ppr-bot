@@ -83,7 +83,7 @@ def test_overdue_reviewer_then_dealer():
     rec["fields"][R.BOT_PROCESSED] = "late:48"
     rec["fields"][R.SUBMITTED_AT] = created(73)
     asyncio.run(main._check_overdue(app))
-    assert updates[-1] == "late:72" and app.bot.sent[-1] == ("555", main.LATE_TEXT.format(name="Медалл", who="Егор"))
+    assert updates[-1] == "late:72" and app.bot.sent[-1] == ("555", main.LATE_TEXT.format(name="Медалл", who="@andreuworld"))
     rec["fields"][R.BOT_PROCESSED] = "late:72"
     asyncio.run(main._check_overdue(app))
     assert len([s for s in app.bot.sent if s[0] == "555"]) == 1

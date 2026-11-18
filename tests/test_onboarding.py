@@ -76,7 +76,7 @@ def test_unknown_user_waits_then_expires():
     assert repo.marks == [("recU", "expired", False)]
     # Р11: обещание «напишу сам» не висит — человеку честный ответ, проверяющему — итог
     assert app.bot.sent[0] == ("555", "Не получилось подключить тебя к программе. Если вопрос актуален — "
-                                      "напиши Егору напрямую.")
+                                      "напиши @andreuworld напрямую.")
     assert "ждал подключения 7 дней" in app.bot.sent[1][1]
 
 

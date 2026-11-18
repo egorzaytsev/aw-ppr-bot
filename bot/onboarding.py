@@ -55,12 +55,12 @@ CITIES = {
 }
 
 INTRO = ("Ола! Я Пепе, бот Andreu World для регистрации плейсмента мебели в проектах. "
-         "Тебя пока нет в списке партнёров. Ответь на 7 коротких вопросов — передам Егору, "
+         "Тебя пока нет в списке партнёров. Ответь на 7 коротких вопросов — передам @andreuworld, "
          "он подтвердит подключение, и я сам напишу сюда.")
-SENT_TEXT = "Готово, передал Егору. Как только он подтвердит — напишу сюда сам."
-WAITING_TEXT = "Твоя заявка у Егора. Как только он подтвердит подключение — напишу сюда сам."
+SENT_TEXT = "Готово, передал @andreuworld. Как только там подтвердят — напишу сюда сам."
+WAITING_TEXT = "Твоя заявка у @andreuworld. Как только там подтвердят подключение — напишу сюда сам."
 CANCEL_TEXT = "Хорошо, ничего не отправил. Захочешь подключиться — напиши мне любое сообщение."
-DECLINED_TEXT = "Егор пока не подтвердил подключение к боту."
+DECLINED_TEXT = "@andreuworld пока не подтвердил подключение к боту."
 
 # (ключ, вопрос, подсказка при ошибке)
 QUESTIONS = (
@@ -136,7 +136,7 @@ async def _state(ctx, chat_id) -> dict | None:
 async def _ask(chat, ctx, st: dict) -> None:
     await memo.set_item(ctx.bot_data, _MEMO, str(chat.id), st)
     if st["step"] >= len(QUESTIONS):
-        rows = [[InlineKeyboardButton("✅ Отправить Егору", callback_data=f"{CB_USER}ok")],
+        rows = [[InlineKeyboardButton("✅ Отправить", callback_data=f"{CB_USER}ok")],
                 [InlineKeyboardButton("✏️ Заполнить заново", callback_data=f"{CB_USER}redo"), _cancel_btn()]]
         await chat.send_message("Проверь, всё верно:\n" + "\n".join(answers_lines(st["a"])),
                                 parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(rows))
@@ -394,8 +394,8 @@ async def decline(ctx, chat, reg_id: str, reason: str = "") -> None:
         return
     p = _payload(fields)
     await asyncio.to_thread(repo.mark_processed, reg_id, "declined")
-    text = DECLINED_TEXT + (f"\nКомментарий Егора: {reason}" if reason else "") + \
-        "\nЕсли есть вопросы — напиши Егору напрямую."
+    text = DECLINED_TEXT + (f"\nКомментарий: {reason}" if reason else "") + \
+        "\nЕсли есть вопросы — напиши @andreuworld напрямую."
     try:
         await ctx.bot.send_message(p["chat_id"], text)
     except Exception:

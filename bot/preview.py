@@ -370,7 +370,7 @@ def _world():
 def _done(code: str) -> str:
     """Ответ дилеру после «Отправить» — тот же текст, что в боте (маршрут — Егор)."""
     from .scenarios import SCENARIOS
-    return "Грасиас! " + SCENARIOS[code].done_text.format(reviewer="Егору", who="Егор")
+    return "Грасиас! " + SCENARIOS[code].done_text.format(reviewer="@andreuworld", who="@andreuworld")
 
 
 def _payload_new() -> dict:
@@ -394,7 +394,7 @@ async def _new(w):
     from .scenarios.new_project import QUESTIONS
     repo, bot, ctx, app, update, dealer = w
     # Анкета: первый экран и сводка — как у дилера
-    res = engine.start("new_project", {"_reviewer_with": "Егором"})
+    res = engine.start("new_project", {"_reviewer_with": "@andreuworld"})
     for sc in res.screens:
         await bot.send_message(DEALER, sc.text, reply_markup=main._markup(sc.buttons))
     st = res.state
@@ -439,7 +439,7 @@ async def _upgrade(w):
     rid = repo.create_registration(dealer, RequestType.UPGRADE_PRE_REGISTRATION,
                                    {"Dealer Project Name": "TESTBANK Office FL3"}, "TESTBANK Office FL3", PROJECT_ID)
     await bot.send_message(DEALER, "Грасиас! Запрос на предрегистрацию по <code>TESTBANK Office FL3 AW269999</code> "
-                                   "передал Егору. Ответ — в течение 72 часов, придёт сюда.")
+                                   "передал @andreuworld. Ответ — в течение 72 часов, придёт сюда.")
     await main._notify_admin_new(ctx, dealer, rid, RequestType.UPGRADE_PRE_REGISTRATION,
                                  {"Dealer Project Name": "TESTBANK Office FL3"}, "TESTBANK Office FL3")
     up = update(ADMIN)
