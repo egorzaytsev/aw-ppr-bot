@@ -22,7 +22,7 @@ from .cards import STATUS_RU, dealer_status, name_ref, others_line, project_line
 from .decisions import COMPANY_PICKS, OWN_DESIGN, plan as decision_plan
 from .labels import DECISION_RU, date_ru, missing_text
 from .scenarios.base import describe_items, format_value, is_vague
-from .scenarios.new_project import QUESTIONS as _NEW_PROJECT_QUESTIONS
+from .scenarios.new_project import CITIES as _CITIES, QUESTIONS as _NEW_PROJECT_QUESTIONS
 from .slots import VALENCIA
 from .airtable_ids import Decision, Projects, Registrations
 
@@ -51,6 +51,7 @@ ACTION_ACCEPT_LOWER = "acl"                        # не хватает дан�
 ACTION_NOTE_OK = "nok"                             # отправить предложенный комментарий как есть
 ACTION_DECLINE_CANCEL = "dcx"                      # отмена записанного отказа (выбор проекта для уведомления)
 ACTION_SET_PARTNER = "prt"                         # партнёр проекта: ad:prt:<проект>:<компания|->
+ACTION_EXPIRED_KEEP = "exk"                        # истёкшие сроки: «Оставить как есть» (Р9)
 ACTION_FIND = "fnd"                                # принять в существующий проект: найти по названию / референсу
 ACTION_FINISH = "fin"                              # зависшее решение: довести до конца (ad:fin:<заявка>)
 # Пошаговое повышение: «Пока оставить» и «Отказать» — с комментарием дилеру
@@ -204,8 +205,8 @@ async def _upgrade_pairs(ctx: ContextTypes.DEFAULT_TYPE) -> list[tuple]:
         rows += [(p, "notified") for p in f.get(Projects.NOTIFIED) or []]
         for person, status in rows:
             if person not in names:
-                names[person] = (await asyncio.to_thread(repo.person_name, person)) or person
-            short = names[person].split()[0] if names[person] else "менеджер без имени"
+                names[person] = (await asyncio.to_thread(repo.person_name, person)) or "менеджер без имени"
+            short = names[person].split()[0] if names[person] != "менеджер без имени" else "без имени"
             label = f"{name_ref(pname, ref)} · {short} · {_SHORT_STATUS[status]}"
             out.append((r["id"], person, status, label))
     return out
@@ -354,7 +355,7 @@ def _title(rtype: str, payload: dict, author: str | None = None, name: str = "",
     }
     if rtype in special:
         return special[rtype]
-    return f"📥 Новая заявка · {REQUEST_LABELS.get(rtype, rtype)}"
+    return f"📥 Новая заявка · {REQUEST_LABELS.get(rtype, 'заявка')}"
 
 
 def _v(payload: dict, key: str) -> str:
@@ -412,8 +413,19 @@ def weak_answers(payload: dict, phase: int | None = None) -> list[str]:
     return out
 
 
+_CITY_RU = {"Moscow": "Москва", "Saint-Petersburg": "Санкт-Петербург",
+            **{latin: ru for cities in _CITIES.values() for ru, latin in cities}}
+
+
+def city_ru(value) -> str:
+    """Город по-русски, если он из списка кнопок («Almaty» → «Алматы»); иначе как записан."""
+    return _CITY_RU.get(str(value or ""), str(value or ""))
+
+
 def _ru(key: str, value) -> str:
     """Значение поля по-русски: варианты Airtable → подписи, числа, даты, файлы."""
+    if key == "City":
+        return city_ru(value)
     if key == "Contact Level":
         return CONTACT_RU.get(value, str(value))
     if key == "AW Alternatives":
@@ -533,11 +545,80 @@ def dealer_gets(rtype: str, payload: dict, name: str) -> str:
 UPGRADE_REQUESTS = {"Upgrade — Pre-registration", "Upgrade — Registration"}
 
 
+# Ключ формулы «чего не хватает» → поля проекта, которые его закрывают
+_MISSING_FIELDS = {
+    "EXW Potential": (Projects.EXW_POTENTIAL,), "Expected Order Date": (Projects.EXPECTED_ORDER_DATE,),
+    "Object Address": (Projects.OBJECT_ADDRESS,), "Specifier": (Projects.SPECIFIER,),
+    "AW Alternatives": (Projects.AW_ALTERNATIVES,), "Parallel Registrations": (Projects.PARALLEL_REGISTRATIONS,),
+    "Dossier Files": (Projects.DOSSIER_FILES, Projects.DOSSIER_LINKS), "Quotation №": (Projects.QUOTATION,),
+}
+
+
+def _still_missing(formula: str, fresh: dict) -> str:
+    """Формула «не хватает» в предпросмотре: убрать то, что заявка уже заполнила."""
+    out = []
+    for item in [x.strip() for x in str(formula).split(";") if x.strip()]:
+        key = next((k for k in _MISSING_FIELDS if item.startswith(k)), None)
+        if key and any(fresh.get(f) not in (None, "", [], 0) for f in _MISSING_FIELDS[key]):
+            continue
+        if item.startswith("Contact Level") and fresh.get(Projects.CONTACT_LEVEL) not in (None, "", "Declared"):
+            continue
+        out.append(item)
+    return "; ".join(out) + (";" if out else "")
+
+
+BLOCKED_MARK = "⚠️ "   # предпросмотр вместо текста дилеру: решение сейчас не пройдёт
+
+
+async def accept_preview(repo, reg: dict, note: str = "") -> str | None:
+    """Полный текст, который дилер получит при «Принять» (правило 1.5), — та же сборка, что после записи.
+    Только для заявок с выбранным проектом; у новой проект выберут на следующем шаге. Дата окончания статуса —
+    формула базы: в предпросмотре её нет, появится после записи."""
+    target = (reg.get(Registrations.TARGET_PROJECT) or [""])[0]
+    if not target:
+        return None
+    from . import main as _main   # сборка карточки дилера — в main.dealer_card
+    try:
+        project = await asyncio.to_thread(repo.project_fields, target)
+        sim = {**reg, Registrations.DECISION: Decision.ACCEPT_MERGE, Registrations.DECISION_NOTE: note}
+        pl = decision_plan(sim, project)
+        if pl.blocked:
+            reason = re.sub(r"^🛠 ⚠️ Решение по «.*?» не прошло: ", "", pl.admin_text or "").split("\n")[0]
+            return BLOCKED_MARK + (f"сейчас «Принять» не пройдёт — {reason} Бот предложит отправить дилеру "
+                                   "готовый запрос недостающего или принять этапом ниже.")
+        if pl.final_text:
+            return pl.dealer_text
+        fresh = dict(project)
+        fresh.update({k: v for k, v in pl.project_updates.items() if v != "__today__"})
+        if pl.links or pl.transferred:
+            fresh[Projects.DOSSIER_LINKS] = fresh.get(Projects.DOSSIER_LINKS) or ("ссылки" if any(
+                isinstance(v, list) and any(isinstance(i, dict) and i.get("kind") in ("link", "file") for i in v)
+                for v in _payload(reg).values()) else "")
+        for f in (Projects.PPR_NEXT_MISSING, Projects.PPR_MISSING):   # формулы базы — пересчитать по новым полям
+            if fresh.get(f):
+                fresh[f] = _still_missing(fresh.get(f), fresh)
+        if pl.status_label:
+            fresh.pop(Projects.STATUS_EXPIRY, None)
+        managers = reg.get(Registrations.SUBMITTED_BY) or []
+        dealer_id = managers[0] if managers else ""
+        before = set(project.get(Projects.NOTIFIED) or []) | set(project.get(Projects.PRE_REGISTERED) or []) | \
+            set(project.get(Projects.REGISTERED) or [])
+        dealer_name = ", ".join([await asyncio.to_thread(repo.company_name, c)
+                                 for c in reg.get(Registrations.DEALER) or []]) or "дилер"
+        if _payload(reg).get("In Reply To"):
+            return (f"Твой ответ по проекту {project_line(project)} получили и добавили в проект. "
+                    "Делать ничего не нужно.")
+        return _main.dealer_card(sim, pl, fresh, dealer_id, dealer_name, before)
+    except Exception:
+        log.warning("Предпросмотр карточки дилеру не собрался", exc_info=True)
+        return None
+
+
 def project_digest(project: dict, manager: str, companies: dict) -> list[str]:
     """Что есть в проекте на момент запроса повышения: поля этапа, досье, кто ещё на объекте, хвост лога.
     companies — {id компании: название} для End Client / Specifier."""
     def names(field):
-        return ", ".join(escape(companies.get(c, c)) for c in project.get(field) or [])
+        return ", ".join(escape(companies.get(c) or "компания без названия") for c in project.get(field) or [])
     exw = project.get(Projects.EXW_POTENTIAL)
     order = str(project.get(Projects.EXPECTED_ORDER_DATE) or "")[:10]
     files = len(project.get(Projects.DOSSIER_FILES) or [])
@@ -548,7 +629,7 @@ def project_digest(project: dict, manager: str, companies: dict) -> list[str]:
     for row in (
         _pair(("Клиент", names(Projects.END_CLIENT))),
         _pair(("Объект", obj)),
-        _pair(("Город", escape(str(project.get(Projects.CITY) or ""))),
+        _pair(("Город", escape(city_ru(project.get(Projects.CITY)))),
               ("Стадия", escape(_ru("Project Stage", project[Projects.PROJECT_STAGE]))
                if project.get(Projects.PROJECT_STAGE) else "")),
         _pair(("Адрес", escape(str(project.get(Projects.OBJECT_ADDRESS) or "")))),
@@ -595,8 +676,9 @@ async def upgrade_digest(repo, reg: dict) -> list[str]:
 
 def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: str | None = None,
                  dealer: str | None = None, extra: list[str] | None = None, asked: str = "",
-                 failed_files: list[str] | None = None) -> str:
-    """Карточка-вопрос проверяющему: что пришло, что изменится при «Принять», что получит дилер (правило 1.5)."""
+                 failed_files: list[str] | None = None, title: str = "", dealer_preview: str = "") -> str:
+    """Карточка-вопрос проверяющему: что пришло, что изменится при «Принять», что получит дилер (правило 1.5).
+    title — «Название AW…» проекта из базы (у заявок по существующему проекту), иначе название дилера."""
     name = reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
     rtype = reg.get(Registrations.REQUEST_TYPE) or "—"
     try:
@@ -611,7 +693,7 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
             who = f"{who} · {escape(author)}" if who else escape(author)
         lines.append(f"👤 {who}")
     if not extra:
-        lines.append(f"🏗 <b>{escape(name)}</b>")
+        lines.append(f"🏗 <code>{escape(title)}</code>" if title else f"🏗 <b>{escape(name)}</b>")
 
     body = _card_body(rtype, payload)
     if body:
@@ -623,9 +705,17 @@ def request_card(reg: dict, reg_id: str, author: str | None = None, analysis: st
                       "дилера попросил прислать их ссылкой."]
     if analysis:
         lines += ["", "🔎 " + escape(analysis)]
-    lines += ["", f"<b>При «Принять»:</b> {accept_effect(rtype, payload, author)}",
-              f"<b>Дилеру уйдёт:</b> {dealer_gets(rtype, payload, name)} При «Отклонить» — «Заявка по проекту "
-              f"{escape(name)} не принята» и как подать заново. Комментарий — твой, если напишешь."]
+    decline = ("«❌ … не подтверждена»: плейсмент остаётся с прежним статусом, и что нужно для следующего этапа"
+               if rtype in UPGRADE_REQUESTS or rtype in ("New — Pre-registration", "New — Registration")
+               else f"«Заявка по проекту {escape(title or name)} не принята» и как подать заново")
+    lines += ["", f"<b>При «Принять»:</b> {accept_effect(rtype, payload, author)}"]
+    if dealer_preview.startswith(BLOCKED_MARK):
+        lines.append(f"<b>Внимание:</b> {escape(dealer_preview[len(BLOCKED_MARK):])}")
+    elif dealer_preview:
+        lines += ["<b>Дилеру уйдёт при «Принять»:</b>", "━━━━━━━━━━", dealer_preview, "━━━━━━━━━━"]
+    else:
+        lines.append(f"<b>Дилеру уйдёт:</b> {dealer_gets(rtype, payload, name)}")
+    lines.append(f"<b>При «Отклонить»:</b> {decline}. Комментарий — твой, если напишешь.")
     # ID заявки в тексте не показываем
     return "\n".join(lines)
 
@@ -760,12 +850,27 @@ async def asked_of(repo, reg: dict) -> str:
     return str(orig.get(Registrations.DECISION_NOTE) or "").strip()
 
 
+async def reg_title(repo, reg: dict) -> str:
+    """«Название AW…» проекта заявки (из базы), если проект выбран; иначе название, которое дал дилер."""
+    target = (reg.get(Registrations.TARGET_PROJECT) or [""])[0]
+    if target:
+        try:
+            p = next((x for x in await asyncio.to_thread(repo.dedup_projects) if x["id"] == target), None)
+        except Exception:
+            p = None
+        if p:
+            return name_ref(p.get("name") or "", p.get("ref") or "")
+    return reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия"
+
+
 async def send_request(ctx: ContextTypes.DEFAULT_TYPE, chat_id, reg_id: str, reg: dict, header: str = "") -> None:
     """Карточка-вопрос по заявке (с кнопками решения и предложением звонка) — из /inbox, повторно, по 48 ч."""
     repo = ctx.bot_data["repo"]
     author = await _author(repo, reg)
+    title = await reg_title(repo, reg) if reg.get(Registrations.TARGET_PROJECT) else ""
     text = request_card(reg, reg_id, author, reg.get(Registrations.ANALYSIS), await _dealer(repo, reg),
-                        await upgrade_digest(repo, reg), await asked_of(repo, reg))
+                        await upgrade_digest(repo, reg), await asked_of(repo, reg), title=title,
+                        dealer_preview=await accept_preview(repo, reg) or "")
     text += await send_files(ctx.bot, chat_id, _payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or "")
     await send_card(ctx.bot, chat_id, header + text + age_line(reg.get(Registrations.SUBMITTED_AT)),
                     decision_markup(ctx, reg_id, await merge_candidates(repo, reg)))
@@ -1073,8 +1178,19 @@ async def dealer_call_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
             await ctx.bot.send_message(target, f"📞 {escape(author)} подтвердил(а) звонок по «{escape(name)}»: "
                                                f"<b>{escape(proposed)}</b>. Напомню за час.", parse_mode=ParseMode.HTML)
         return
+    if action == "cancel":
+        await memo.pop(ctx.bot_data, "waits", f"dealer:{update.effective_chat.id}")
+        keep = f" Остаётся предложенное время: {escape(proposed)}." if proposed else ""
+        await update.effective_chat.send_message(
+            f"Хорошо, другое время не предлагаю.{keep} Подходит — нажми «✅ Подходит» выше.",
+            parse_mode=ParseMode.HTML)
+        return
     await memo.set_item(ctx.bot_data, "waits", f"dealer:{update.effective_chat.id}", ["callalt", reg_id, idx])
-    await update.effective_chat.send_message("Напиши, когда тебе удобно, — дату и время. Передам на проверку.")
+    # Правило 1.6: у каждого запроса ввода — выход
+    await update.effective_chat.send_message(
+        "Напиши, когда тебе удобно, — дату и время. Передам на проверку.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+            "Отмена", callback_data=f"{CB_DEALER_CALL}cancel:{reg_id}:{idx}")]]))
 
 
 async def dealer_call_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
@@ -1147,6 +1263,10 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         return
 
     # Повышение статуса без заявки — по проекту и менеджеру, не по записи Inbox
+    if action == ACTION_EXPIRED_KEEP:
+        await chat.send_message("🛠 Оставил как есть — статусы не менял, дилерам ничего не ушло. Пока срок не "
+                                "решён, список истёкших придёт завтра снова.")
+        return
     if action == ACTION_UP_NO:   # кнопка старых сообщений
         await chat.send_message("🛠 Статус не менял. Повысить позже — /upgrade.")
         return
@@ -1270,7 +1390,7 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         except Exception:
             await chat.send_message("🛠 Исходной заявки больше нет в базе — ответ дилера закрыть не к чему.")
             return
-    name = escape(reg.get(Registrations.DEALER_PROJECT_NAME) or "без названия")
+    name = escape(await reg_title(repo, reg))   # «Название AW…», если проект уже выбран
     _mark_decider(ctx, update, reg_id)
     decided = reg.get(Registrations.DECISION)
     # Застрявшее решение можно доделать кнопками (Р5)
@@ -1332,17 +1452,22 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         if rtype in STEPWISE:
             lines.append("Проверим по шагам: сначала запишу уведомление, потом спрошу про предрегистрацию"
                          + (" и регистрацию." if STEPWISE[rtype] == "reg" else "."))
-        lines.append(f"Дилеру уйдёт: {dealer_gets(rtype, _payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or '')}")
-        lines.append("Напиши комментарий дилеру или отправь без него.")
+        full = await accept_preview(repo, reg)
+        if full and full.startswith(BLOCKED_MARK):
+            lines.append(f"⚠️ {escape(full[len(BLOCKED_MARK):][:1].upper() + full[len(BLOCKED_MARK) + 1:])}")
+        elif full:
+            lines.append("Дилеру уйдёт:\n━━━━━━━━━━\n" + full + "\n━━━━━━━━━━")
+            if STATUS_REQUESTS & {rtype} or rtype == "New — Notification":
+                lines.append("<i>Дату окончания статуса база посчитает при записи — дилер увидит её в карточке.</i>")
+        else:
+            lines.append(f"Дилеру уйдёт: {dealer_gets(rtype, _payload(reg), reg.get(Registrations.DEALER_PROJECT_NAME) or '')}")
+        lines.append("Напиши комментарий дилеру (он добавится в карточку) или отправь без него.")
         if not reg.get(Registrations.TARGET_PROJECT):
             lines.append("Дальше выберешь проект: похожий из списка, любой существующий (поиск по названию "
                          "или референсу) или новый.")
-        await chat.send_message(
-            "\n".join(lines),
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Отправить без комментария", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}{tail}")],
-                cancel_row()]),
-        )
+        await send_card(ctx.bot, chat.id, "\n".join(lines), InlineKeyboardMarkup([
+            [InlineKeyboardButton("Отправить без комментария", callback_data=f"{CB_ADMIN}{ACTION_ACCEPT}:{reg_id}{tail}")],
+            cancel_row()]))
         return
 
     if action == ACTION_DECLINE_BARE:

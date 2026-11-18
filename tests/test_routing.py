@@ -24,5 +24,11 @@ def test_summary_lines():
     assert routing.summary_line(routing.EGOR, "Decline", "", "Медалл") == "ℹ️ Егор отклонил «Медалл»"
     assert routing.summary_line(routing.LOLA, "Need more info", "", "Медалл") == \
         "ℹ️ Лола запросила информацию по «Медалл»"
-    assert "плейсмент зафиксирован уведомлением" in routing.summary_line(
+    assert "плейсмент остаётся уведомлением" in routing.summary_line(
         routing.LOLA, "Decline", "AW260225", "X", declined_upgrade=True)
+
+
+def test_declined_upgrade_keeps_current_status():
+    from bot import routing as r
+    line = r.summary_line(r.LOLA, "Decline", "AW260225", "X", declined_upgrade=True, kept="pre_registered")
+    assert "плейсмент остаётся предрегистрацией" in line

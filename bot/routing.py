@@ -58,8 +58,11 @@ def resolve(bot_data: dict, who: str) -> tuple[str, str | None]:
     return EGOR, known.get(EGOR)
 
 
+_KEPT_INSTR = {"notified": "уведомлением", "pre_registered": "предрегистрацией", "registered": "регистрацией"}
+
+
 def summary_line(who: str, decision: str, ref: str, name: str, status_label: str = "",
-                 declined_upgrade: bool = False) -> str:
+                 declined_upgrade: bool = False, kept: str = "notified") -> str:
     """«ℹ️ Лола приняла Kolesa Almaty Reception AW260249 как уведомление» — итог для второго проверяющего."""
     def verb(masc: str, fem: str) -> str:
         return fem if who in _FEMININE else masc
@@ -67,7 +70,7 @@ def summary_line(who: str, decision: str, ref: str, name: str, status_label: str
     what = f"<code>{escape(' '.join(x for x in (name, ref) if x))}</code>" if ref else escape(f"«{name}»")
     person = NAMES.get(who, who)
     if declined_upgrade:
-        return f"ℹ️ {person} {verb('отклонил', 'отклонила')} повышение статуса {what} — плейсмент зафиксирован уведомлением"
+        return f"ℹ️ {person} {verb('отклонил', 'отклонила')} повышение статуса {what} — плейсмент остаётся {_KEPT_INSTR.get(kept, 'уведомлением')}"
     if decision.startswith("Accept"):
         acc = {"предрегистрация": "предрегистрацию", "регистрация": "регистрацию"}
         tail = f" как {acc.get(status_label, status_label)}" if status_label else ""

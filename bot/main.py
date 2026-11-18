@@ -914,15 +914,23 @@ async def _notify_admin_new(ctx: ContextTypes.DEFAULT_TYPE, person: Person, reg_
                 Registrations.REQUEST_TYPE: request_type,
                 Registrations.PAYLOAD: json.dumps(payload, ensure_ascii=False),
             }
-            extra = []
-            if request_type in admin.UPGRADE_REQUESTS:
+            extra, title, preview_text = [], "", ""
+            if not request_type.startswith("New"):
+                # Заявка по существующему проекту — в карточке «Название AW…» из базы (правило 1.2)
                 reg = await asyncio.to_thread(_repo(ctx).registration_fields, reg_id)
-                extra = await admin.upgrade_digest(_repo(ctx), reg)
+                card_fields[Registrations.TARGET_PROJECT] = reg.get(Registrations.TARGET_PROJECT) or []
+                if card_fields[Registrations.TARGET_PROJECT]:
+                    title = await admin.reg_title(_repo(ctx), card_fields)
+                    preview_text = await admin.accept_preview(_repo(ctx), {**reg, **card_fields}) or ""
+                if request_type in admin.UPGRADE_REQUESTS:
+                    extra = await admin.upgrade_digest(_repo(ctx), reg)
             files_line = await admin.send_files(ctx.bot, admin_chat, payload, name or "")
             await admin.send_card(
                 ctx.bot, admin_chat,
                 admin.request_card(card_fields, reg_id, person.name, analysis, _sender_label(ctx, person, payload),
-                                   extra, await admin.asked_of(_repo(ctx), card_fields), failed) + files_line,
+                                   extra, await admin.asked_of(_repo(ctx), card_fields), failed, title=title,
+                                   dealer_preview=preview_text)
+                + files_line,
                 admin.decision_markup(ctx, reg_id, candidates),
             )
             await admin.send_call_offer(ctx.bot, admin_chat, reg_id, card_fields, person.name)
@@ -1373,7 +1381,7 @@ async def _warn_expired(app: Application, reviewer: str, admin_chat) -> None:
                              f"{labels.date_ru(f.get(Projects.STATUS_EXPIRY))}")
                 rows.append([(f"↩️ Откатить {label}"[:60], f"{admin.CB_ADMIN}{admin.ACTION_RB}:{r['id']}:{person}")])
     if lines:
-        rows = rows[:15] + [[("Оставить как есть", f"{admin.CB_ADMIN}{admin.ACTION_UP_NO}:")]]
+        rows = rows[:15] + [[("Оставить как есть", f"{admin.CB_ADMIN}{admin.ACTION_EXPIRED_KEEP}:")]]
         await _send_html(app.bot, admin_chat, "🛠 ⏳ <b>Истёк срок статуса.</b> Откати или оставь как есть "
                                               "(список придёт и завтра, пока срок не обновится):\n"
                          + "\n".join(lines[:15]), _markup(rows))
@@ -1523,6 +1531,38 @@ async def _set_owner_partner(app: Application, admin_chat, decider: str, project
                      f"{cards.project_line(project)}, дальше бот подставит его сам.", _markup(rows))
 
 
+def dealer_card(reg: dict, pl, fresh: dict, dealer_id: str, dealer_name: str, before: set,
+                event: bool = False) -> str | None:
+    """Карточка дилеру после принятия — по состоянию проекта после записи. Её же проверяющий видит заранее
+    (правило 1.5, admin.accept_preview)."""
+    note = (reg.get(Registrations.DECISION_NOTE) or "").strip()
+    if pl.declined_upgrade:
+        asked = "регистрация" if "Registration" in (reg.get(Registrations.REQUEST_TYPE) or "") \
+            and "Pre" not in (reg.get(Registrations.REQUEST_TYPE) or "") else "предрегистрация"
+        return cards.declined_upgrade_card(fresh, dealer_id, dealer_name, payload_of(reg), asked,
+                                           note, dealer_id not in before)
+    if pl.status_label:
+        # Статус поставили без заявки дилера (руками или /upgrade) — не «Заявка принята»
+        title = "✅ Статус по проекту изменён" if event else "✅ Заявка принята"
+        return cards.accept_card(fresh, dealer_id, dealer_name, payload_of(reg), dealer_id not in before, note,
+                                 title)
+    if pl.final_text:
+        return None
+    rtype = reg.get(Registrations.REQUEST_TYPE)
+    quote_no = payload_of(reg).get("Quotation / Proforma №")
+    valid = labels.date_ru(reg.get(Registrations.QUOTE_VALID))
+    entered = ", ".join(dict.fromkeys(pl.transferred))
+    body = {
+        RequestType.QUOTE_SIMPLIFIED: (
+            f"🧾 Квотация № {escape(str(quote_no))} зафиксирована — защита действует "
+            + (f"до {valid}." if valid else "на срок действия квотации.")) if quote_no else None,
+        RequestType.UPDATE_NEWS: "📰 Новость записали в историю проекта.",
+    }.get(rtype) or (f"📝 Внесли в проект: {escape(entered)}." if entered
+                     else "📝 Информацию записали в историю проекта.")
+    return cards.update_card(fresh, dealer_id, dealer_name, body, note,
+                             next_step=rtype in RequestType.INFO_UPDATES)
+
+
 async def _handle_registration(app: Application, rec_id: str | None, reg: dict, event: bool = False,
                                who: str | None = None) -> None:
     """Решение по заявке. event — смена Reg Status или повышение без заявки (rec_id None):
@@ -1600,31 +1640,7 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
         dealer_id = managers[0] if managers else ""
         before = set((project or {}).get(Projects.NOTIFIED) or []) | set(
             (project or {}).get(Projects.PRE_REGISTERED) or []) | set((project or {}).get(Projects.REGISTERED) or [])
-        note = (reg.get(Registrations.DECISION_NOTE) or "").strip()
-        if pl.declined_upgrade:
-            asked = "регистрация" if "Registration" in (reg.get(Registrations.REQUEST_TYPE) or "") \
-                and "Pre" not in (reg.get(Registrations.REQUEST_TYPE) or "") else "предрегистрация"
-            card = cards.declined_upgrade_card(fresh, dealer_id, dealer_name, payload_of(reg), asked,
-                                               note, dealer_id not in before)
-        elif pl.status_label:
-            # Статус поставили без заявки дилера (руками или /upgrade) — не «Заявка принята»
-            title = "✅ Статус по проекту изменён" if event else "✅ Заявка принята"
-            card = cards.accept_card(fresh, dealer_id, dealer_name, payload_of(reg), dealer_id not in before, note,
-                                     title)
-        elif not pl.final_text:
-            rtype = reg.get(Registrations.REQUEST_TYPE)
-            quote_no = payload_of(reg).get("Quotation / Proforma №")
-            valid = labels.date_ru(reg.get(Registrations.QUOTE_VALID))
-            entered = ", ".join(dict.fromkeys(pl.transferred))
-            body = {
-                RequestType.QUOTE_SIMPLIFIED: (
-                    f"🧾 Квотация № {escape(str(quote_no))} зафиксирована — защита действует "
-                    + (f"до {valid}." if valid else "на срок действия квотации.")) if quote_no else None,
-                RequestType.UPDATE_NEWS: "📰 Новость записали в историю проекта.",
-            }.get(rtype) or (f"📝 Внесли в проект: {escape(entered)}." if entered
-                             else "📝 Информацию записали в историю проекта.")
-            card = cards.update_card(fresh, dealer_id, dealer_name, body, note,
-                                     next_step=rtype in RequestType.INFO_UPDATES)
+        card = dealer_card(reg, pl, fresh, dealer_id, dealer_name, before, event)
         if pl.dealer_text and not pl.final_text:  # ответ на запрос принимается молча — у него dealer_text нет
             pl.dealer_text = card
         elif not pl.dealer_text and payload_of(reg).get("In Reply To") and not event:
@@ -1702,7 +1718,9 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
             await _send_html(app.bot, other_chat, routing.summary_line(
                 decider, reg.get(Registrations.DECISION) or "", fresh_ref.get(Projects.PPR_REF) or "",
                 fresh_ref.get(Projects.NAME) or reg.get(Registrations.DEALER_PROJECT_NAME) or "",
-                pl.status_label or "", pl.declined_upgrade))
+                pl.status_label or "", pl.declined_upgrade,
+                # Р2: при отказе в повышении у дилера остаётся его текущий статус, не обязательно уведомление
+                cards.dealer_status(fresh_ref, (reg.get(Registrations.SUBMITTED_BY) or [""])[0]) or "notified"))
 
 
 # ---------- напоминания ----------

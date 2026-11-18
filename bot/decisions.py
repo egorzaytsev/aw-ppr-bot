@@ -7,12 +7,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from html import escape
 
 from .airtable_ids import Decision, Partners, Projects, Registrations, RegStatus, RequestType
 from .labels import MISSING_RU
+
+log = logging.getLogger(__name__)
 
 PPR_NOTIFIED, PPR_PRE, PPR_REG = "Notification", "Pre-registration", "Registration"
 STATUS_FIELD = {
@@ -333,7 +336,11 @@ def missing_names_ru(missing: list[str], detailed: bool = False) -> list[str]:
     out = []
     for key in missing:
         row = next((r for r in MISSING_RU if key.startswith(r[0])), None)
-        out.append(row[2] if detailed else row[1] if row else "другие данные")
+        if row is None:
+            log.warning("Неизвестный ключ «чего не хватает»: %s", key)   # правило 1.3: сырым не выводим
+            out.append("другие данные")
+            continue
+        out.append(row[2] if detailed else row[1])
     return out
 
 
