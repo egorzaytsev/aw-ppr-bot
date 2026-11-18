@@ -392,7 +392,7 @@ _META_KEYS = {"Dealer Project Name", "Project Log", "PPR Track", "EXW Potential"
 _EXTRA_TITLES = {"Bureau": "Архбюро (AW не закладывало)", "Not Known Yet": "Дилер пока не знает",
                  "Order / Proforma №": "Заказ / проформа №", "Lost Reason": "Причина проигрыша",
                  "Quotation / Proforma №": "Квотация AW №", "Extra Materials": "Материалы",
-                 "Dealer News": "Новость", "Contact Evidence": "Подтверждение контакта",
+                 "Dealer News": "Новость", "News File": "Файл к новости", "Contact Evidence": "Подтверждение контакта",
                  "Area Source": "Откуда площадь", "Country": "Страна", "City": "Город"}
 
 # «Нет» здесь — полноценный ответ, а не пропуск

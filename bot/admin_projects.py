@@ -220,8 +220,16 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE, item: dict) ->
     return True
 
 
+def sender(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> str:
+    """Отправитель — аккаунт, а не человек: «@aw_eeu» (сегодня за ним Лола, завтра — другой)."""
+    user = update.effective_user
+    if user and user.username:
+        return f"@{user.username}"
+    return routing.NAMES.get(routing.who_by_chat(ctx.bot_data, update.effective_chat.id), "Andreu World")
+
+
 def dealer_text(who: str, project: dict, text: str, files: int) -> str:
-    lines = [f"✉️ <b>{escape(who)}</b> по проекту {cards.project_line(project)}:"]
+    lines = [f"✉️ {escape(who)} по проекту {cards.project_line(project)}:"]
     if text:
         lines.append(escape(text))
     if files:
@@ -239,7 +247,7 @@ async def done(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     repo = ctx.bot_data["repo"]
     project = await asyncio.to_thread(repo.project_fields, d["project"])
     name = await asyncio.to_thread(repo.person_name, d["person"]) or "менеджер без имени"
-    who = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
+    who = sender(update, ctx)
     files = "\n".join(f"• {escape(f.get('name') or 'файл')}" for f in d["files"])
     await chat.send_message(
         f"🛠 Так увидит {escape(name)}:\n\n{dealer_text(who, project, d.get('text', ''), len(d['files']))}"
@@ -260,7 +268,7 @@ async def send(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     repo = ctx.bot_data["repo"]
     project = await asyncio.to_thread(repo.project_fields, d["project"])
     name = await asyncio.to_thread(repo.person_name, d["person"]) or "менеджер без имени"
-    who = routing.NAMES.get(routing.who_by_chat(ctx.bot_data, chat.id), "Егор")
+    who = sender(update, ctx)
     chats = await asyncio.to_thread(repo.chat_ids_for_people, [d["person"]])
     if not chats:
         await chat.send_message(f"🛠 ⚠️ У {escape(name)} нет Telegram в базе — сообщение не ушло.")

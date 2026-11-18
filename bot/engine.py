@@ -584,6 +584,13 @@ def _wants_items(state: DialogState) -> bool:
 
 
 def handle_file(state: DialogState, item: dict) -> Result:
+    if state.awaiting == AWAIT_ANSWER and state.step < len(_qs(state)) and _current_q(state).attach_key:
+        q = _current_q(state)
+        had = bool(state.answers.get(q.attach_key))
+        state.answers[q.attach_key] = [item]
+        name = escape(item.get("name") or "файл")
+        return Result(state, [Screen(f"📎 Файл «{name}» {'заменил' if had else 'приложил'}. Теперь напиши текстом "
+                                     "или запиши голосовое — уйдёт вместе с файлом.")])
     if not _wants_items(state):
         msg = Screen("Файл сейчас не нужен — ответь на вопрос.")
         return Result(state, [msg, current_screen(state)])
@@ -822,7 +829,7 @@ def build_payload(state: DialogState) -> dict:
     payload: dict = {}
     for i in applicable(state):
         q = _qs(state)[i]
-        for key in (q.key, q.qualifier_key, q.evidence_key):
+        for key in (q.key, q.qualifier_key, q.evidence_key, q.attach_key):
             if key and key in state.answers:
                 payload[key] = state.answers[key]
     sc = scenario_of(state)

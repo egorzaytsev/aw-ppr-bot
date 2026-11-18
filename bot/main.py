@@ -991,7 +991,14 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not person.state:
         await _loose_file(update, ctx, person, item)
         return
-    await _apply(update, ctx, person, engine.handle_file(person.state, item))
+    result = engine.handle_file(person.state, item)
+    caption = (msg.caption or "").strip()
+    q = engine._current_q(person.state) if person.state.step < len(engine._qs(person.state)) else None
+    if caption and q is not None and q.attach_key and result.state is not None:
+        # Файл с подписью к новости: подпись — сам текст, всё уходит одной заявкой
+        await _apply(update, ctx, person, engine.handle_text(result.state, caption))
+        return
+    await _apply(update, ctx, person, result)
 
 
 async def _loose_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, item: dict) -> None:
