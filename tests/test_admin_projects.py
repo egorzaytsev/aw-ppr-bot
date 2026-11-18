@@ -58,7 +58,7 @@ def test_write_to_manager_with_file():
         repo.projects[preview.PROJECT_ID][PP.PRE_REGISTERED] = []
         repo.projects[preview.PROJECT_ID][PP.REGISTERED] = []
         await ap.on_menu(up, ctx, f"dpw:{preview.PROJECT_ID}")
-        assert "Сообщение для" in bot.sent[-1][1]
+        assert "Кому:" in bot.sent[-1][1]
         await admin.on_admin_text(up, ctx, "Прикладываю обновлённую квотацию.", resume=False)
         assert await ap.on_file(up, ctx, {"kind": "file", "file_id": "F1", "name": "quote.pdf", "mime": "application/pdf"})
         await ap.on_menu(up, ctx, "dpd")
