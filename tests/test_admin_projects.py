@@ -45,3 +45,28 @@ def test_menu_flow_in_sandbox():
         await ap.find(up, ctx, "269999")
         assert bot.sent[-1][2].inline_keyboard[0][0].text.startswith("AW269999")
     asyncio.run(go())
+
+
+def test_write_to_manager_with_file():
+    from bot import admin
+    from bot.airtable_ids import Projects as PP
+
+    async def go():
+        repo, bot, ctx, app, update, dealer = preview._world()
+        up = update(preview.ADMIN)
+        repo.projects[preview.PROJECT_ID][PP.NOTIFIED] = [preview.DEALER_ID]
+        repo.projects[preview.PROJECT_ID][PP.PRE_REGISTERED] = []
+        repo.projects[preview.PROJECT_ID][PP.REGISTERED] = []
+        await ap.on_menu(up, ctx, f"dpw:{preview.PROJECT_ID}")
+        assert "Сообщение для" in bot.sent[-1][1]
+        await admin.on_admin_text(up, ctx, "Прикладываю обновлённую квотацию.", resume=False)
+        assert await ap.on_file(up, ctx, {"kind": "file", "file_id": "F1", "name": "quote.pdf", "mime": "application/pdf"})
+        await ap.on_menu(up, ctx, "dpd")
+        assert "Так увидит" in bot.sent[-1][1] and "quote.pdf" in bot.sent[-1][1]
+        await ap.on_menu(up, ctx, "dps")
+        to_dealer = [t for to, t, m in bot.sent if str(to) == str(preview.DEALER)]
+        assert any("Прикладываю обновлённую квотацию" in t for t in to_dealer)
+        assert "Прикладываю обновлённую квотацию" in repo.projects[preview.PROJECT_ID][PP.PROJECT_LOG]
+        assert "Отправлено" in bot.sent[-1][1]
+        assert not await ap.on_file(up, ctx, {"kind": "file", "file_id": "F2", "name": "x.pdf"})   # черновика нет
+    asyncio.run(go())

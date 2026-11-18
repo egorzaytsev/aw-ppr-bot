@@ -14,6 +14,11 @@ DEALER_TYPE = "Dealer"
 LOLA_USERNAME = "aw_eeu"
 EGOR, LOLA = "egor", "lola"
 NAMES = {EGOR: "Егор", LOLA: "Лола"}
+_DATIVE = {"Егор": "Егору", "Лола": "Лоле"}
+
+
+def dative(name: str) -> str:
+    return _DATIVE.get(name, name)
 _FEMININE = {LOLA}
 
 

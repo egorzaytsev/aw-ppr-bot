@@ -114,6 +114,9 @@ async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> tuple 
         item = tuple(saved)
     if not item:
         item = await asyncio.to_thread(repo.find_awaiting, chat_id)
+    if item and item[0] in ("dpmsg", "dpfind"):   # «Проекты моих дилеров»: не заявка — черновик в памяти бота
+        await memo.pop(ctx.bot_data, "admin_msg", str(chat_id))
+        return item
     if item and item[0] != ACTION_REMIND_USER and item[0] not in _MEMO_ACTIONS and str(item[1]).startswith("rec"):
         await asyncio.to_thread(repo.clear_awaiting, item[1])
     return item
@@ -971,6 +974,7 @@ _CANCEL_WHAT = {
     ACTION_NEW: "создание нового проекта — решения нет",
     ACTION_FIND: "поиск проекта — решения нет",
     "dpfind": "поиск проекта",
+    "dpmsg": "сообщение менеджеру — ничего не ушло",
     ACTION_DNEW: "создание нового проекта",
     ACTION_RENAME: "переименование проекта — решения нет",
     ACTION_RB_DOWN: "откат — статус не менялся",
@@ -1674,6 +1678,12 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     from . import admin_projects, onboarding
     if action in onboarding.ADMIN_ACTIONS:
         return await onboarding.on_admin_text(update, ctx, item, text)
+    if action == admin_projects.ACTION_MSG:
+        if text.strip():
+            await admin_projects.on_text(update, ctx, item, text.strip())
+        else:
+            pending[chat.id] = item
+        return True
     if action == admin_projects.ACTION_FIND:
         if not text.strip():
             pending[chat.id] = item

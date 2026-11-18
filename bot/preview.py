@@ -647,6 +647,16 @@ async def _dealers(w):
     await ap.on_menu(up, ctx, f"dpo:{PROJECT_ID}")
     await ap.ask_find(up, ctx)
     await ap.find(up, ctx, "AW269999")
+    # «✉️ Написать менеджеру»: текст + файл → просмотр → дилеру
+    from . import admin
+    admin._pending(ctx).pop(ADMIN, None)
+    await ap.on_menu(up, ctx, f"dpw:{PROJECT_ID}")
+    await ap.on_menu(up, ctx, f"dpm:{PROJECT_ID}:{DEALER_ID}")      # выбрал менеджера
+    await admin.on_admin_text(up, ctx, "Прикладываю обновлённую квотацию — проверь позиции 3–5.", resume=False)
+    await ap.on_file(up, ctx, {"kind": "file", "file_id": "F1", "name": "Quotation_20101446.pdf",
+                               "mime": "application/pdf"})
+    await ap.on_menu(up, ctx, "dpd")
+    await ap.on_menu(up, ctx, "dps")
     # «Мои проекты» дилера — кнопка «код · название · статус»
     items = await main._projects(ctx, dealer)
     buttons = [[(main._button_label(p), "x")] for p in items]

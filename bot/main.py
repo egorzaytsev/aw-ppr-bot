@@ -975,6 +975,9 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         item = {"kind": "file", "file_id": ph.file_id, "file_unique_id": ph.file_unique_id,
                 "name": f"photo_{ph.file_unique_id}.jpg", "size": ph.file_size, "mime": "image/jpeg"}
 
+    # Проверяющий пишет менеджеру дилера («Проекты моих дилеров») — файл в черновик сообщения
+    if admin.is_admin(update, ctx) and await admin_projects.on_file(update, ctx, item):
+        return
     person = await _identify(update, ctx)
     if not person:
         await _unknown(update, ctx)
