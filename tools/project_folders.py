@@ -4,7 +4,9 @@
 Ключ Airtable — из .env бота (тот же AIRTABLE_TOKEN), в вывод не попадает. В Airtable ничего не пишет.
 
   python tools/project_folders.py            # только список: что создал бы и что уже есть
-  python tools/project_folders.py --create   # создать недостающие папки
+  python tools/project_folders.py --create   # создать недостающие и перенести папки не в своём месте
+
+Проекты Лолы (партнёр Astros / Aluframe или Owner = Lola Sapaeva) — в «Astros Aluframe», остальные — в корне.
 
 Принятый проект — открытый (Status не Won/Lost) и с менеджером в Notified / Pre-registered / Registered.
 Папка «уже есть», если в имени есть код AW… проекта или проект записан в .project_folders.json
@@ -16,15 +18,22 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path.home() / "Library/CloudStorage/OneDrive-AndreuWorld/ecoCRM/projects and pricing"
+# Проекты Лолы (@aw_eeu) — отдельной подпапкой: доступ ей открыт только к ней (решение Егора 18.11.2026)
+LOLA_DIR = ROOT / "Astros Aluframe"
+LOLA_PARTNERS = {"rec2DJSCpnhZORiyB", "recYQinVKoMACGVc1"}   # Aluframe, Astros
+LOLA_OWNER = "Lola Sapaeva"
 MAP_FILE = ROOT / ".project_folders.json"     # {id проекта: имя папки} — для папок без кода в имени
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 BASE = "appD8N8DAgcTAqfL1"
 TABLE = "tbl3ezrJ2Zssu4Aoz"
 F = {"name": "fldxdxuL2j3aBKGBZ", "ref": "fld9H3DLTtTOTluOb", "status": "flddwm09GKIgI34Xk",
+     "partner": "fldh6aWJ5jmn3EYkA", "owner": "fldx02XpxAcZixuWj",
      "notified": "fldJRkBhuJzyg7QIX", "pre": "fldr4KkTqqgDZm7u6", "reg": "fldGaXBjJetxthhqv"}
 MAX_NAME = 80
 
@@ -55,47 +64,65 @@ def accepted_projects() -> list[dict]:
     table = Api(_token()).table(BASE, TABLE)
     formula = (f"AND(OR(COUNTA({{{F['notified']}}})>0, COUNTA({{{F['pre']}}})>0, COUNTA({{{F['reg']}}})>0), "
                f"{{{F['status']}}}!='Won', {{{F['status']}}}!='Lost')")
-    recs = table.all(formula=formula, fields=[F["name"], F["ref"], F["status"]], use_field_ids=True)
-    return [{"id": r["id"], "name": (r["fields"].get(F["name"]) or "").strip(), "ref": r["fields"].get(F["ref"]) or ""}
+    recs = table.all(formula=formula, fields=[F["name"], F["ref"], F["status"], F["partner"], F["owner"]],
+                     use_field_ids=True)
+    return [{"id": r["id"], "name": (r["fields"].get(F["name"]) or "").strip(), "ref": r["fields"].get(F["ref"]) or "",
+             "lola": bool(set(r["fields"].get(F["partner"]) or []) & LOLA_PARTNERS)
+                     or r["fields"].get(F["owner"]) == LOLA_OWNER}
             for r in recs]
 
 
-def existing() -> tuple[set[str], dict]:
-    folders = {p.name for p in ROOT.iterdir() if p.is_dir()} if ROOT.exists() else set()
+def existing() -> tuple[dict, dict]:
+    """{имя папки: путь} в корне и в папке Лолы; карта проект → папка для старых папок без кода."""
+    folders: dict[str, Path] = {}
+    for base in (ROOT, LOLA_DIR):
+        if base.exists():
+            folders.update({p.name: p for p in base.iterdir() if p.is_dir() and p != LOLA_DIR})
     mapping = json.loads(MAP_FILE.read_text()) if MAP_FILE.exists() else {}
     return folders, mapping
 
 
-def plan() -> tuple[list[tuple[dict, str]], list[tuple[dict, str]]]:
-    """([(проект, папка уже есть)], [(проект, папку создать)])."""
+def plan() -> tuple[list, list, list]:
+    """([(проект, путь)] на месте, [(проект, откуда, куда)] перенести, [(проект, путь)] создать)."""
     folders, mapping = existing()
-    have, todo = [], []
+    ok, move, todo = [], [], []
     for p in sorted(accepted_projects(), key=lambda x: x["ref"]):
+        base = LOLA_DIR if p["lola"] else ROOT
         hit = mapping.get(p["id"]) or next((f for f in folders if p["ref"] and p["ref"] in f), None)
         if hit and hit in folders:
-            have.append((p, hit))
+            src = folders[hit]
+            (ok if src.parent == base else move).append((p, src) if src.parent == base else (p, src, base / hit))
         else:
-            todo.append((p, folder_name(p["name"], p["ref"])))
-    return have, todo
+            todo.append((p, base / folder_name(p["name"], p["ref"])))
+    return ok, move, todo
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--create", action="store_true", help="создать недостающие папки")
+    ap.add_argument("--create", action="store_true", help="создать недостающие папки и перенести чужие")
     args = ap.parse_args()
     if not ROOT.exists():
         sys.exit(f"Нет папки {ROOT} — OneDrive не подключён?")
-    have, todo = plan()
+    ok, move, todo = plan()
     if not args.create:
-        print(f"Принятых открытых проектов: {len(have) + len(todo)}; папка есть: {len(have)}; создать: {len(todo)}")
-        for p, f in have:
-            print(f"  есть   {p['ref']}  →  {f}")
-        for p, f in todo:
-            print(f"  СОЗДАТЬ {p['ref']}  →  {f}")
+        print(f"Принятых открытых проектов: {len(ok) + len(move) + len(todo)}; на месте: {len(ok)}; "
+              f"перенести: {len(move)}; создать: {len(todo)}")
+        for p, src, dst in move:
+            print(f"  ПЕРЕНЕСТИ {p['ref']}  {src.relative_to(ROOT)}  →  {dst.relative_to(ROOT)}")
+        for p, dst in todo:
+            print(f"  СОЗДАТЬ   {p['ref']}  →  {dst.relative_to(ROOT)}")
         return
-    for p, f in todo:
-        (ROOT / f).mkdir(exist_ok=True)
-        print(f"создал: {f}")
+    LOLA_DIR.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+    for p, src, dst in move:
+        if dst.exists():
+            print(f"{stamp} не перенёс {src.name}: в {dst.parent.name} уже есть папка с таким именем")
+            continue
+        shutil.move(str(src), str(dst))
+        print(f"{stamp} перенёс {p['ref']}: {src.relative_to(ROOT)} → {dst.relative_to(ROOT)}")
+    for p, dst in todo:
+        dst.mkdir(parents=True, exist_ok=True)
+        print(f"{stamp} создал {dst.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":
