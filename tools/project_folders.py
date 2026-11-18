@@ -6,7 +6,7 @@
   python tools/project_folders.py            # только список: что создал бы и что уже есть
   python tools/project_folders.py --create   # создать недостающие и перенести папки не в своём месте
 
-Проекты Лолы (партнёр Astros / Aluframe или Owner = Lola Sapaeva) — в «Astros Aluframe», остальные — в корне.
+Проекты Лолы (партнёр Astros / Aluframe или Owner = Lola Sapaeva) — в «ASTROS ALUFRAME», остальные — в «ANDREU WORLD».
 
 Принятый проект — открытый (Status не Won/Lost) и с менеджером в Notified / Pre-registered / Registered.
 Папка «уже есть», если в имени есть код AW… проекта или проект записан в .project_folders.json
@@ -24,8 +24,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path.home() / "Library/CloudStorage/OneDrive-AndreuWorld/ecoCRM/projects and pricing"
-# Проекты Лолы (@aw_eeu) — отдельной подпапкой: доступ ей открыт только к ней (решение Егора 18.11.2026)
-LOLA_DIR = ROOT / "Astros Aluframe"
+# Структура Егора от 18.11.2026: проекты Лолы (@aw_eeu) — в «ASTROS ALUFRAME» (у неё доступ),
+# остальные — в «ANDREU WORLD» (у неё доступа нет). В корне — общие папки (прайсы, AW HUB), их не трогаем.
+LOLA_DIR = ROOT / "ASTROS ALUFRAME"
+EGOR_DIR = ROOT / "ANDREU WORLD"
 LOLA_PARTNERS = {"rec2DJSCpnhZORiyB", "recYQinVKoMACGVc1"}   # Aluframe, Astros
 LOLA_OWNER = "Lola Sapaeva"
 MAP_FILE = ROOT / ".project_folders.json"     # {id проекта: имя папки} — для папок без кода в имени
@@ -75,9 +77,9 @@ def accepted_projects() -> list[dict]:
 def existing() -> tuple[dict, dict]:
     """{имя папки: путь} в корне и в папке Лолы; карта проект → папка для старых папок без кода."""
     folders: dict[str, Path] = {}
-    for base in (ROOT, LOLA_DIR):
+    for base in (LOLA_DIR, EGOR_DIR):
         if base.exists():
-            folders.update({p.name: p for p in base.iterdir() if p.is_dir() and p != LOLA_DIR})
+            folders.update({p.name: p for p in base.iterdir() if p.is_dir()})
     mapping = json.loads(MAP_FILE.read_text()) if MAP_FILE.exists() else {}
     return folders, mapping
 
@@ -87,7 +89,7 @@ def plan() -> tuple[list, list, list]:
     folders, mapping = existing()
     ok, move, todo = [], [], []
     for p in sorted(accepted_projects(), key=lambda x: x["ref"]):
-        base = LOLA_DIR if p["lola"] else ROOT
+        base = LOLA_DIR if p["lola"] else EGOR_DIR
         hit = mapping.get(p["id"]) or next((f for f in folders if p["ref"] and p["ref"] in f), None)
         if hit and hit in folders:
             src = folders[hit]
@@ -101,8 +103,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--create", action="store_true", help="создать недостающие папки и перенести чужие")
     args = ap.parse_args()
-    if not ROOT.exists():
-        sys.exit(f"Нет папки {ROOT} — OneDrive не подключён?")
+    if not (LOLA_DIR.exists() and EGOR_DIR.exists()):
+        sys.exit(f"Нет папок {LOLA_DIR.name} / {EGOR_DIR.name} в {ROOT} — OneDrive не подключён или папки переименованы")
     ok, move, todo = plan()
     if not args.create:
         print(f"Принятых открытых проектов: {len(ok) + len(move) + len(todo)}; на месте: {len(ok)}; "
@@ -112,7 +114,6 @@ def main() -> None:
         for p, dst in todo:
             print(f"  СОЗДАТЬ   {p['ref']}  →  {dst.relative_to(ROOT)}")
         return
-    LOLA_DIR.mkdir(exist_ok=True)
     stamp = datetime.now().strftime("%d.%m.%Y %H:%M")
     for p, src, dst in move:
         if dst.exists():
