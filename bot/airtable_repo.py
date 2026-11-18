@@ -398,7 +398,8 @@ class AirtableRepo:
         recs = self._projects.all(
             fields=[Projects.NAME, Projects.OBJECT_NAME, Projects.OBJECT_ADDRESS, Projects.END_CLIENT,
                     Projects.PPR_REF, Projects.CITY, Projects.COUNTRY, Projects.STATUS, Projects.DEALER,
-                    Projects.PARTNER, Projects.NOTIFIED, Projects.PRE_REGISTERED, Projects.REGISTERED],
+                    Projects.PARTNER, Projects.NOTIFIED, Projects.PRE_REGISTERED, Projects.REGISTERED,
+                    Projects.OWNER],
             use_field_ids=True,
         )
         projects = [{
@@ -412,12 +413,31 @@ class AirtableRepo:
             "country": r["fields"].get(Projects.COUNTRY) or "",
             "status": r["fields"].get(Projects.STATUS) or "",
             "dealers": (r["fields"].get(Projects.DEALER) or []) + (r["fields"].get(Projects.PARTNER) or []),
+            "dealer_ids": r["fields"].get(Projects.DEALER) or [],
+            "partner_ids": r["fields"].get(Projects.PARTNER) or [],
+            "owner": r["fields"].get(Projects.OWNER) or "",
             "managers": [m for f in (Projects.NOTIFIED, Projects.PRE_REGISTERED, Projects.REGISTERED)
                          for m in r["fields"].get(f) or []],
             "created": r.get("createdTime"),
         } for r in recs]
         self._dedup_cache = (time.monotonic(), projects)
         return projects
+
+    def forget_projects_cache(self) -> None:
+        self._dedup_cache = None
+
+    def partner_of_dealer(self, dealer_ids: list[str]) -> str | None:
+        """Партнёр по прошлым проектам дилера: самый частый PARTNER там, где этот дилер в DEALER."""
+        from collections import Counter
+        counts = Counter(pid for p in self.dedup_projects() if set(p["dealer_ids"]) & set(dealer_ids or [])
+                         for pid in p["partner_ids"])
+        return counts.most_common(1)[0][0] if counts else None
+
+    def partner_options(self) -> list[tuple[str, str]]:
+        """Партнёры, которые уже стоят в проектах: [(id, название)] — для кнопок «Чей это дилер?»."""
+        from collections import Counter
+        counts = Counter(pid for p in self.dedup_projects() for pid in p["partner_ids"])
+        return [(pid, self.company_name(pid)) for pid, _ in counts.most_common(6)]
 
     def set_analysis(self, reg_id: str, text: str) -> None:
         self._registrations.update(reg_id, {Registrations.ANALYSIS: text})

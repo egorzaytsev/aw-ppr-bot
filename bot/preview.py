@@ -38,6 +38,7 @@ SCENARIOS = {
     "unknown": "Незнакомый человек",
     "errors": "Ошибки и застрявшие решения",
     "digest": "Утренняя сводка и напоминание дилеру",
+    "dealers": "Проекты моих дилеров и «Мои проекты»",
 }
 
 ADMIN, DEALER, OTHER = 900001, 900002, 900003
@@ -202,8 +203,23 @@ class PreviewRepo:
     def dedup_projects(self):
         return [{"id": k, "name": v.get(Projects.NAME, ""), "ref": v.get(Projects.PPR_REF, ""),
                  "object": v.get(Projects.OBJECT_NAME, ""), "address": v.get(Projects.OBJECT_ADDRESS, ""),
-                 "clients": [self.companies.get(c, ("",))[0] for c in v.get(Projects.END_CLIENT) or []]}
+                 "clients": [self.companies.get(c, ("",))[0] for c in v.get(Projects.END_CLIENT) or []],
+                 "city": v.get(Projects.CITY, ""), "status": v.get(Projects.STATUS, ""),
+                 "dealer_ids": v.get(Projects.DEALER) or [], "partner_ids": v.get(Projects.PARTNER) or [],
+                 "dealers": (v.get(Projects.DEALER) or []) + (v.get(Projects.PARTNER) or []),
+                 "managers": [m for f in (Projects.NOTIFIED, Projects.PRE_REGISTERED, Projects.REGISTERED)
+                              for m in v.get(f) or []],
+                 "owner": v.get(Projects.OWNER, ""), "created": None}
                 for k, v in self.projects.items()]
+
+    def forget_projects_cache(self):
+        pass
+
+    def partner_of_dealer(self, dealer_ids):
+        return None
+
+    def partner_options(self):
+        return [("recPrevAstros0001", "Astros"), ("recPrevAluframe01", "Aluframe")]
 
     def expired_statuses(self):
         return [{"id": k, "fields": v} for k, v in self.projects.items() if v.get(Projects.STATUS_EXPIRY, "9") < _iso(TODAY)]
@@ -619,10 +635,29 @@ async def _digest(w):
     await bot.send_message(DEALER, text, reply_markup=main._markup(buttons))
 
 
+async def _dealers(w):
+    from . import admin_projects as ap, main
+    repo, bot, ctx, app, update, dealer = w
+    repo.projects[PROJECT_ID][Projects.OWNER] = "Egor Zaitcev (me)"
+    repo.projects[PROJECT_ID][Projects.STATUS] = "Prospecting"
+    up = update(ADMIN)
+    await ap.on_menu(up, ctx, "dp")
+    group = bot.sent[-1][2].inline_keyboard[0][0].callback_data
+    await ap.on_menu(up, ctx, group[len("am:"):])
+    await ap.on_menu(up, ctx, f"dpo:{PROJECT_ID}")
+    await ap.ask_find(up, ctx)
+    await ap.find(up, ctx, "AW269999")
+    # «Мои проекты» дилера — кнопка «код · название · статус»
+    items = await main._projects(ctx, dealer)
+    buttons = [[(main._button_label(p), "x")] for p in items]
+    await bot.send_message(DEALER, "Твои проекты", reply_markup=main._markup(buttons))
+
+
 RUNNERS = {
     "new": _new, "upgrade": _upgrade, "fill": _fill, "news": _news, "quote": _quote,
     "won": lambda w: _won_lost(w, True), "lost": lambda w: _won_lost(w, False), "call": _call,
     "expiry": _expiry, "rollback": _rollback, "unknown": _unknown, "errors": _errors, "digest": _digest,
+    "dealers": _dealers,
 }
 
 

@@ -78,8 +78,8 @@ def test_admin_copy_and_update_card():
 def test_list_label_with_ref_and_next_stage_rules():
     from bot.airtable_repo import DealerProject
     from bot.main import _button_label, _next_request_type
-    p = DealerProject("recP", "MedallClinic SPB", "notified", None, "Full", {P.PPR_REF: "AW260220"})
-    assert _button_label(p) == "MedallClinic SPB AW260220 · уведомление"
+    p = DealerProject("recP", "MedallClinic SPB", "notified", None, "Full", {P.PPR_REF: "AW260220", P.STATUS: "Prospecting"})
+    assert _button_label(p) == "AW260220 · MedallClinic SPB · Prospecting"
     assert _next_request_type(p) == "Upgrade — Pre-registration"
     p.fields[P.PPR_NEXT_MISSING] = "Dossier Files;"
     assert _next_request_type(p) is None
@@ -142,3 +142,13 @@ def test_admin_card_shows_aw_origin():
            R.PAYLOAD: json.dumps({"Specifier": "UNK Project", "AW Origin": "Нет — AW предлагает дилер взамен продукта бюро"},
                                  ensure_ascii=False)}
     assert "AW в проекте бюро: Нет — AW предлагаем мы взамен" in plain(request_card(reg, "recR"))
+
+
+def test_project_button_shortens_by_words():
+    from bot.cards import project_button, short_name
+    assert project_button("AW260268", "EliteResidence LobbyFL1", "Prospecting") == \
+        "AW260268 · EliteResidence LobbyFL1 · Prospecting"
+    long = "AKFA University Library building 3 floors Tashkent campus"
+    cut = short_name(long)
+    assert cut.endswith("…") and long.startswith(cut[:-1]) and len(cut) <= 33
+    assert not cut[:-1].endswith(("Libr", "buildin"))   # без обрыва посередине слова

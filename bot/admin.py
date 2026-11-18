@@ -50,6 +50,7 @@ ACTION_SET_STATUS = "rst"                          # застрявшее реш
 ACTION_ACCEPT_LOWER = "acl"                        # не хватает данных — принять этапом ниже
 ACTION_NOTE_OK = "nok"                             # отправить предложенный комментарий как есть
 ACTION_DECLINE_CANCEL = "dcx"                      # отмена записанного отказа (выбор проекта для уведомления)
+ACTION_SET_PARTNER = "prt"                         # партнёр проекта: ad:prt:<проект>:<компания|->
 ACTION_FIND = "fnd"                                # принять в существующий проект: найти по названию / референсу
 ACTION_FINISH = "fin"                              # зависшее решение: довести до конца (ad:fin:<заявка>)
 # Пошаговое повышение: «Пока оставить» и «Отказать» — с комментарием дилеру
@@ -113,7 +114,7 @@ async def drop_pending(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> tuple 
         item = tuple(saved)
     if not item:
         item = await asyncio.to_thread(repo.find_awaiting, chat_id)
-    if item and item[0] != ACTION_REMIND_USER and item[0] not in _MEMO_ACTIONS:
+    if item and item[0] != ACTION_REMIND_USER and item[0] not in _MEMO_ACTIONS and str(item[1]).startswith("rec"):
         await asyncio.to_thread(repo.clear_awaiting, item[1])
     return item
 
@@ -969,6 +970,7 @@ _CANCEL_WHAT = {
     ACTION_INFO: "запрос дилеру — ничего не ушло",
     ACTION_NEW: "создание нового проекта — решения нет",
     ACTION_FIND: "поиск проекта — решения нет",
+    "dpfind": "поиск проекта",
     ACTION_DNEW: "создание нового проекта",
     ACTION_RENAME: "переименование проекта — решения нет",
     ACTION_RB_DOWN: "откат — статус не менялся",
@@ -1176,6 +1178,18 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         pending.pop(chat.id, None)
         await memo.pop(ctx.bot_data, "waits", str(chat.id))
         await step_decision(ctx, chat, parts[0], parts[1], parts[2], "deny" if parts[3] == "d" else "keep", "")
+        return
+    if action == ACTION_SET_PARTNER and reg_id.startswith("rec"):
+        project = await asyncio.to_thread(repo.project_fields, reg_id)
+        if project_id.startswith("rec"):
+            await asyncio.to_thread(repo.update_project, reg_id, {Projects.PARTNER: [project_id]})
+            await asyncio.to_thread(repo.forget_projects_cache)
+            partner = await asyncio.to_thread(repo.company_name, project_id)
+            await chat.send_message(f"🛠 {project_line(project)}: партнёр — {escape(partner)}. Следующие проекты "
+                                    "этого дилера получат его сами.", parse_mode=ParseMode.HTML)
+        else:
+            await chat.send_message(f"🛠 {project_line(project)}: без партнёра — ничего не записал.",
+                                    parse_mode=ParseMode.HTML)
         return
     if action == ACTION_UP_LIST:
         await _show_upgrade_list(chat, ctx, int(parts[0]) if parts and parts[0].isdigit() else 0)
@@ -1657,9 +1671,17 @@ async def on_admin_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE, text: st
     action, reg_id, reply_id = item
     if action in _MEMO_ACTIONS and text.strip():
         await memo.pop(ctx.bot_data, "waits", str(chat.id))
-    from . import onboarding
+    from . import admin_projects, onboarding
     if action in onboarding.ADMIN_ACTIONS:
         return await onboarding.on_admin_text(update, ctx, item, text)
+    if action == admin_projects.ACTION_FIND:
+        if not text.strip():
+            pending[chat.id] = item
+            await chat.send_message("🛠 Пустой текст — напиши код или слово из названия.",
+                                    reply_markup=InlineKeyboardMarkup([cancel_row()]))
+            return True
+        await admin_projects.find(update, ctx, text.strip())
+        return True
     if action == ACTION_CALL_OTHER:
         if not text.strip():
             pending[chat.id] = item

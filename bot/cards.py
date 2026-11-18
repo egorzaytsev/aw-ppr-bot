@@ -254,3 +254,25 @@ def admin_copy(card: str, sent: bool, extra: list[str] | None = None) -> str:
     tail = list(extra or [])
     tail.append("📨 Дилеру отправлено" if sent else "📨 Дилеру не отправлено — у него нет Telegram в базе")
     return "\n".join(out) + "\n\n" + "\n".join(tail)
+
+
+BUTTON_NAME_LEN = 32
+
+
+def short_name(name: str, limit: int = BUTTON_NAME_LEN) -> str:
+    """Сократить по словам, без обрыва посередине слова: «EliteResidence LobbyFL1 Phase2» → «EliteResidence LobbyFL1…»."""
+    name = " ".join((name or "").split())
+    if len(name) <= limit:
+        return name
+    out = ""
+    for w in name.split():
+        if len((out + " " + w).strip()) > limit:
+            break
+        out = (out + " " + w).strip()
+    return (out or name[:limit]) + "…"
+
+
+def project_button(ref: str, name: str, status: str = "") -> str:
+    """Кнопка проекта: «AW260268 · EliteResidence LobbyFL1 · Prospecting» — код первым (он и держит
+    уникальность), название по словам, статус проекта в конце."""
+    return " · ".join(x for x in ((ref or "").strip(), short_name(name), (status or "").strip()) if x)

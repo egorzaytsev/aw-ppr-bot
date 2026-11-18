@@ -60,6 +60,7 @@ class Projects:
     PEOPLE = "fldLN8Lj9uqQpRzza"          # участники проекта (ГАП и др.)
     QUOTATION = "fld2eKHFMhU73fxS5"
     DEALER = "fldpdzk9bY1jFMPeJ"
+    OWNER = "fldx02XpxAcZixuWj"            # чей проект у AW: «Egor Zaitcev (me)» / «Lola Sapaeva» / «Shared»
     PARTNER = "fldh6aWJ5jmn3EYkA"          # партнёр-дистрибьютор (Astros / Aluframe), не дилер PPR
     PROJECT_LOG = "fldC3PJr8sT9iZ8Rg"
     PPR_REF = "fld9H3DLTtTOTluOb"            # формула, формат AW260247 — выводить как есть

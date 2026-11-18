@@ -27,7 +27,7 @@ from telegram.ext import (
     filters,
 )
 
-from . import admin, alerts, cards, dedup, engine, file_notes, labels, memo, onboarding, phrases, preview as preview_mod, reminders, routing, slots
+from . import admin, admin_projects, alerts, cards, dedup, engine, file_notes, labels, memo, onboarding, phrases, preview as preview_mod, reminders, routing, slots
 from .airtable_ids import Decision, Partners, People, Projects, Registrations, RegStatus, RequestType
 from .decisions import payload_of, plan as decision_plan
 from .airtable_repo import (
@@ -518,8 +518,9 @@ async def _route(update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person,
         await _show_project_list(update, ctx, person, data[len(CB_UPDATE_MODE):], 0)
         return
     if data.startswith(CB_LIST):
-        mode, _, page = data[len(CB_LIST):].partition(":")
-        await _show_project_list(update, ctx, person, mode, int(page) if page.isdigit() else 0)
+        mode, _, rest = data[len(CB_LIST):].partition(":")
+        page, _, flag = rest.partition(":")
+        await _show_project_list(update, ctx, person, mode, int(page) if page.isdigit() else 0, edit=flag == "e")
         return
     if data.startswith(CB_PICK):
         mode, _, project_id = data[len(CB_PICK):].partition(":")
@@ -565,12 +566,10 @@ def _sorted(projects: list[DealerProject]) -> list[DealerProject]:
 
 
 def _button_label(p: DealerProject, mode: str = "") -> str:
-    label = f"{cards.name_ref(p.name[:40], p.fields.get(Projects.PPR_REF) or '')} · {PPR_LABELS[p.ppr_status].lower()}"
+    """«AW260268 · EliteResidence LobbyFL1 · Prospecting»; статус плейсмента и срок — внутри карточки."""
+    label = cards.project_button(p.fields.get(Projects.PPR_REF) or "", p.name, p.fields.get(Projects.STATUS) or "")
     if mode == MODE_NEXT and _next_request_type(p):
         return f"{label} → ✔️ {NEXT_LABEL[p.ppr_status]}"
-    days = _days_left(p)
-    if days is not None:
-        label += f" · {days} дн." if days >= 0 else " · срок истёк"
     return label
 
 
@@ -578,8 +577,20 @@ async def _projects(ctx: ContextTypes.DEFAULT_TYPE, person: Person) -> list[Deal
     return _sorted(await asyncio.to_thread(_repo(ctx).dealer_projects, person.record_id))
 
 
+async def _edit_or_send(update: Update, screen: engine.Screen, edit: bool) -> None:
+    """Листание списка — правим то же сообщение, а не присылаем новое."""
+    query = update.callback_query
+    if edit and query and query.message:
+        try:
+            await query.edit_message_text(screen.text, parse_mode=ParseMode.HTML, reply_markup=_markup(screen.buttons))
+            return
+        except Exception:
+            log.info("Не удалось отредактировать список — присылаю новым сообщением", exc_info=True)
+    await _send(update, [screen])
+
+
 async def _show_project_list(
-    update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, mode: str, page: int
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE, person: Person, mode: str, page: int, edit: bool = False
 ) -> None:
     if mode != MODE_MY and await _blocked(update, ctx, person, f"{CB_LIST}{mode}:{page}"):
         return
@@ -597,9 +608,9 @@ async def _show_project_list(
     buttons = [[(_button_label(p, mode), f"{CB_PICK}{mode}:{p.record_id}")] for p in chunk]
     nav = []
     if page > 0:
-        nav.append(("← Назад", f"{CB_LIST}{mode}:{page - 1}"))
+        nav.append(("← Назад", f"{CB_LIST}{mode}:{page - 1}:e"))
     if page < pages - 1:
-        nav.append(("Дальше →", f"{CB_LIST}{mode}:{page + 1}"))
+        nav.append(("Дальше →", f"{CB_LIST}{mode}:{page + 1}:e"))
     if nav:
         buttons.append(nav)
     title = {
@@ -612,7 +623,7 @@ async def _show_project_list(
         title += f" ({page + 1}/{pages})"
     if pending and page == 0:
         title = pending_text(pending) + "\n\n" + title
-    await _send(update, [engine.Screen(title, buttons)])
+    await _edit_or_send(update, engine.Screen(title, buttons), edit)
 
 
 PENDING_LABELS = {
@@ -1468,6 +1479,40 @@ async def _offer_upgrade(app: Application, admin_chat, fresh: dict, project_id: 
     await _send_html(app.bot, admin_chat, text, admin.upgrade_markup(project_id, person_id, target))
 
 
+STATUS_REQUESTS = {RequestType.NEW_NOTIFICATION, RequestType.NEW_PRE_REGISTRATION, RequestType.NEW_REGISTRATION,
+                   RequestType.UPGRADE_PRE_REGISTRATION, RequestType.UPGRADE_REGISTRATION}
+OWNER_OF = {routing.EGOR: "Egor Zaitcev (me)", routing.LOLA: "Lola Sapaeva"}
+
+
+async def _set_owner_partner(app: Application, admin_chat, decider: str, project_id: str, project: dict,
+                             reg: dict, dealers: list[str]) -> None:
+    """Принятая заявка на статус: Owner — кто принял (если не задан), Partner — партнёр компании-дилера
+    (по прошлым проектам дилера); не определился — спросить проверяющего кнопками."""
+    repo: AirtableRepo = app.bot_data["repo"]
+    updates: dict = {}
+    owner = OWNER_OF.get(decider)
+    if owner and not project.get(Projects.OWNER):
+        updates[Projects.OWNER] = owner
+    if updates:
+        await asyncio.to_thread(repo.update_project, project_id, updates)
+    if project.get(Projects.PARTNER) or not dealers:
+        return
+    partner = await asyncio.to_thread(repo.partner_of_dealer, dealers)
+    if partner:
+        await asyncio.to_thread(repo.update_project, project_id, {Projects.PARTNER: [partner]})
+        await asyncio.to_thread(repo.forget_projects_cache)
+        return
+    if not admin_chat:
+        return
+    options = await asyncio.to_thread(repo.partner_options)
+    dealer = ", ".join([await asyncio.to_thread(repo.company_name, c) for c in dealers])
+    rows = [[(name, f"{admin.CB_ADMIN}{admin.ACTION_SET_PARTNER}:{project_id}:{pid}")] for pid, name in options]
+    rows.append([("Без партнёра", f"{admin.CB_ADMIN}{admin.ACTION_SET_PARTNER}:{project_id}:-")])
+    await _send_html(app.bot, admin_chat,
+                     f"🛠 Чей дилер {escape(dealer)}? У его проектов партнёр не указан — выбери партнёра для "
+                     f"{cards.project_line(project)}, дальше бот подставит его сам.", _markup(rows))
+
+
 async def _handle_registration(app: Application, rec_id: str | None, reg: dict, event: bool = False,
                                who: str | None = None) -> None:
     """Решение по заявке. event — смена Reg Status или повышение без заявки (rec_id None):
@@ -1627,6 +1672,11 @@ async def _handle_registration(app: Application, rec_id: str | None, reg: dict, 
         elif pl.dealer_text and not pl.blocked:
             await _send_html(app.bot, admin_chat, _admin_summary(
                 reg, pl, pl.project_name or "", False, dealer_name, bool(dealer_chats), [], None))
+    if accepted and not event and reg.get(Registrations.REQUEST_TYPE) in STATUS_REQUESTS:
+        try:
+            await _set_owner_partner(app, admin_chat, decider, target[0], fresh, reg, dealers)
+        except Exception:
+            log.exception("Owner / Partner проекта %s", target[0])
     # «Дополнить» закрыл пропуски — предложить проверяющему следующий этап (после копии карточки)
     if accepted and not event and reg.get(Registrations.REQUEST_TYPE) in RequestType.INFO_UPDATES and status_person:
         await _offer_upgrade(app, admin_chat, fresh, target[0], status_person)
@@ -1714,6 +1764,7 @@ CB_ADMIN_MENU = "am:"
 def _admin_menu() -> engine.Screen:
     return engine.Screen("🛠 <b>Админ</b> — что посмотреть?", [
         [("📥 Заявки на проверке", f"{CB_ADMIN_MENU}inbox")],
+        [("📂 Проекты моих дилеров", f"{CB_ADMIN_MENU}dp")],
         [("🔔 Моё напоминание", f"{CB_ADMIN_MENU}remind"), ("👀 Напоминание дилера", f"{CB_ADMIN_MENU}remind_user")],
         [("📊 Сводка", f"{CB_ADMIN_MENU}stats")],
         [("👁 Просмотр сообщений бота", f"{CB_ADMIN_MENU}preview")],
@@ -1730,6 +1781,8 @@ async def _admin_menu_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE, act
     if not admin.is_admin(update, ctx):
         return
     chat = update.effective_chat
+    if action.startswith("dp") and await admin_projects.on_menu(update, ctx, action):
+        return
     if action == "inbox":
         await admin.cmd_inbox(update, ctx)
     elif action == "remind":
