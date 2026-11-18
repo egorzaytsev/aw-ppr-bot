@@ -833,6 +833,36 @@ async def _tell_partner(ctx: ContextTypes.DEFAULT_TYPE, reg: dict, text: str, ma
     return bool(chats)
 
 
+async def call_event_of(repo, reg: dict, idx: int, value: str):
+    """Встреча для календаря по подтверждённому звонку №idx (или None, если время текстом)."""
+    from .airtable_ids import People
+    from .calendar_links import call_event
+    label = (call_slots(_payload(reg))[idx][0] if 0 <= idx < len(call_slots(_payload(reg))) else "Звонок")
+    people = reg.get(Registrations.SUBMITTED_BY) or []
+    who = (await asyncio.to_thread(repo.person_name, people[0]) if people else "") or "дилер"
+    phone = ""
+    if people:
+        try:
+            phone = str((await asyncio.to_thread(repo.person_fields, people[0])).get(People.PHONE) or "")
+        except Exception:
+            phone = ""
+    return call_event(label, value, who, await reg_title(repo, reg), phone, await _dealer(repo, reg) or "")
+
+
+async def send_calendar(bot, chat_id, event) -> None:
+    """«📅 В Outlook» кнопкой и файл .ics для календаря телефона."""
+    from telegram import InputFile
+    await bot.send_message(chat_id, f"📅 Добавить звонок в календарь: {event.start:%d.%m.%Y %H:%M} по Валенсии, "
+                                    f"{event.minutes} мин.",
+                           reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                               "📅 Открыть в Outlook", url=event.outlook_url())]]))
+    try:
+        await bot.send_document(chat_id, InputFile(event.ics(), filename=event.filename()),
+                                caption="Или открой этот файл — встреча добавится в календарь телефона.")
+    except Exception:
+        log.warning("Файл .ics не ушёл", exc_info=True)
+
+
 async def confirm_call(bot_data: dict, reg_id: str, idx: int, value: str) -> None:
     """Звонок подтверждён — в память бота (утренний список и напоминание за час — только по подтверждённым)."""
     await memo.set_item(bot_data, "calls_confirmed", f"{reg_id}:{idx}", value)
@@ -1177,6 +1207,9 @@ async def dealer_call_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, d
         if target:
             await ctx.bot.send_message(target, f"📞 {escape(author)} подтвердил(а) звонок по «{escape(name)}»: "
                                                f"<b>{escape(proposed)}</b>. Напомню за час.", parse_mode=ParseMode.HTML)
+            event = await call_event_of(repo, reg, int(idx or 0), proposed)
+            if event:
+                await send_calendar(ctx.bot, target, event)
         return
     if action == "cancel":
         await memo.pop(ctx.bot_data, "waits", f"dealer:{update.effective_chat.id}")
@@ -1256,10 +1289,15 @@ async def on_admin_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE, data
         await confirm_call(ctx.bot_data, reg_id, int(project_id), value)
         from .slots import valencia_start
         remind = "Напомню за час." if valencia_start(value) else \
-            "Время указано текстом — напомнить за час не смогу, запиши себе."
+            "Время указано текстом — напомнить за час не смогу."
         await chat.send_message(f"🛠 Звонок по «{escape(name)}» подтверждён: {escape(value)}. "
                                 + ("Дилеру написал. " if sent else "⚠️ У дилера нет Telegram в базе — не написал. ")
                                 + remind)
+        event = await call_event_of(repo, reg, int(project_id), value)
+        if event:
+            await send_calendar(ctx.bot, chat.id, event)
+        else:
+            await chat.send_message("🛠 В календарь добавить не смогу: время указано текстом, без даты и часа.")
         return
 
     # Повышение статуса без заявки — по проекту и менеджеру, не по записи Inbox

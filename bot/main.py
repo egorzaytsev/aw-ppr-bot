@@ -1420,8 +1420,12 @@ async def _remind_calls(app: Application, reviewer: str, admin_chat, morning: bo
     if morning:
         today = [c for c in calls if c[0].date() == now.date()]
         if today:
+            from .calendar_links import CallEvent, minutes_of
+            buttons = [[InlineKeyboardButton(f"📅 {c[0]:%H:%M} · {c[1][:25]} — в Outlook", url=CallEvent(
+                c[0], minutes_of(c[3]), f"Звонок · {c[1]} · {c[2]}", c[3]).outlook_url())] for c in today[:8]]
             await _send_html(app.bot, admin_chat, "📞 <b>Звонки сегодня</b>\n" + "\n".join(
-                f"• {c[0]:%H:%M} по Валенсии · {escape(c[1])} · {escape(c[2])}\n  {escape(c[3])}" for c in today))
+                f"• {c[0]:%H:%M} по Валенсии · {escape(c[1])} · {escape(c[2])}\n  {escape(c[3])}" for c in today),
+                InlineKeyboardMarkup(buttons))
         return
     for start, who, name, line, _ in calls:
         key = f"{start.isoformat()}|{name}"

@@ -18,6 +18,8 @@ def test_preview_scenario_runs_and_is_clean(scenario):
         assert not TECH.search(text), (scenario, text)
         for row in getattr(markup, "inline_keyboard", None) or []:
             for b in row:
+                if b.url:
+                    continue   # «📅 Открыть в Outlook» — ссылка, не callback
                 assert len(b.callback_data.encode()) <= 64, b.callback_data   # лимит Telegram
                 assert not TECH.search(b.text), b.text
 
